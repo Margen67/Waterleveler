@@ -1,0 +1,23 @@
+[package]
+name = "gmsv_waterlevelercore"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Garry's Mod (server) binary module: per-entity water level overrides"
+license = "AGPL-3.0-or-later"
+
+# No dependencies on purpose: the module resolves the Lua C API from the
+# already-loaded lua_shared library at runtime, so it builds offline and does
+# not need import libraries when cross-compiling.
+[dependencies]
+
+[lib]
+name = "gmsv_waterlevelercore"
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
