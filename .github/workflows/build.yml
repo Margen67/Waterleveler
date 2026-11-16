@@ -13,14 +13,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@main
 
       - name: Build the module
         run: cargo build --release --locked
 
       - name: Assemble the garrysmod folder
         shell: bash
-        run: |
+        run: |-
           set -e
           mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
           cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
@@ -29,7 +29,7 @@ jobs:
           find package -type f | sort
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@main
         with:
           name: waterleveler
           path: package
