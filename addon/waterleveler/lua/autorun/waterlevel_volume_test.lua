@@ -5,11 +5,11 @@
 -- client half draws the placeholder box).
 --
 -- Console commands (server, superadmin or listen-server host):
---   wl_spawn_water [size] [fluid]
+--   wl_water_spawn [size] [fluid]
 --                           spawn a water volume (default 128x128x128) that
 --                           rests on whatever surface you are looking at.
 --                           Buoyancy (EXPERIMENTAL) is on by default; add "nofluid" to skip it.
---   wl_clear_water          remove all water volumes
+--   wl_water_clear          remove all water volumes
 --   wl_water_status         hook status, volume count, engine hit counter,
 --                           and your own water level / whether you are inside
 --
@@ -29,7 +29,7 @@ if SERVER then
     -- EXPERIMENTAL buoyancy. Creates the same kind of engine object a map's
     -- water brush uses: a static physics box with the "water" material that
     -- gets a fluid controller (waterleveler.AttachFluid). vphysics then floats
-    -- props that overlap it. Created by wl_spawn_water unless it is given "nofluid".
+    -- props that overlap it. Created by wl_water_spawn unless it is given "nofluid".
     do
         local ENT = {}
         ENT.Type = "anim"
@@ -187,7 +187,7 @@ if SERVER then
         return not IsValid(ply) or ply:IsSuperAdmin() or game.SinglePlayer() or ply:IsListenServerHost()
     end
 
-    concommand.Add("wl_spawn_water", function(caller, _, args)
+    concommand.Add("wl_water_spawn", function(caller, _, args)
         if not allowed(caller) then return end
         local ply = resolve(caller)
         if not IsValid(ply) then return print("[wl] no player to aim from") end
@@ -210,6 +210,7 @@ if SERVER then
         if not id then return print("[wl] AddVolume failed: " .. tostring(err)) end
 
         boxes[id] = { mins = mins, maxs = maxs }
+        local fluid
         if args[2] ~= "nofluid" then
             local e = ents.Create("wl_fluid")
             if IsValid(e) then
@@ -217,13 +218,28 @@ if SERVER then
                 e:SetPos(center)
                 e:Spawn()
                 fluids[#fluids + 1] = e
+                fluid = e
             end
         end
         sync()
+
+        -- Undo (Z / the undo menu) removes this volume and its fluid again.
+        undo.Create("Water volume")
+        undo.SetPlayer(ply)
+        undo.AddFunction(function(_, volume_id, fluid_ent)
+            if IsValid(fluid_ent) then fluid_ent:Remove() end -- detaches the controller
+            if boxes[volume_id] then
+                waterleveler.RemoveVolume(volume_id)
+                boxes[volume_id] = nil
+                sync()
+            end
+        end, id, fluid)
+        undo.SetCustomUndoText("Undone water volume")
+        undo.Finish(("Water volume (%d)"):format(size))
         print(("[wl] water volume #%d spawned, %dx%dx%d at %s"):format(id, size, size, size, tostring(center)))
     end)
 
-    concommand.Add("wl_clear_water", function(caller)
+    concommand.Add("wl_water_clear", function(caller)
         if not allowed(caller) then return end
         for _, e in ipairs(fluids) do if IsValid(e) then e:Remove() end end -- detaches the controller
         fluids = {}
@@ -255,6 +271,7 @@ if SERVER then
         print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d")
             :format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(),
                 waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()))
+        print(("[wl] traces seen with a water mask: %d"):format(waterleveler.TraceWaterCalls()))
         print(("[wl] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()))
         print(("[wl] fluid controllers: %d"):format(waterleveler.FluidCount()))
         local c = { waterleveler.ExplosionCalls() }
@@ -278,7 +295,7 @@ if SERVER then
     concommand.Add("wl_prop_test", function(caller)
         if not allowed(caller) then return end
         local _, b = next(boxes)
-        if not b then return print("[wl] spawn a volume first with wl_spawn_water") end
+        if not b then return print("[wl] spawn a volume first with wl_water_spawn") end
         if testRunning then return print("[wl] a prop test is still running") end
         testRunning = true
 
@@ -341,12 +358,14 @@ if CLIENT then
     scripted_ents.Register({ Type = "anim", Base = "base_anim", Spawnable = false, Draw = function() end }, "wl_fluid")
 
     local boxes = {}
+    local syncVolumeEntities -- defined with the drawing code below
 
     net.Receive("wl_volumes", function()
         boxes = {}
         for i = 1, net.ReadUInt(16) do
             boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector() }
         end
+        syncVolumeEntities()
     end)
 
     -- Materials are configurable (client convars, saved):
@@ -484,15 +503,17 @@ if CLIENT then
         end
     end
 
-    hook.Add("PostDrawTranslucentRenderables", "wl_volumes_draw", function(_, skybox)
-        if skybox or #boxes == 0 then return end
+    -- Each volume is drawn by a client-side entity in the engine's translucent
+    -- sort, so it is ordered against splashes, sprites and shards by distance
+    -- like any other translucent thing (origin = the box centre).
+    local function drawVolume(bx)
         local top = mat(cvSurface:GetString())
         local body = mat(cvBody:GetString())
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
         render.PushFilterMag(TEXFILTER.ANISOTROPIC)
         render.PushFilterMin(TEXFILTER.ANISOTROPIC)
-        for _, bx in ipairs(boxes) do
+        do
             -- Inset the bottom and sides so they are not coplanar with the
             -- floor or walls the volume rests against (z-fighting).
             local e = 0.5
@@ -516,7 +537,44 @@ if CLIENT then
         render.CullMode(MATERIAL_CULLMODE_CCW)
         render.SetColorModulation(1, 1, 1)
         render.SetBlend(1)
-    end)
+    end
+
+    scripted_ents.Register({
+        Type = "anim",
+        Base = "base_anim",
+        Spawnable = false,
+        RenderGroup = RENDERGROUP_TRANSLUCENT,
+        Initialize = function(self)
+            self:SetRenderMode(RENDERMODE_TRANSALPHA)
+        end,
+        Draw = function(self)
+            if self.WLBox then drawVolume(self.WLBox) end
+        end,
+    }, "wl_volume_draw")
+
+    local volumeEnts = {}
+
+    syncVolumeEntities = function()
+        for _, e in ipairs(volumeEnts) do
+            if IsValid(e) then e:Remove() end
+        end
+        volumeEnts = {}
+        for _, bx in ipairs(boxes) do
+            local e = ents.CreateClientside("wl_volume_draw")
+            if IsValid(e) then
+                local centre = (bx.mins + bx.maxs) * 0.5
+                e:SetModel("models/error.mdl")
+                e:SetPos(centre)
+                e:Spawn()
+                e.WLBox = bx
+                e:SetRenderBounds(bx.mins - centre, bx.maxs - centre)
+                volumeEnts[#volumeEnts + 1] = e
+            end
+        end
+    end
+
+    -- Map cleanups remove client-side entities too.
+    hook.Add("PostCleanupMap", "wl_volumes_entities", function() syncVolumeEntities() end)
 
     -- Wake ripples. The engine's own ripple (effects/splashwake1) is spawned
     -- by client code that does its own water trace, which a volume cannot
@@ -527,15 +585,31 @@ if CLIENT then
     local straddling = {} -- entindex -> true while the entity crosses the surface
     local RIPPLE_LIFE = 1.5
 
-    -- Like the engine's ripple, every wake is the same size.
-    local cvSize = CreateClientConVar("wl_wake_size", "100", true, false,
-        "Size of a wake splash in world units (the same for every wake)")
-    -- Minimum vertical speed (units/s) for something to make a wake.
-    local cvMinZ = CreateClientConVar("wl_wake_min_zvel", "50", true, false,
-        "Minimum vertical speed for an entity to cause a wake splash")
+    -- Engine values (client FX_WaterRipple, read from client.dll): the effect's
+    -- scale (10-12 for the "waterripple" a player makes) is multiplied by 0.125, the
+    -- quad grows from scale*16 to scale*128 units over 1.5 s with a size bias of 0.7,
+    -- fades from an alpha taken from the light at the spot (luma*4, clamped to
+    -- 0.25-1) to 0 with an alpha bias of 0.25, and is tinted 0.75 + 0.25*light.
+    local cvSize = CreateClientConVar("wl_wake_size", "1", true, false,
+        "Wake splash size multiplier (1 = the engine's own size)")
+    -- Minimum speed for a wake. The engine's physics splash ignores anything
+    -- slower than 25 units/s (it measures the full velocity, not just z).
+    local cvMinSpeed = CreateClientConVar("wl_wake_min_speed", "25", true, false,
+        "Minimum speed for an entity to cause a wake splash")
+
+    local function bias(x, b) return x ^ (math.log(b) / math.log(0.5)) end
 
     local function addRipple(pos)
-        ripples[#ripples + 1] = { pos = pos, born = CurTime(), rot = math.random(0, 359) }
+        local light = render.GetLightColor(pos + Vector(0, 0, 4))
+        local luma = light.x * 0.3 + light.y * 0.59 + light.z * 0.11
+        local m = math.max(light.x, light.y, light.z)
+        if m > 0 then light = light / m end
+        ripples[#ripples + 1] = {
+            pos = pos, born = CurTime(), rot = math.random(0, 359),
+            scale = math.Rand(10, 12) * 0.125,
+            alpha = math.Clamp(luma * 4, 0.25, 1),
+            tint = Color(255 * (0.75 + 0.25 * light.x), 255 * (0.75 + 0.25 * light.y), 255 * (0.75 + 0.25 * light.z)),
+        }
         if #ripples > 200 then table.remove(ripples, 1) end
     end
 
@@ -571,7 +645,7 @@ if CLIENT then
             return
         end
         local seen = {}
-        local minz = cvMinZ:GetFloat()
+        local minspeed = cvMinSpeed:GetFloat()
         for _, bx in ipairs(boxes) do
             local top = bx.maxs.z
             local lo = Vector(bx.mins.x, bx.mins.y, top - 128)
@@ -587,7 +661,7 @@ if CLIENT then
                     local omin, omax = ent:OBBMins(), ent:OBBMaxs()
                     local inside = pos.x > bx.mins.x and pos.x < bx.maxs.x and pos.y > bx.mins.y and pos.y < bx.maxs.y
                     local cross = inside and pos.z + omin.z <= top and pos.z + omax.z >= top
-                    local fast = math.abs(ent:GetVelocity().z) >= minz
+                    local fast = ent:GetVelocity():Length() >= minspeed
                     local at = Vector(pos.x, pos.y, top)
                     if cross then
                         seen[idx] = true
@@ -610,9 +684,10 @@ if CLIENT then
         local now = CurTime()
         for _, r in ipairs(ripples) do
             local t = (now - r.born) / RIPPLE_LIFE
-            local size = cvSize:GetFloat() * (0.35 + 0.65 * math.sqrt(t)) -- spreads quickly, then slows
-            local a = 255 * (1 - t) * (1 - t)
-            render.DrawQuadEasy(r.pos + Vector(0, 0, 0.5), Vector(0, 0, 1), size, size, Color(255, 255, 255, a), r.rot)
+            local size = Lerp(bias(t, 0.7), 16 * r.scale, 128 * r.scale) * cvSize:GetFloat()
+            local a = 255 * Lerp(bias(t, 0.25), r.alpha, 0)
+            local c = r.tint
+            render.DrawQuadEasy(r.pos + Vector(0, 0, 0.5), Vector(0, 0, 1), size, size, Color(c.r, c.g, c.b, a), r.rot)
         end
         render.PopFilterMin()
         render.PopFilterMag()

@@ -116,7 +116,7 @@ Limits (read these):
   physobj, nx, ny, nz, dist [, damping])` does the same for a PhysObj you
   created (plane in world space, normal out of the fluid) and
   `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
-  removed**. The `physenv` pointer is found by signature. `wl_spawn_water
+  removed**. The `physenv` pointer is found by signature. `wl_water_spawn
   <size> fluid` in the test script builds one. Unknowns: whether a Lua-created
   object is accepted exactly like the world's, and the engine-side teardown.
 - **Traces.** `IEngineTrace::TraceRay` (vtable slot 4, 214 call sites in
@@ -148,10 +148,23 @@ Limits (read these):
   sends (origin, normal, scale, flags) is already enough for the particle
   splashes, which is why those appear. The same applies to anything else the
   client checks against its own copy of the map.
+  The test script redraws that ripple with the engine's numbers: scale
+  `effect scale * 0.125` (10-12 for a player's `waterripple`), the quad grows
+  from `scale*16` to `scale*128` units over 1.5 s (size bias 0.7), starts at an
+  alpha of `clamp(luma(light)*4, 0.25, 1)` and fades to 0 (alpha bias 0.25), tinted
+  `0.75 + 0.25*light`. Convars: `wl_wake_size` (multiplier, 1 = engine size) and
+  `wl_wake_min_speed` (25 units/s, the engine's `PhysicsSplash` limit).
 
 Test script: `addon/waterleveler/lua/autorun/waterlevel_volume_test.lua` (loaded automatically as part of the addon).
-Commands: `wl_spawn_water [size]` (a 128 cube resting on whatever your
-crosshair hits), `wl_clear_water`, `wl_water_status`.
+Commands: `wl_water_spawn [size]` (a 128 cube resting on whatever your
+crosshair hits; undoable), `wl_water_clear`, `wl_water_status`.
+
+## Engine layout notes
+
+`Ray_t` differs between builds: the x86-64 branch inserted an 8-byte member at
++0x40, so `m_IsSwept` moved from +0x41 to +0x49. The module reads the offset
+from the engine's own ray-building helper at load time (shown in
+`HookStatus()` as `Ray_t m_IsSwept at +0x..`).
 
 ## Verified vs not
 
@@ -192,7 +205,7 @@ A water hit produced for a volume names the world entity (entry 0 of the engine'
 
 ## Explosion events
 
-Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CTEExplosion::Create` (vtable slot 4, found through the class's RTTI name) is therefore swapped: an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. `waterleveler.ExplosionsRedirected()` counts them.
+Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. `waterleveler.ExplosionsRedirected()` counts them.
 
 ## License
 

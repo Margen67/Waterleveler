@@ -475,6 +475,29 @@ mod engine_hook {
     pub const TRACE_RAY_SLOT: usize = 4;
     pub static ORIGINAL_TRACE_RAY: AtomicUsize = AtomicUsize::new(0);
     pub static TRACE_HITS: AtomicU64 = AtomicU64::new(0);
+
+    /// Offset of `Ray_t::m_IsSwept`. The older 64-bit builds have it at +0x41
+    /// (m_IsRay +0x40); the x86-64 branch inserted an 8-byte member (the world
+    /// axis transform pointer) at +0x40, so the flags sit at +0x48/+0x49.
+    pub const RAY_SWEPT_OFFSET_OLD: usize = 0x41;
+    pub static RAY_SWEPT_OFFSET: AtomicUsize = AtomicUsize::new(RAY_SWEPT_OFFSET_OLD);
+
+    /// The engine helper that builds a Ray_t on its stack from two points
+    /// (`UTIL_TraceLine`-style): its `mov byte [rax+disp],1` stores m_IsSwept.
+    /// The frame is `mov rax,rsp; push rbx; sub rsp,0x90` with the Ray_t at
+    /// rsp+0x40, so offset = disp + 0x98 - 0x40. Byte 53 is disp.
+    pub const RAY_HELPER_SIG: &str = "48 8B C4 53 48 81 EC 90 00 00 00 F3 0F 10 42 08 F3 0F 10 19 \
+        F3 0F 10 0A F3 0F 10 61 04 F3 0F 5C CB F3 0F 10 52 04 F3 0F 10 69 08 F3 0F 5C D4 F3 0F 5C C5 \
+        C6 40 ?? 01";
+    pub const RAY_HELPER_DISP_BYTE: usize = 53;
+
+    pub unsafe fn ray_swept_offset_from(func: *const u8) -> usize {
+        let disp = (func.add(RAY_HELPER_DISP_BYTE) as *const i8).read() as isize;
+        (disp + 0x98 - 0x40) as usize
+    }
+
+    /// Traces seen with a water bit in the mask (diagnostics).
+    pub static TRACE_WATER_MASK_CALLS: AtomicU64 = AtomicU64::new(0);
     static WATER_SURFACE_NAME: &[u8] = b"water\0";
 
     /// Where the segment `s + t*d` (t in 0..1) first enters the box `[lo, hi]`
@@ -520,6 +543,17 @@ mod engine_hook {
     /// If the ray enters a water volume before `trace` currently ends, rewrites
     /// `trace` as a water-surface hit. Returns true if it did.
     pub unsafe fn apply_water_to_trace(vols: &[Volume], ray: *const u8, trace: *mut u8, world: usize) -> bool {
+        apply_water_to_trace_at(vols, ray, trace, world, RAY_SWEPT_OFFSET.load(Ordering::Relaxed))
+    }
+
+    /// Same, with the offset of `Ray_t::m_IsSwept` given explicitly.
+    pub unsafe fn apply_water_to_trace_at(
+        vols: &[Volume],
+        ray: *const u8,
+        trace: *mut u8,
+        world: usize,
+        swept_offset: usize,
+    ) -> bool {
         // A trace that reports a hit must name the entity it hit: callers
         // (the SLAM's beam, impact effects) call a virtual on `m_pEnt`. A real
         // water brush belongs to the world, so the world entity is used. If it
@@ -530,7 +564,7 @@ mod engine_hook {
             return false;
         }
         let rf = |o: usize| (ray.add(o) as *const f32).read_unaligned();
-        if ray.add(0x41).read() == 0 {
+        if ray.add(swept_offset).read() == 0 {
             return false; // not swept: nothing travels
         }
         let s = [rf(0x00), rf(0x04), rf(0x08)];
@@ -641,6 +675,7 @@ mod engine_hook {
         if mask & (CONTENTS_WATER as u32) == 0 || ray.is_null() || trace.is_null() {
             return;
         }
+        TRACE_WATER_MASK_CALLS.fetch_add(1, Ordering::Relaxed);
         // Never block inside an engine callback.
         if let Ok(vols) = VOLUMES.try_lock() {
             if !vols.is_empty() && apply_water_to_trace(&vols, ray, trace, world_entity()) {
@@ -1145,14 +1180,43 @@ mod engine_hook {
     // (+0x33c is the entity's absolute origin.) An entity whose origin is in a
     // volume gets its water level raised to 2 before the original runs.
 
-    pub const EXPLOSION_TARGETS: [(&str, usize); 3] = [
-        // 0x5ae2f0
-        ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
-        // 0x5c9540
-        ("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 80 02 00 00", 19),
-        // 0x6df9d0
-        ("48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
+    /// Per function: the prologue of each known build (tried in order).
+    /// Newer builds store rbx at [rsp+0x10] and reshuffle the pushes.
+    pub const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
+        &[
+            // 0x5ae2f0
+            ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
+            // 0x5964d0 (x86-64 branch, 2026-11)
+            ("48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
+        ],
+        &[
+            // 0x5c9540
+            ("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 80 02 00 00", 19),
+            // 0x5b1330
+            ("48 8B C4 48 89 58 10 48 89 70 18 55 57 41 56 48 8D 68 C8 48 81 EC 20 01 00 00 0F 29 70 D8 48 8B D9 8B 89 80 02 00 00", 15),
+        ],
+        &[
+            // 0x6df9d0
+            ("48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
+            // 0x6c4620
+            ("48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
+        ],
     ];
+
+    /// The first alternative of target `i` that matches exactly once.
+    pub unsafe fn find_explosion_target(
+        base: *const u8,
+        i: usize,
+    ) -> Result<(*mut u8, &'static str, usize), &'static str> {
+        let mut last = "signature not found (different server.dll build?)";
+        for (sig, stolen) in EXPLOSION_TARGETS[i].iter() {
+            match scan_sig(base, sig) {
+                Ok(at) => return Ok((at, *sig, *stolen)),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
     pub static EXPLOSION_TRAMPOLINES: [AtomicUsize; 3] =
         [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
     pub static EXPLOSION_FIXES: AtomicU64 = AtomicU64::new(0);
@@ -1516,6 +1580,20 @@ mod hook_state {
             engine_hook::hook_get_point_contents as *const () as usize,
         )];
 
+        // Ray_t layout: where this build keeps m_IsSwept.
+        let ray_note = match engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG) {
+            Ok(f) => {
+                let off = engine_hook::ray_swept_offset_from(f);
+                engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
+                format!(" (Ray_t m_IsSwept at +{off:#x})")
+            }
+            Err(why) => {
+                engine_hook::RAY_SWEPT_OFFSET
+                    .store(engine_hook::RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
+                format!(" (Ray_t layout assumed old: {why})")
+            }
+        };
+
         // Second hook: traces. If it fails the point-contents hook stays.
         let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
         let summary = match engine_hook::install_slot_hook(
@@ -1527,7 +1605,7 @@ mod hook_state {
         ) {
             Ok((entry, orig)) => {
                 hooks.push((entry, orig, trace_hook));
-                "GetPointContents + TraceRay".to_string()
+                format!("GetPointContents + TraceRay{ray_note}")
             }
             Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
         };
@@ -1605,12 +1683,12 @@ mod hook_state {
 
         // Fourth: explosives in a volume take the water explosion.
         let mut patches = Vec::new();
-        for (i, (sig, stolen)) in engine_hook::EXPLOSION_TARGETS.iter().enumerate() {
-            let r = engine_hook::scan_sig(base, sig).and_then(|t| {
+        for i in 0..engine_hook::EXPLOSION_TARGETS.len() {
+            let r = engine_hook::find_explosion_target(base, i).and_then(|(t, sig, stolen)| {
                 engine_hook::install_patch(
                     t,
                     sig,
-                    *stolen,
+                    stolen,
                     engine_hook::EXPLOSION_HOOKS[i] as usize,
                     &engine_hook::win::PLATFORM,
                 )
@@ -1729,6 +1807,8 @@ mod hook_state {
     }
 
     pub unsafe fn uninstall_contents() {
+        engine_hook::RAY_SWEPT_OFFSET
+            .store(engine_hook::RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
         engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
         if let Some(patch) = TE_HOOK.lock().unwrap_or_else(|e| e.into_inner()).take() {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
@@ -2060,6 +2140,16 @@ unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
     1
 }
 
+/// waterlevel.TraceWaterCalls() - engine traces seen with a water bit in the mask
+unsafe extern "C-unwind" fn l_trace_water_calls(l: LuaState) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    let n = engine_hook::TRACE_WATER_MASK_CALLS.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(target_arch = "x86_64"))]
+    let n = 0u64;
+    (api().pushnumber)(l, n as f64);
+    1
+}
+
 /// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping]) -> id | nil, err
 /// Makes `physobj` an engine fluid (buoyancy + drag for props inside it).
 /// The plane is in world space with the normal pointing out of the fluid;
@@ -2333,6 +2423,7 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
     set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
     set_fn(l, t, c"ContentsHits", l_contents_hits);
     set_fn(l, t, c"TraceHits", l_trace_hits);
+    set_fn(l, t, c"TraceWaterCalls", l_trace_water_calls);
     set_fn(l, t, c"BubbleClips", l_bubble_clips);
     set_fn(l, t, c"ExplosionFixes", l_explosion_fixes);
     set_fn(l, t, c"ExplosionCalls", l_explosion_calls);
@@ -2447,7 +2538,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    const FUNC_RVA: usize = 0x2ea810;
     const FUNC_LEN: usize = 0xbb;
 
     extern "C" {
@@ -2547,6 +2637,21 @@ mod tests {
         assert!(find_all(&[1, 2], &pat).is_empty());
     }
 
+    /// RVA of the one place SIG matches in the file's executable sections.
+    fn sig_rva(d: &[u8], pe: &Pe) -> usize {
+        let pat = parse_sig(SIG);
+        let mut total = Vec::new();
+        for (_, rva, _, raw, rawsz, chars) in &pe.sections {
+            if chars & 0x2000_0000 != 0 {
+                for off in find_all(&d[*raw..*raw + *rawsz], &pat) {
+                    total.push(rva + off);
+                }
+            }
+        }
+        assert_eq!(total.len(), 1, "SetWaterLevel signature must match exactly once: {total:x?}");
+        total[0]
+    }
+
     #[test]
     fn signature_is_unique_in_server_dll() {
         let Some(d) = server_dll() else {
@@ -2563,7 +2668,8 @@ mod tests {
                 }
             }
         }
-        assert_eq!(total, vec![(".text".to_string(), FUNC_RVA)]);
+        assert_eq!(total.len(), 1, "{total:?}");
+        assert_eq!(total[0].0, ".text");
     }
 
     #[test]
@@ -2572,7 +2678,7 @@ mod tests {
         let pe = parse_pe(&d);
         let img = map_image(&d, &pe);
         let found = unsafe { scan_image(img.as_ptr()) }.expect("scan failed");
-        assert_eq!(found as usize - img.as_ptr() as usize, FUNC_RVA);
+        assert_eq!(found as usize - img.as_ptr() as usize, sig_rva(&d, &pe));
     }
 
     #[test]
@@ -2584,7 +2690,7 @@ mod tests {
         let pe = parse_pe(&d);
         let (_, text_rva, _, text_raw, _, _) =
             pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
-        let func = &d[text_raw + (FUNC_RVA - text_rva)..][..FUNC_LEN];
+        let func = &d[text_raw + (sig_rva(&d, &pe) - text_rva)..][..FUNC_LEN];
 
         unsafe {
             // The genuine SetWaterLevel machine code, in executable memory.
@@ -2952,8 +3058,8 @@ mod tests {
             eprintln!("te vtable: {:?}", vt.map(|v| v - base as usize));
             let world = entity_array_global(base);
             eprintln!("entity array: {:?}", world.map(|v| v - base as usize));
-            for (sig, _) in EXPLOSION_TARGETS.iter() {
-                eprintln!("explosion sig: {:?}", scan_sig(base, sig).map(|v| v as usize - base as usize));
+            for i in 0..EXPLOSION_TARGETS.len() {
+                eprintln!("explosion sig: {:?}", find_explosion_target(base, i).map(|v| v.0 as usize - base as usize));
             }
             eprintln!("dispatch: {:?}", scan_sig(base, DISPATCH_EFFECT_SIG).map(|v| v as usize - base as usize));
             eprintln!("ctor sigs: {:?}", scan_sig_all(base, TE_EXPLOSION_CTOR_SIG).map(|v| v.len()));
@@ -3126,13 +3232,14 @@ mod tests {
         };
         let pe = parse_pe(&d);
         let img = map_image(&d, &pe);
-        for (sig, stolen) in EXPLOSION_TARGETS.iter() {
-            assert!(*stolen >= 14);
+        for i in 0..EXPLOSION_TARGETS.len() {
             unsafe {
-                let at = scan_sig(img.as_ptr(), sig).expect("explosion signature must match exactly once");
-                let bytes = std::slice::from_raw_parts(at, *stolen + 8);
+                let (at, _sig, stolen) =
+                    find_explosion_target(img.as_ptr(), i).expect("explosion signature must match exactly once");
+                assert!(stolen >= 14);
+                let bytes = std::slice::from_raw_parts(at, stolen + 8);
                 // No rip-relative operands or relative branches in the stolen part.
-                assert!(!bytes[..*stolen].windows(1).any(|b| b[0] == 0xE8 || b[0] == 0xE9), "call/jmp in stolen bytes");
+                assert!(!bytes[..stolen].windows(1).any(|b| b[0] == 0xE8 || b[0] == 0xE9), "call/jmp in stolen bytes");
             }
         }
     }
@@ -3256,6 +3363,36 @@ mod tests {
         assert!(segment_enters_box([64.0, 64.0, 300.0], [0.0, 0.0, -100.0], lo, hi).is_none());
         assert!(segment_enters_box([500.0, 64.0, 300.0], [0.0, 0.0, -300.0], lo, hi).is_none());
         assert!(segment_enters_box([64.0, 64.0, 300.0], [0.0; 3], lo, hi).is_none());
+    }
+
+    #[test]
+    fn newer_ray_layout_keeps_the_swept_flag_at_0x49() {
+        unsafe {
+            let vols = cube();
+            let mut ray = make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], false);
+            ray[0x48] = 1; // m_IsRay
+            ray[0x49] = 1; // m_IsSwept
+            let mut tr = miss_trace();
+            assert!(apply_water_to_trace_at(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234, 0x49));
+            // Reading the old position (0x41, zero here) would call it "not swept".
+            let mut tr = miss_trace();
+            assert!(!apply_water_to_trace_at(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234, 0x41));
+        }
+    }
+
+    #[test]
+    fn ray_helper_signature_gives_the_swept_offset() {
+        let Some(d) = server_dll() else {
+            eprintln!("SERVER_DLL_X64 not set; skipping");
+            return;
+        };
+        let pe = parse_pe(&d);
+        let img = map_image(&d, &pe);
+        unsafe {
+            let f = scan_sig(img.as_ptr(), RAY_HELPER_SIG).expect("ray helper must match exactly once");
+            let off = ray_swept_offset_from(f);
+            assert!(off == 0x41 || off == 0x49, "unexpected m_IsSwept offset {off:#x}");
+        }
     }
 
     #[test]
