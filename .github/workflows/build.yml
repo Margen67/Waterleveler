@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the module
+        run: cargo build --release --locked
+
+      - name: Assemble the garrysmod folder
+        shell: bash
+        run: |
+          set -e
+          mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
+          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
+          cp -r addon/waterleveler/. package/garrysmod/addons/waterleveler/
+          cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
+          find package -type f | sort
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waterleveler
+          path: package
+          if-no-files-found: error

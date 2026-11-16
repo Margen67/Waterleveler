@@ -152,10 +152,14 @@ Limits (read these):
   `effect scale * 0.125` (10-12 for a player's `waterripple`), the quad grows
   from `scale*16` to `scale*128` units over 1.5 s (size bias 0.7), starts at an
   alpha of `clamp(luma(light)*4, 0.25, 1)` and fades to 0 (alpha bias 0.25), tinted
-  `0.75 + 0.25*light`. Convars: `wl_wake_size` (multiplier, 1 = engine size) and
-  `wl_wake_min_speed` (25 units/s, the engine's `PhysicsSplash` limit).
+  `0.75 + 0.25*light`. A wake needs the entity to move at
+  least 25 units/s (the engine's `PhysicsSplash` limit).
 
 Test script: `addon/waterleveler/lua/autorun/waterlevel_volume_test.lua` (loaded automatically as part of the addon).
+Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
+biggest size, buoyancy, and surface/body materials; an outline previews the volume where you
+are looking).
+
 Commands: `wl_water_spawn [size]` (a 128 cube resting on whatever your
 crosshair hits; undoable), `wl_water_clear`, `wl_water_status`.
 

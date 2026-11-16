@@ -20,6 +20,19 @@
 
 local SIZE = 128
 
+WLWater = WLWater or {}
+
+--- Where a volume of `size` (Vector) goes for the trace `tr`: it rests against the surface the
+--- trace hit (floor, wall or ceiling), then moves `offset` units up (down when negative).
+--- Returns mins, maxs. Shared by the tool's preview (client) and the spawn (server).
+function WLWater.Placement(tr, size, offset)
+    local half = size * 0.5
+    local n = tr.HitNormal
+    local center = tr.HitPos + Vector(n.x * half.x, n.y * half.y, n.z * half.z)
+    center.z = center.z + (offset or 0)
+    return center - half, center + half, center
+end
+
 if SERVER then
     AddCSLuaFile()
     require("waterleveler")
@@ -174,8 +187,55 @@ if SERVER then
         for _, b in pairs(boxes) do
             net.WriteVector(b.mins)
             net.WriteVector(b.maxs)
+            net.WriteString(b.surface or "") -- "" = the client's default (convar)
+            net.WriteString(b.body or "")
         end
         if IsValid(ply) then net.Send(ply) else net.Broadcast() end
+    end
+
+    --- Create a volume (engine water + optional buoyancy + undo entry).
+    --- opts: fluid (default true), surface / body (material paths, "" = client default).
+    --- Returns the volume id, or nil, err.
+    function WLWater.Spawn(ply, mins, maxs, opts)
+        opts = opts or {}
+        local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z)
+        if not id then return nil, err end
+
+        boxes[id] = { mins = mins, maxs = maxs, surface = opts.surface, body = opts.body }
+        local fluid
+        if opts.fluid ~= false then
+            local e = ents.Create("wl_fluid")
+            if IsValid(e) then
+                e.WLHalf = (maxs - mins) / 2
+                e:SetPos((mins + maxs) / 2)
+                e:Spawn()
+                fluids[#fluids + 1] = e
+                fluid = e
+            end
+        end
+        sync()
+
+        -- Undo (Z / the undo menu) removes this volume and its fluid again.
+        if IsValid(ply) then
+            local size = maxs - mins
+            undo.Create("Water volume")
+            undo.SetPlayer(ply)
+            undo.AddFunction(function(_, volume_id, fluid_ent)
+                if IsValid(fluid_ent) then fluid_ent:Remove() end -- detaches the controller
+                if boxes[volume_id] then
+                    waterleveler.RemoveVolume(volume_id)
+                    boxes[volume_id] = nil
+                    sync()
+                end
+            end, id, fluid)
+            undo.SetCustomUndoText("Undone water volume")
+            undo.Finish(("Water volume (%dx%dx%d)"):format(size.x, size.y, size.z))
+        end
+        return id
+    end
+
+    function WLWater.Allowed(ply)
+        return not IsValid(ply) or ply:IsSuperAdmin() or game.SinglePlayer() or ply:IsListenServerHost()
     end
 
     local function resolve(ply)
@@ -193,7 +253,6 @@ if SERVER then
         if not IsValid(ply) then return print("[wl] no player to aim from") end
 
         local size = tonumber(args[1]) or SIZE
-        local half = size / 2
         local tr = util.TraceLine({
             start = ply:EyePos(),
             endpos = ply:EyePos() + ply:GetAimVector() * 16384,
@@ -202,40 +261,9 @@ if SERVER then
         if not tr.Hit then return print("[wl] crosshair does not hit anything") end
 
         -- Rest the box on the surface under the crosshair.
-        local center = tr.HitPos + tr.HitNormal * half
-        local mins = center - Vector(half, half, half)
-        local maxs = center + Vector(half, half, half)
-
-        local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z)
+        local mins, maxs, center = WLWater.Placement(tr, Vector(size, size, size))
+        local id, err = WLWater.Spawn(ply, mins, maxs, { fluid = args[2] ~= "nofluid" })
         if not id then return print("[wl] AddVolume failed: " .. tostring(err)) end
-
-        boxes[id] = { mins = mins, maxs = maxs }
-        local fluid
-        if args[2] ~= "nofluid" then
-            local e = ents.Create("wl_fluid")
-            if IsValid(e) then
-                e.WLHalf = (maxs - mins) / 2
-                e:SetPos(center)
-                e:Spawn()
-                fluids[#fluids + 1] = e
-                fluid = e
-            end
-        end
-        sync()
-
-        -- Undo (Z / the undo menu) removes this volume and its fluid again.
-        undo.Create("Water volume")
-        undo.SetPlayer(ply)
-        undo.AddFunction(function(_, volume_id, fluid_ent)
-            if IsValid(fluid_ent) then fluid_ent:Remove() end -- detaches the controller
-            if boxes[volume_id] then
-                waterleveler.RemoveVolume(volume_id)
-                boxes[volume_id] = nil
-                sync()
-            end
-        end, id, fluid)
-        undo.SetCustomUndoText("Undone water volume")
-        undo.Finish(("Water volume (%d)"):format(size))
         print(("[wl] water volume #%d spawned, %dx%dx%d at %s"):format(id, size, size, size, tostring(center)))
     end)
 
@@ -363,7 +391,7 @@ if CLIENT then
     net.Receive("wl_volumes", function()
         boxes = {}
         for i = 1, net.ReadUInt(16) do
-            boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector() }
+            boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector(), surface = net.ReadString(), body = net.ReadString() }
         end
         syncVolumeEntities()
     end)
@@ -507,8 +535,8 @@ if CLIENT then
     -- sort, so it is ordered against splashes, sprites and shards by distance
     -- like any other translucent thing (origin = the box centre).
     local function drawVolume(bx)
-        local top = mat(cvSurface:GetString())
-        local body = mat(cvBody:GetString())
+        local top = mat(bx.surface ~= "" and bx.surface or cvSurface:GetString())
+        local body = mat(bx.body ~= "" and bx.body or cvBody:GetString())
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
         render.PushFilterMag(TEXFILTER.ANISOTROPIC)
@@ -590,12 +618,9 @@ if CLIENT then
     -- quad grows from scale*16 to scale*128 units over 1.5 s with a size bias of 0.7,
     -- fades from an alpha taken from the light at the spot (luma*4, clamped to
     -- 0.25-1) to 0 with an alpha bias of 0.25, and is tinted 0.75 + 0.25*light.
-    local cvSize = CreateClientConVar("wl_wake_size", "1", true, false,
-        "Wake splash size multiplier (1 = the engine's own size)")
-    -- Minimum speed for a wake. The engine's physics splash ignores anything
-    -- slower than 25 units/s (it measures the full velocity, not just z).
-    local cvMinSpeed = CreateClientConVar("wl_wake_min_speed", "25", true, false,
-        "Minimum speed for an entity to cause a wake splash")
+    -- The engine's physics splash ignores anything slower than 25 units/s (it measures
+    -- the full velocity, not just z).
+    local MIN_SPEED = 25
 
     local function bias(x, b) return x ^ (math.log(b) / math.log(0.5)) end
 
@@ -645,7 +670,6 @@ if CLIENT then
             return
         end
         local seen = {}
-        local minspeed = cvMinSpeed:GetFloat()
         for _, bx in ipairs(boxes) do
             local top = bx.maxs.z
             local lo = Vector(bx.mins.x, bx.mins.y, top - 128)
@@ -661,7 +685,7 @@ if CLIENT then
                     local omin, omax = ent:OBBMins(), ent:OBBMaxs()
                     local inside = pos.x > bx.mins.x and pos.x < bx.maxs.x and pos.y > bx.mins.y and pos.y < bx.maxs.y
                     local cross = inside and pos.z + omin.z <= top and pos.z + omax.z >= top
-                    local fast = ent:GetVelocity():Length() >= minspeed
+                    local fast = ent:GetVelocity():Length() >= MIN_SPEED
                     local at = Vector(pos.x, pos.y, top)
                     if cross then
                         seen[idx] = true
@@ -684,7 +708,7 @@ if CLIENT then
         local now = CurTime()
         for _, r in ipairs(ripples) do
             local t = (now - r.born) / RIPPLE_LIFE
-            local size = Lerp(bias(t, 0.7), 16 * r.scale, 128 * r.scale) * cvSize:GetFloat()
+            local size = Lerp(bias(t, 0.7), 16 * r.scale, 128 * r.scale)
             local a = 255 * Lerp(bias(t, 0.25), r.alpha, 0)
             local c = r.tint
             render.DrawQuadEasy(r.pos + Vector(0, 0, 0.5), Vector(0, 0, 1), size, size, Color(c.r, c.g, c.b, a), r.rot)
@@ -693,22 +717,11 @@ if CLIENT then
         render.PopFilterMag()
     end)
 
-    -- Fully submerged (eyes under the water): the engine's water screen overlay.
-    -- Own check as well as WaterLevel(), since the client does not know a volume is water.
-    local function eyesUnderVolume()
-        local eye = LocalPlayer():EyePos()
-        for _, bx in ipairs(boxes) do
-            if eye.x > bx.mins.x and eye.x < bx.maxs.x and eye.y > bx.mins.y and eye.y < bx.maxs.y
-                and eye.z > bx.mins.z and eye.z < bx.maxs.z then
-                return true
-            end
-        end
-        return false
-    end
+    -- Fully submerged (water level 3): the engine's water screen overlay.
     hook.Add("RenderScreenspaceEffects", "wl_volumes_overlay", function()
         local ply = LocalPlayer()
         if not IsValid(ply) or not ply:Alive() then return end
-        if ply:WaterLevel() >= 3 or eyesUnderVolume() then
+        if ply:WaterLevel() >= 3 then
             DrawMaterialOverlay("effects/water_warp01", 0.1)
         end
     end)
