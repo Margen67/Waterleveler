@@ -30,11 +30,12 @@ function lib.IsAvailable()
     return core.IsContentsHooked() == true
 end
 
---- Add a water volume from two corner vectors (any order). Returns id | nil, err.
-function lib.AddBox(a, b)
+--- Add a volume from two corner vectors (any order). `liquid` is "water" (default) or
+--- "slime". Returns id | nil, err.
+function lib.AddBox(a, b, liquid)
     local mins = Vector(math.min(a.x, b.x), math.min(a.y, b.y), math.min(a.z, b.z))
     local maxs = Vector(math.max(a.x, b.x), math.max(a.y, b.y), math.max(a.z, b.z))
-    return core.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z)
+    return core.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, liquid)
 end
 
 --- Create a water volume from a position and a size.
@@ -42,8 +43,9 @@ end
 ---   size   Vector (x, y, z extents) or a number for a cube
 ---   anchor where `pos` sits on the box: "center" (default), "bottom" (centre of the
 ---          bottom face, so the surface is pos.z + size.z) or "mins" (lowest corner)
+---   liquid "water" (default) or "slime"
 --- Returns the volume id, or nil, err. Remove it with waterleveler.RemoveVolume(id).
-function lib.CreateVolume(pos, size, anchor)
+function lib.CreateVolume(pos, size, anchor, liquid)
     if type(size) == "number" then size = Vector(size, size, size) end
     if not isvector(pos) or not isvector(size) then
         return nil, "CreateVolume needs a position Vector and a size (Vector or number)"
@@ -62,7 +64,7 @@ function lib.CreateVolume(pos, size, anchor)
     else
         return nil, "CreateVolume anchor must be \"center\", \"bottom\" or \"mins\""
     end
-    return core.AddVolume(mins.x, mins.y, mins.z, mins.x + size.x, mins.y + size.y, mins.z + size.z)
+    return core.AddVolume(mins.x, mins.y, mins.z, mins.x + size.x, mins.y + size.y, mins.z + size.z, liquid)
 end
 
 --- Is the world position inside any volume?

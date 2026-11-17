@@ -13,6 +13,7 @@ TOOL.ClientConVar = {
     sizey = "128",
     sizez = "128",
     offset = "0",
+    liquid = "water",
     fluid = "1",
     fluid_material = "water",
     fluid_damping = "0.01",
@@ -68,6 +69,7 @@ function TOOL:LeftClick(trace)
     local size = readSize(get)
     local mins, maxs = WLWater.Placement(trace, size, readOffset(get, size))
     local id, err = WLWater.Spawn(ply, mins, maxs, {
+        liquid = self:GetClientInfo("liquid") == "slime" and "slime" or "water",
         fluid = self:GetClientNumber("fluid", 1) ~= 0,
         fluidOptions = {
             material = self:GetClientInfo("fluid_material"),
@@ -140,6 +142,15 @@ if CLIENT then
         panel:ControlHelp("Moves the volume up (or down) from where it would rest. The limit is the biggest size above.")
         updateOffsetRange()
 
+        panel:Help("Liquid")
+        local liquid = panel:ComboBox("")
+        liquid:SetSortItems(false)
+        local current = GetConVar("wl_water_liquid")
+        local isSlime = current and current:GetString() == "slime"
+        liquid:AddChoice("Water", "water", not isSlime)
+        liquid:AddChoice("Slime", "slime", isSlime)
+        liquid.OnSelect = function(_, _, _, data) RunConsoleCommand("wl_water_liquid", data) end
+        panel:ControlHelp("Slime: slime-coloured splashes and ripples, no wading, no water explosion effect.")
         panel:CheckBox("Buoyancy (props float)", "wl_water_fluid")
         panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.")
         panel:Help("Fluid physics material (its density sets how high props float)")

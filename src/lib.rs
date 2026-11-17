@@ -58,7 +58,9 @@ type LuaFn = unsafe extern "C-unwind" fn(LuaState) -> c_int;
 
 const LUA_GLOBALSINDEX: c_int = -10002;
 const LUA_MULTRET: c_int = -1;
+const LUA_TNONE: c_int = -1;
 const LUA_TNIL: c_int = 0;
+const LUA_TSTRING: c_int = 4;
 const LUA_TNUMBER: c_int = 3;
 const LUA_TTABLE: c_int = 5;
 const LUA_TUSERDATA: c_int = 7;
@@ -205,11 +207,13 @@ pub struct FluidSettings {
     pub torque: f32,
     pub viscosity: f32,
     pub aerodynamics: bool,
+    /// CONTENTS_WATER or CONTENTS_SLIME.
+    pub contents: c_int,
 }
 
 impl Default for FluidSettings {
     fn default() -> Self {
-        FluidSettings { damping: 0.01, current: [0.0; 3], torque: 0.0, viscosity: 0.0, aerodynamics: false }
+        FluidSettings { damping: 0.01, current: [0.0; 3], torque: 0.0, viscosity: 0.0, aerodynamics: false, contents: CONTENTS_WATER }
     }
 }
 
@@ -238,6 +242,7 @@ fn save_key() -> Option<CString> {
 // point inside a box reports CONTENTS_WATER to the engine's own water logic.
 
 const CONTENTS_WATER: c_int = 0x20;
+const CONTENTS_SLIME: c_int = 0x10;
 const MAX_VOLUMES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -245,6 +250,8 @@ struct Volume {
     id: u32,
     min: [f32; 3],
     max: [f32; 3],
+    /// What the engine sees inside: CONTENTS_WATER or CONTENTS_SLIME.
+    contents: c_int,
 }
 
 static VOLUMES: Mutex<Vec<Volume>> = Mutex::new(Vec::new());
@@ -255,12 +262,20 @@ fn volumes() -> std::sync::MutexGuard<'static, Vec<Volume>> {
     VOLUMES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Top (surface height) of the highest volume containing `p`.
+/// Top (surface height) of the highest water volume containing `p` (slime is
+/// not water: the engine's water explosion needs CONTENTS_WATER).
 fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
     vols.iter()
-        .filter(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
+        .filter(|v| v.contents & CONTENTS_WATER != 0 && (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
         .map(|v| v.max[2])
         .fold(None, |a, z| Some(a.map_or(z, |a: f32| a.max(z))))
+}
+
+/// The contents of every volume containing `p`, or'ed together (0 if none).
+fn contents_at(vols: &[Volume], p: [f32; 3]) -> c_int {
+    vols.iter()
+        .filter(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
+        .fold(0, |c, v| c | v.contents)
 }
 
 fn point_in_volumes(vols: &[Volume], p: [f32; 3]) -> bool {
@@ -430,8 +445,9 @@ mod engine_hook {
             if let Ok(vols) = VOLUMES.try_lock() {
                 if !vols.is_empty() {
                     let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-                    if point_in_volumes(&vols, p) {
-                        contents |= CONTENTS_WATER;
+                    let inside = contents_at(&vols, p);
+                    if inside != 0 {
+                        contents |= inside;
                         VOLUME_HITS.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -621,7 +637,7 @@ mod engine_hook {
                 trace.add(0x28).write(0);
                 trace.add(0x29).write(0);
                 wf(0x2c, 0.0); // fraction
-                (trace.add(0x30) as *mut i32).write_unaligned(CONTENTS_WATER);
+                (trace.add(0x30) as *mut i32).write_unaligned(v.contents);
                 (trace.add(0x34) as *mut u16).write_unaligned(0);
                 trace.add(0x36).write(1); // allsolid
                 trace.add(0x37).write(1); // startsolid
@@ -665,7 +681,7 @@ mod engine_hook {
         trace.add(0x28).write(axis as u8); // plane.type: axial
         trace.add(0x29).write(if min_face { 1u8 << axis } else { 0 }); // signbits
         wf(0x2c, t); // fraction
-        (trace.add(0x30) as *mut i32).write_unaligned(CONTENTS_WATER);
+        (trace.add(0x30) as *mut i32).write_unaligned(v.contents);
         (trace.add(0x34) as *mut u16).write_unaligned(0); // dispFlags
         trace.add(0x36).write(0); // allsolid
         trace.add(0x37).write(0); // startsolid
@@ -691,13 +707,15 @@ mod engine_hook {
         let original: unsafe extern "win64" fn(*mut c_void, *const u8, u32, *mut c_void, *mut u8) =
             std::mem::transmute(ORIGINAL_TRACE_RAY.load(Ordering::Relaxed));
         original(this, ray, mask, filter, trace);
-        if mask & (CONTENTS_WATER as u32) == 0 || ray.is_null() || trace.is_null() {
+        if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0 || ray.is_null() || trace.is_null() {
             return;
         }
         TRACE_WATER_MASK_CALLS.fetch_add(1, Ordering::Relaxed);
         // Never block inside an engine callback.
         if let Ok(vols) = VOLUMES.try_lock() {
-            if !vols.is_empty() && apply_water_to_trace(&vols, ray, trace, world_entity()) {
+            // Only the volumes whose contents the trace's mask asks for.
+            let wanted: Vec<Volume> = vols.iter().copied().filter(|v| v.contents as u32 & mask != 0).collect();
+            if !wanted.is_empty() && apply_water_to_trace(&wanted, ray, trace, world_entity()) {
                 TRACE_HITS.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -1946,7 +1964,7 @@ mod hook_state {
             viscosity_factor: fluid.viscosity,
             game_data: std::ptr::null_mut(),
             use_aerodynamics: fluid.aerodynamics as u8,
-            contents: CONTENTS_WATER,
+            contents: fluid.contents,
         };
         if object == 0 {
             return Err("null physics object");
@@ -2250,8 +2268,27 @@ unsafe extern "C-unwind" fn l_hook_hits(l: LuaState) -> c_int {
     1
 }
 
-/// waterlevel.AddVolume(x1, y1, z1, x2, y2, z2) -> id | nil, err
-/// Adds a world-space box in which the engine sees water.
+/// The optional liquid argument at stack index `idx`: "water" (default, also nil or
+/// none) or "slime".
+unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'static CStr> {
+    let a = api();
+    match (a.type_)(l, idx) {
+        LUA_TNONE | LUA_TNIL => Ok(CONTENTS_WATER),
+        LUA_TSTRING => {
+            let p = (a.tolstring)(l, idx, std::ptr::null_mut());
+            match CStr::from_ptr(p).to_bytes() {
+                b"water" => Ok(CONTENTS_WATER),
+                b"slime" => Ok(CONTENTS_SLIME),
+                _ => Err(c"liquid must be \"water\" or \"slime\""),
+            }
+        }
+        _ => Err(c"liquid must be \"water\" or \"slime\""),
+    }
+}
+
+/// waterlevel.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid]) -> id | nil, err
+/// Adds a world-space box in which the engine sees water, or slime when `liquid` is
+/// "slime" ("water" is the default).
 unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
     let a = api();
     let mut v = [0f64; 6];
@@ -2265,6 +2302,10 @@ unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
             return fail(l, c"AddVolume coordinates must be finite");
         }
     }
+    let contents = match parse_liquid(l, 7) {
+        Ok(c) => c,
+        Err(msg) => return fail(l, msg),
+    };
     let min = [v[0].min(v[3]) as f32, v[1].min(v[4]) as f32, v[2].min(v[5]) as f32];
     let max = [v[0].max(v[3]) as f32, v[1].max(v[4]) as f32, v[2].max(v[5]) as f32];
     let id = {
@@ -2273,7 +2314,7 @@ unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
             None
         } else {
             let id = NEXT_VOLUME_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            vols.push(Volume { id, min, max });
+            vols.push(Volume { id, min, max, contents });
             Some(id)
         }
     };
@@ -2364,7 +2405,7 @@ unsafe extern "C-unwind" fn l_trace_water_calls(l: LuaState) -> c_int {
 /// The plane is in world space with the normal pointing out of the fluid;
 /// for a water volume that is (0, 0, 1) and the world Z of its top face.
 /// `options` is an optional table (it may also be the 6th argument): damping,
-/// torque, viscosity, aerodynamics (boolean), currentx, currenty, currentz.
+/// torque, viscosity, aerodynamics (boolean), contents ("water"/"slime"), currentx, currenty, currentz.
 /// Defaults are those of a map's water brush (see FluidSettings).
 unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
     let a = api();
@@ -2421,6 +2462,13 @@ unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
         (a.getfield)(l, opts, c"aerodynamics".as_ptr());
         fluid.aerodynamics = (a.toboolean)(l, -1) != 0;
         (a.settop)(l, -2);
+        (a.getfield)(l, opts, c"contents".as_ptr());
+        let liquid = parse_liquid(l, -1);
+        (a.settop)(l, -2);
+        match liquid {
+            Ok(c) => fluid.contents = c,
+            Err(msg) => return fail(l, msg),
+        }
     }
     let finite = fluid.damping.is_finite()
         && fluid.torque.is_finite()
@@ -3002,7 +3050,7 @@ mod tests {
 
     #[test]
     fn volume_math() {
-        let v = [Volume { id: 1, min: [0.0, 0.0, 0.0], max: [128.0, 128.0, 128.0] }];
+        let v = [Volume { id: 1, min: [0.0, 0.0, 0.0], max: [128.0, 128.0, 128.0], contents: CONTENTS_WATER }];
         assert!(point_in_volumes(&v, [64.0, 64.0, 64.0]));
         assert!(point_in_volumes(&v, [0.0, 128.0, 0.0])); // edges are inside
         assert!(!point_in_volumes(&v, [129.0, 64.0, 64.0]));
@@ -3097,7 +3145,7 @@ mod tests {
 
     #[test]
     fn bubble_trail_clip_math() {
-        let v = [Volume { id: 1, min: [0.0; 3], max: [128.0; 3] }];
+        let v = [Volume { id: 1, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER }];
         // Fully inside, or nowhere near: unchanged.
         assert_eq!(clip_bubble_trail(&v, [10.0; 3], [100.0; 3]), BubbleClip::Keep);
         assert_eq!(clip_bubble_trail(&v, [500.0; 3], [600.0; 3]), BubbleClip::Keep);
@@ -3130,8 +3178,8 @@ mod tests {
 
         // Two volumes: the one the trail starts in wins.
         let two = [
-            Volume { id: 1, min: [200.0, 0.0, 0.0], max: [328.0, 128.0, 128.0] },
-            Volume { id: 2, min: [0.0; 3], max: [128.0; 3] },
+            Volume { id: 1, min: [200.0, 0.0, 0.0], max: [328.0, 128.0, 128.0], contents: CONTENTS_WATER },
+            Volume { id: 2, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER },
         ];
         let BubbleClip::Clipped(_, b, _) =
             clip_bubble_trail(&two, [64.0, 64.0, 64.0], [1000.0, 64.0, 64.0])
@@ -3159,7 +3207,7 @@ mod tests {
             BUBBLE_TRAMPOLINE.store(fake_bubble_trail as *const () as usize, Ordering::SeqCst);
             BUBBLE_CALLS.lock().unwrap().clear();
             let clips = BUBBLE_CLIPS.load(Ordering::Relaxed);
-            *VOLUMES.lock().unwrap() = vec![Volume { id: 1, min: [0.0; 3], max: [128.0; 3] }];
+            *VOLUMES.lock().unwrap() = vec![Volume { id: 1, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER }];
 
             let from = [64.0f32, 64.0, 64.0];
             let to = [1064.0f32, 64.0, 64.0];
@@ -3358,7 +3406,7 @@ mod tests {
     fn explosion_in_a_volume_is_redirected_outside_is_not() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3] });
+        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER });
         static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
         unsafe extern "win64" fn fake_dispatch(name: *const u8, _data: *const u8) {
             let n = std::ffi::CStr::from_ptr(name as *const _).to_string_lossy().to_string();
@@ -3384,7 +3432,7 @@ mod tests {
     fn redirected_explosion_carries_the_blast_point_in_the_effect_start() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [1000.0; 3] });
+        volumes().push(Volume { id: 1, min: [0.0; 3], max: [1000.0; 3], contents: CONTENTS_WATER });
         static SEEN: Mutex<Vec<[f32; 6]>> = Mutex::new(Vec::new());
         unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
             let f = data as *const f32;
@@ -3447,10 +3495,26 @@ mod tests {
     }
 
     #[test]
+    fn slime_volumes_report_slime_and_only_water_is_a_surface() {
+        let vols = [
+            Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_SLIME },
+            Volume { id: 2, min: [200.0, 0.0, 0.0], max: [300.0, 100.0, 100.0], contents: CONTENTS_WATER },
+        ];
+        assert_eq!(contents_at(&vols, [50.0; 3]), CONTENTS_SLIME);
+        assert_eq!(contents_at(&vols, [250.0, 50.0, 50.0]), CONTENTS_WATER);
+        assert_eq!(contents_at(&vols, [150.0; 3]), 0);
+        assert_eq!(surface_z_at(&vols, [50.0; 3]), None);
+        assert_eq!(surface_z_at(&vols, [250.0, 50.0, 50.0]), Some(100.0));
+        let both = [vols[0], Volume { id: 3, ..vols[0] }, Volume { id: 4, contents: CONTENTS_WATER, ..vols[0] }];
+        assert_eq!(contents_at(&both, [50.0; 3]), CONTENTS_SLIME | CONTENTS_WATER);
+    }
+
+    #[test]
     fn fluid_defaults_match_a_map_water_brush() {
         let d = FluidSettings::default();
         assert_eq!((d.torque, d.viscosity, d.aerodynamics, d.current), (0.0, 0.0, false, [0.0; 3]));
         assert_eq!(d.damping, 0.01);
+        assert_eq!(d.contents, CONTENTS_WATER);
     }
 
     #[test]
@@ -3494,7 +3558,7 @@ mod tests {
     fn effect_log_records_name_origin_and_volume() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3] });
+        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER });
         EFFECT_LOG.lock().unwrap().clear();
         let data = [50.0f32, 50.0, 50.0];
         unsafe { log_effect(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr() as *const u8) };
@@ -3535,7 +3599,7 @@ mod tests {
     #[test]
     fn water_hit_names_the_world_entity_or_is_skipped() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let vols = [Volume { id: 1, min: [0.0; 3], max: [100.0; 3] }];
+        let vols = [Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER }];
         let mut ray = vec![0u8; 0x60];
         let put = |ray: &mut Vec<u8>, o: usize, v: f32| ray[o..o + 4].copy_from_slice(&v.to_le_bytes());
         for (o, v) in [(0x00, -50.0f32), (0x04, 50.0), (0x08, 50.0), (0x10, 200.0), (0x14, 0.0), (0x18, 0.0)] {
@@ -3584,7 +3648,7 @@ mod tests {
             }
         };
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3] });
+        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER });
         set(&mut ent, [500.0, 0.0, 0.0]);
         unsafe { raise_water_level_in_volume(ent.as_mut_ptr()) };
         assert_eq!(ent[ENTITY_WATER_LEVEL_OFFSET], 0);
@@ -3666,7 +3730,7 @@ mod tests {
     }
 
     fn cube() -> [Volume; 1] {
-        [Volume { id: 1, min: [0.0; 3], max: [128.0; 3] }]
+        [Volume { id: 1, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER }]
     }
 
     #[test]
@@ -3869,7 +3933,7 @@ mod tests {
             let trace = object.as_mut_ptr() as *mut c_void;
 
             volumes().clear();
-            volumes().push(Volume { id: 1, min: [0.0, 0.0, 0.0], max: [128.0, 128.0, 128.0] });
+            volumes().push(Volume { id: 1, min: [0.0, 0.0, 0.0], max: [128.0, 128.0, 128.0], contents: CONTENTS_WATER });
             let hits_before = VOLUME_HITS.load(Ordering::Relaxed);
 
             let (slot, original) = install_contents_hook(trace, &TEST_PLATFORM).expect("install");

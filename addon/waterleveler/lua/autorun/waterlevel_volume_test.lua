@@ -199,12 +199,12 @@ if SERVER then
     --- Create a volume (engine water + optional buoyancy + undo entry).
     --- opts: fluid (default true), surface / body (material paths, "" = client default).
     --- Returns the volume id, or nil, err.
-    --- opts: fluid (default true), surface, body (material names), fluidOptions (the options table
+    --- opts: liquid ("water" default or "slime"), fluid (default true), surface, body (material names), fluidOptions (the options table
     --- of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics, currentx/y/z, plus
     --- material: the physics material of the fluid object, whose density sets the buoyancy).
     function WLWater.Spawn(ply, mins, maxs, opts)
         opts = opts or {}
-        local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z)
+        local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid)
         if not id then return nil, err end
 
         boxes[id] = { mins = mins, maxs = maxs, surface = opts.surface, body = opts.body }
@@ -213,7 +213,12 @@ if SERVER then
             local e = ents.Create("wl_fluid")
             if IsValid(e) then
                 e.WLHalf = (maxs - mins) / 2
-                e.WLFluidOptions = opts.fluidOptions -- nil = a map water brush's values
+                local fo = opts.fluidOptions
+                if opts.liquid then
+                    fo = table.Copy(fo or {})
+                    fo.contents = opts.liquid
+                end
+                e.WLFluidOptions = fo -- nil = a map water brush's values
                 e:SetPos((mins + maxs) / 2)
                 e:Spawn()
                 fluids[#fluids + 1] = e

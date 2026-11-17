@@ -78,7 +78,7 @@ Facts taken from the 64-bit `server.dll`: `m_nWaterLevel` is a
 ## Water volumes (Windows x64)
 
 ```lua
-local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2)  -- world-space box
+local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid])  -- world-space box; liquid "water" (default) or "slime"
 waterleveler.RemoveVolume(id)
 waterleveler.ClearVolumes()
 waterleveler.VolumeCount()
@@ -87,7 +87,7 @@ waterleveler.IsContentsHooked()
 waterleveler.ContentsHits()           -- engine point queries answered with water
 waterleveler.TraceHits()              -- traces rewritten or flagged by a volume
 waterleveler.BubbleClips()            -- bullet bubble trails clipped to a volume
-waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options])  -- experimental buoyancy
+waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options])  -- experimental buoyancy; options.contents = "water"|"slime"
 waterleveler.DetachFluid(id)
 waterleveler.FluidCount()
 ```
@@ -216,3 +216,12 @@ Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the clie
 ## License
 
 Copyright (C) 2026 Margen67. AGPL-3.0-or-later; see `LICENSE` (the full GNU AGPL v3 text).
+
+### Water or slime
+
+`AddVolume`, `AddBox` and `CreateVolume` take an optional liquid, `"water"` (default) or `"slime"`, and
+`AttachFluid` takes `contents = "water"|"slime"` in its options (keep it equal to the volume's liquid). The
+engine derives the water type from the point contents, so slime volumes get slime-coloured splashes and
+ripples and a different swim sound value, players cannot wade in them, and underwater explosions do not
+use the water explosion effect (the engine only does that for water). The Water Volume tool has a Liquid
+dropdown.
