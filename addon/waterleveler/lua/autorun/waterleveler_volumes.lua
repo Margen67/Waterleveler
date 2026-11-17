@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 -- Copyright (C) 2026 Margen67
--- waterlevel_volume_test.lua
+-- waterleveler_volumes.lua
 -- Put this in garrysmod/lua/autorun/  (NOT autorun/server - it is shared, the
 -- client half draws the placeholder box).
 --
@@ -255,9 +255,7 @@ if SERVER then
         return ply
     end
 
-    local function allowed(ply)
-        return not IsValid(ply) or ply:IsSuperAdmin() or game.SinglePlayer() or ply:IsListenServerHost()
-    end
+    local allowed = WLWater.Allowed
 
     concommand.Add("wl_water_spawn", function(caller, _, args)
         if not allowed(caller) then return end
@@ -289,103 +287,19 @@ if SERVER then
         print("[wl] all water volumes removed")
     end)
 
-    -- What the server dispatched recently ("Explosion", "WaterSurfaceExplosion",
-    -- "watersplash", ...). Blow something up, then run this. "wl_effect_log 1" clears it.
-    concommand.Add("wl_effect_log", function(caller, _, args)
-        if not allowed(caller) then return end
-        local text = args[1] and waterleveler.EffectLog(true) or waterleveler.EffectLog()
-        print("[wl] recent effects (oldest first):")
-        print(text == "" and "(none)" or text)
-    end)
-
-    -- Writes the server.dll that is loaded right now to garrysmod/data (as it is in memory,
-    -- including this module's detours) so it can be inspected.
-    concommand.Add("wl_dump_server", function(caller)
-        if not allowed(caller) then return end
-        local n, err = waterleveler.DumpServerImage("garrysmod/data/wl_server_image.bin")
-        print(n and ("[wl] wrote garrysmod/data/wl_server_image.bin (" .. n .. " bytes)") or ("[wl] dump failed: " .. tostring(err)))
-    end)
-
     concommand.Add("wl_water_status", function(caller)
         print("[wl] " .. waterleveler.HookStatus())
         print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d")
             :format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(),
                 waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()))
-        print(("[wl] traces seen with a water mask: %d"):format(waterleveler.TraceWaterCalls()))
         print(("[wl] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()))
         print(("[wl] fluid controllers: %d"):format(waterleveler.FluidCount()))
-        local c = { waterleveler.ExplosionCalls() }
-        print(("[wl] explosion functions called: %d / %d / %d | last water level, origin z seen: %d %.1f / %d %.1f / %d %.1f")
-            :format(c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9]))
         local ply = resolve(caller)
         if IsValid(ply) then
             local p = ply:GetPos()
             print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s")
                 :format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))))
         end
-    end)
-
-    -- Drops a barrel in the middle of the newest volume and reports what the
-    -- engine says about its water level after it has settled.
-    -- Two-stage buoyancy test, then cleanup:
-    --   1. a free barrel dropped in the middle of the newest volume
-    --   2. when stage 1 is done, a second barrel frozen in place
-    --   3. when stage 2 is done, both barrels are removed
-    local testRunning = false
-    concommand.Add("wl_prop_test", function(caller)
-        if not allowed(caller) then return end
-        local _, b = next(boxes)
-        if not b then return print("[wl] spawn a volume first with wl_water_spawn") end
-        if testRunning then return print("[wl] a prop test is still running") end
-        testRunning = true
-
-        local props = {}
-        local function cleanup()
-            for _, e in ipairs(props) do if IsValid(e) then e:Remove() end end
-            props = {}
-            testRunning = false
-            print("[wl] prop test complete, test props removed")
-        end
-
-        local function report(label, prop, t)
-            if not IsValid(prop) then return print(("[wl] %s t=%ds: prop is gone"):format(label, t)) end
-            local p = prop:GetPos()
-            local ph = prop:GetPhysicsObject()
-            local vel = IsValid(ph) and ph:GetVelocity() or vector_origin
-            print(("[wl] %s t=%ds WaterLevel() = %d | inside volume: %s | z = %.1f (volume z %.1f..%.1f) | vel z = %.1f")
-                :format(label, t, prop:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z)),
-                    p.z, b.mins.z, b.maxs.z, vel.z))
-        end
-
-        local function spawn(frozen)
-            local prop = ents.Create("prop_physics")
-            prop:SetModel("models/props_c17/oildrum001.mdl")
-            prop:SetPos((b.mins + b.maxs) / 2)
-            prop:Spawn()
-            if frozen then
-                local ph = prop:GetPhysicsObject()
-                if IsValid(ph) then ph:EnableMotion(false) end
-            end
-            props[#props + 1] = prop
-            return prop
-        end
-
-        -- Stage 2 (frozen) runs after stage 1 finishes; stage 3 cleans up after it.
-        local function stage2()
-            local prop = spawn(true)
-            print("[wl] stage 2: frozen barrel spawned")
-            for _, t in ipairs({ 1, 2 }) do
-                timer.Simple(t, function() report("frozen", prop, t) end)
-            end
-            timer.Simple(2.5, cleanup)
-        end
-
-        local prop = spawn(false)
-        print("[wl] stage 1: free barrel spawned")
-        for _, t in ipairs({ 1, 2, 4, 8 }) do
-            timer.Simple(t, function() report("free", prop, t) end)
-        end
-        timer.Simple(8.5, stage2)
     end)
 
     hook.Add("PlayerInitialSpawn", "wl_volumes_sync", function(ply)

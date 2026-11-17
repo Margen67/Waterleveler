@@ -7,7 +7,7 @@ binary module. 64-bit (x86-64 branch) on Windows and Linux. Server realm only.
 
 GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 `lua/bin`), so install in two parts: the DLL into `garrysmod/lua/bin/`, and the
-`addon/waterleveler` folder (Lua library + test script) into `garrysmod/addons/`.
+`addon/waterleveler` folder (Lua library + volume script) into `garrysmod/addons/`.
 `build.sh` does both on Windows. Files:
 
 | Platform | File name                       |
@@ -44,7 +44,7 @@ waterleveler.Get(ent)          -- number | nil
 waterleveler.Clear(ent)        -- bool (was there an override)
 waterleveler.ClearAll()
 waterleveler.IsHooked()        -- engine hook active?
-waterleveler.HookStatus()      -- e.g. "hooked CBaseEntity::SetWaterLevel at server.dll+0x2ea810"
+waterleveler.HookStatus()      -- e.g. "hooked CBaseEntity::SetWaterLevel at server.dll+<rva>"
 waterleveler.HookHits()        -- engine calls whose value was replaced
 waterleveler.SetSaveKey(key)   -- datamap key written each tick; "" disables that layer
 
@@ -104,13 +104,13 @@ and server-side player movement.
 
 Limits (read these):
 - **No real water surface.** Rendering water needs map data compiled into the
-  BSP; this cannot create it. `addon/waterleveler/lua/autorun/waterlevel_volume_test.lua` draws a translucent
+  BSP; this cannot create it. `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` draws a translucent
   box client-side as a placeholder.
 - **Player prediction.** The client predicts swimming with its own trace
   object, which does not know about volumes, so a player inside one may see
   prediction corrections (stutter). Fixing it needs a matching client module
   and the 64-bit `client.dll`.
-- **Buoyancy (EXPERIMENTAL, untested in game).** Props float only if a vphysics
+- **Buoyancy.** Props float only if a vphysics
   fluid controller exists; point contents alone do nothing. A map's water brush
   is a static physics object with the `water` material plus
   `physenv->CreateFluidController(obj, &fluidparams_t)` (vtable slot 11; read
@@ -119,7 +119,7 @@ Limits (read these):
   created (plane in world space, normal out of the fluid) and
   `options` is an optional table (also accepted as the 6th argument) with `damping` (default 0.01), `torque`, `viscosity`, `aerodynamics` (boolean) and the flow `currentx`, `currenty`, `currentz` (units/s). The defaults are what a map's water brush has: the engine reads only the plane, current, damping and contents from the map, so torque, viscosity and aerodynamics are 0. The Water Volume tool has a control for each, and for the fluid object's physics material (default `water`; its density sets how high props float), which `WLWater.Spawn` takes as `fluidOptions.material`. `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
   removed**. The `physenv` pointer is found by signature. `wl_water_spawn
-  <size> fluid` in the test script builds one. Unknowns: whether a Lua-created
+  <size> fluid` builds one. Unknowns: whether a Lua-created
   object is accepted exactly like the world's, and the engine-side teardown.
 - **Traces.** `IEngineTrace::TraceRay` (vtable slot 4, 214 call sites in
   server.dll) is hooked too: when the mask contains `CONTENTS_WATER`, a ray or
@@ -131,11 +131,10 @@ Limits (read these):
   A ray that **starts inside** a volume behaves like one starting inside a
   real water brush: `startsolid`, and when it also ends inside, `allsolid`
   with fraction 0 and the end point at the start. The engine's water-height
-  probe (a downward `MASK_WATER` ray from 256 units above the entity,
-  `server.dll+0x48b680`) relies on that; before this, a probe starting inside
+  probe (a downward `MASK_WATER` ray from 256 units above the entity) relies on that; before this, a probe starting inside
   a volume looked like "no water" and the surface height collapsed to the
   entity's own height.
-- **Bullet bubble trails.** `UTIL_BubbleTrail` (`server.dll+0x48a150`) clips a
+- **Bullet bubble trails.** `UTIL_BubbleTrail` clips a
   trail by water depth only, never sideways, and sends one temp entity with
   `count` bubbles for the whole remaining segment. A shot leaving a volume
   through a side wall therefore produced a trail as long as its flight, and a
@@ -144,20 +143,20 @@ Limits (read these):
   volume it is in (or enters) and `count` is scaled by the kept fraction.
   Trails outside every volume are untouched.
 - **Client-decided effects** cannot be fixed from the server. The flat
-  `effects/splashwake1` ripple (`FX_WaterRipple`, `client.dll+0x24d000`) is
+  `effects/splashwake1` ripple (`FX_WaterRipple`) is
   only created if the client's *own* `TraceRay` with `MASK_WATER` hits
   something just below the splash point; the splash effect data the server
   sends (origin, normal, scale, flags) is already enough for the particle
   splashes, which is why those appear. The same applies to anything else the
   client checks against its own copy of the map.
-  The test script redraws that ripple with the engine's numbers: scale
+  The script redraws that ripple with the engine's numbers: scale
   `effect scale * 0.125` (10-12 for a player's `waterripple`), the quad grows
   from `scale*16` to `scale*128` units over 1.5 s (size bias 0.7), starts at an
   alpha of `clamp(luma(light)*4, 0.25, 1)` and fades to 0 (alpha bias 0.25), tinted
   `0.75 + 0.25*light`. A wake needs the entity to move at
   least 25 units/s (the engine's `PhysicsSplash` limit).
 
-Test script: `addon/waterleveler/lua/autorun/waterlevel_volume_test.lua` (loaded automatically as part of the addon).
+Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` (loaded automatically as part of the addon).
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy, and surface/body materials; an outline previews the volume where you
 are looking).
@@ -207,17 +206,11 @@ Explosive entities pick the water explosion (underwater sound, splash and wake, 
 
 A water hit produced for a volume names the world entity (entry 0 of the engine's entity array, found by signature) as the hit entity, like a real water brush. Without it, code that calls a virtual on the trace's entity (for example the SLAM's impact handling) crashed. If the world entity cannot be found, hits the engine gave no entity are skipped.
 
-`waterleveler.EffectLog([clear])` returns the last effects the server dispatched (name and origin); the `wl_effect_log` command prints them.
-
 ## Explosion events
 
 Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect (splash and wake) is on the volume's surface; the blast point travels in its start vector (see the client module above). `waterleveler.ExplosionsRedirected()` counts them.
 
-## License
-
-Copyright (C) 2026 Margen67. AGPL-3.0-or-later; see `LICENSE` (the full GNU AGPL v3 text).
-
-### Water or slime
+## Water or slime
 
 `AddVolume`, `AddBox` and `CreateVolume` take an optional liquid, `"water"` (default) or `"slime"`, and
 `AttachFluid` takes `contents = "water"|"slime"` in its options (keep it equal to the volume's liquid). The
@@ -225,3 +218,7 @@ engine derives the water type from the point contents, so slime volumes get slim
 ripples and a different swim sound value, players cannot wade in them, and underwater explosions do not
 use the water explosion effect (the engine only does that for water). The Water Volume tool has a Liquid
 dropdown.
+
+## License
+
+Copyright (C) 2026 Margen67. AGPL-3.0-or-later; see `LICENSE` (the full GNU AGPL v3 text).

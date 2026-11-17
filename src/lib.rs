@@ -532,7 +532,6 @@ mod engine_hook {
     }
 
     /// Traces seen with a water bit in the mask (diagnostics).
-    pub static TRACE_WATER_MASK_CALLS: AtomicU64 = AtomicU64::new(0);
     static WATER_SURFACE_NAME: &[u8] = b"water\0";
 
     /// Where the segment `s + t*d` (t in 0..1) first enters the box `[lo, hi]`
@@ -611,7 +610,7 @@ mod engine_hook {
         // Rays that START inside a volume. A real water brush reports these as
         // startsolid, and when the whole ray stays inside it as allsolid with
         // fraction 0 and the end point at the start. The engine's water-height
-        // probe (a downward MASK_WATER ray from above the entity, +0x48b680)
+        // probe (a downward MASK_WATER ray from above the entity)
         // depends on that: without it a probe starting inside a volume looks
         // like "no water here" and the computed surface height collapses to
         // the entity's own height.
@@ -710,7 +709,6 @@ mod engine_hook {
         if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0 || ray.is_null() || trace.is_null() {
             return;
         }
-        TRACE_WATER_MASK_CALLS.fetch_add(1, Ordering::Relaxed);
         // Never block inside an engine callback.
         if let Ok(vols) = VOLUMES.try_lock() {
             // Only the volumes whose contents the trace's mask asks for.
@@ -928,10 +926,10 @@ mod engine_hook {
     // ---- Fluid controllers (buoyancy) --------------------------------------
     //
     // How a map's water brush becomes buoyant, read from the 64-bit server.dll
-    // (world setup, +0x3e3417) and vphysics.dll:
+    // (world setup) and vphysics.dll:
     //   obj = physenv->CreatePolyObjectStatic(collide, <water material>, ...)   // slot 8
     //   physenv->CreateFluidController(obj, &fluidparams_t)                     // slot 11
-    // CreateFluidController (vphysics +0x17260) takes the fluid's density from
+    // CreateFluidController (vphysics) takes the fluid's density from
     // the object's *surface-property material* (so the object must use
     // "water"), reads the surface plane (WORLD space, normal pointing out of
     // the fluid), current velocity, damping (+0x1c), game data (+0x28) and
@@ -1008,10 +1006,10 @@ mod engine_hook {
 
     // ---- UTIL_BubbleTrail(const Vector &from, const Vector &to, int count) --
     //
-    // Found in the 64-bit server.dll at +0x48a150 (5 call sites; it is the
+    // Found in the 64-bit server.dll by signature (5 call sites; it is the
     // only user of the bubble sprite index that takes a from/to pair). It asks
     // for the water height above both end points with a downward MASK_WATER
-    // ray (the helper at +0x48b680), clips the trail by that *depth* only, and
+    // ray (the ray helper), clips the trail by that *depth* only, and
     // sends the whole remaining segment to clients as one temp entity with
     // `count` bubbles. Nothing limits the trail sideways, so a shot that
     // leaves a volume through a side wall produces a trail as long as the
@@ -1221,21 +1219,15 @@ mod engine_hook {
     /// Newer builds store rbx at [rsp+0x10] and reshuffle the pushes.
     pub const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
         &[
-            // 0x5ae2f0
             ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
-            // 0x5964d0 (x86-64 branch, 2026-11)
             ("48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
         ],
         &[
-            // 0x5c9540
             ("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 80 02 00 00", 19),
-            // 0x5b1330
             ("48 8B C4 48 89 58 10 48 89 70 18 55 57 41 56 48 8D 68 C8 48 81 EC 20 01 00 00 0F 29 70 D8 48 8B D9 8B 89 80 02 00 00", 15),
         ],
         &[
-            // 0x6df9d0
             ("48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
-            // 0x6c4620
             ("48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
         ],
     ];
@@ -1257,10 +1249,6 @@ mod engine_hook {
     pub static EXPLOSION_TRAMPOLINES: [AtomicUsize; 3] =
         [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
     pub static EXPLOSION_FIXES: AtomicU64 = AtomicU64::new(0);
-    /// How often each patched function ran at all, and the last water level
-    /// (low byte) and origin z seen on entry (diagnostics).
-    pub static EXPLOSION_CALLS: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
-    pub static EXPLOSION_LAST: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
     pub const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2ab;
     pub const ENTITY_ORIGIN_OFFSET: usize = 0x33c;
 
@@ -1288,13 +1276,6 @@ mod engine_hook {
     type ExplosionFn = unsafe extern "win64" fn(*mut u8, usize, usize, usize) -> usize;
 
     unsafe fn explosion_hook(i: usize, this: *mut u8, a: usize, b: usize, c: usize) -> usize {
-        EXPLOSION_CALLS[i].fetch_add(1, Ordering::Relaxed);
-        if !this.is_null() {
-            let o = this.add(ENTITY_ORIGIN_OFFSET) as *const f32;
-            let packed = ((this.add(ENTITY_WATER_LEVEL_OFFSET).read() as u64) << 32)
-                | o.add(2).read_unaligned().to_bits() as u64;
-            EXPLOSION_LAST[i].store(packed, Ordering::Relaxed);
-        }
         raise_water_level_in_volume(this);
         let original: ExplosionFn = std::mem::transmute(EXPLOSION_TRAMPOLINES[i].load(Ordering::Relaxed));
         original(this, a, b, c)
@@ -1310,61 +1291,11 @@ mod engine_hook {
     }
     pub const EXPLOSION_HOOKS: [ExplosionFn; 3] = [hook_explosion0, hook_explosion1, hook_explosion2];
 
-    // ---- Effect log (diagnostics) -----------------------------------------
-    //
-    // DispatchEffect(const char *name, const CEffectData &data) at
-    // server.dll+0x7043e0: every server-made effect ("Explosion",
-    // "WaterSurfaceExplosion", "watersplash", ...) goes through it, and the
-    // origin is the first three floats of the data. The last effects are kept
-    // so a test can show what an explosion actually dispatched.
-
+    /// DispatchEffect(const char *name, const CEffectData &data).
+    /// Only its address is used (to send the water explosion effect), nothing is patched.
     pub const DISPATCH_EFFECT_SIG: &str = "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 48 8B FA \
                                            48 8D 4C 24 30 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 8B D7";
     pub const DISPATCH_EFFECT_STOLEN: usize = 16;
-    pub static DISPATCH_EFFECT_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
-    pub const EFFECT_LOG_LEN: usize = 48;
-    pub static EFFECT_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-    pub unsafe fn log_effect(name: *const u8, data: *const u8) {
-        if name.is_null() {
-            return;
-        }
-        let mut n = Vec::new();
-        for i in 0..40 {
-            let c = name.add(i).read();
-            if c == 0 {
-                break;
-            }
-            n.push(c);
-        }
-        let origin = if data.is_null() {
-            [0.0f32; 3]
-        } else {
-            let o = data as *const f32;
-            [o.read_unaligned(), o.add(1).read_unaligned(), o.add(2).read_unaligned()]
-        };
-        let inside = VOLUMES.try_lock().map(|v| point_in_volumes(&v, origin)).unwrap_or(false);
-        if let Ok(mut log) = EFFECT_LOG.try_lock() {
-            if log.len() >= EFFECT_LOG_LEN {
-                log.remove(0);
-            }
-            log.push(format!(
-                "{} at ({:.0} {:.0} {:.0}){}",
-                String::from_utf8_lossy(&n),
-                origin[0],
-                origin[1],
-                origin[2],
-                if inside { " [in volume]" } else { "" }
-            ));
-        }
-    }
-
-    pub unsafe extern "win64" fn hook_dispatch_effect(name: *const u8, data: *const u8) {
-        log_effect(name, data);
-        let original: unsafe extern "win64" fn(*const u8, *const u8) =
-            std::mem::transmute(DISPATCH_EFFECT_TRAMPOLINE.load(Ordering::Relaxed));
-        original(name, data)
-    }
 
     // ---- Explosion events (CTEExplosion::Create) -------------------------
     //
@@ -1856,21 +1787,8 @@ mod hook_state {
             }
             Err(why) => format!(" (bubble-trail clipping inactive: {why})"),
         };
-        // Effect log (diagnostics only).
-        // The function's address is kept: once it is detoured below, its
-        // signature no longer matches (the first bytes are the detour).
-        if let Ok(patch) = engine_hook::scan_sig(base, engine_hook::DISPATCH_EFFECT_SIG).and_then(|t| {
+        if let Ok(t) = engine_hook::scan_sig(base, engine_hook::DISPATCH_EFFECT_SIG) {
             engine_hook::DISPATCH_EFFECT_ADDR.store(t as usize, std::sync::atomic::Ordering::SeqCst);
-            engine_hook::install_patch(
-                t,
-                engine_hook::DISPATCH_EFFECT_SIG,
-                engine_hook::DISPATCH_EFFECT_STOLEN,
-                engine_hook::hook_dispatch_effect as *const () as usize,
-                &engine_hook::win::PLATFORM,
-            )
-        }) {
-            engine_hook::DISPATCH_EFFECT_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-            *EFFECT_PATCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
         }
 
         // Explosion events in a volume become the water explosion effect.
@@ -1931,7 +1849,6 @@ mod hook_state {
     }
 
     pub static EXPLOSIONS: Mutex<Vec<engine_hook::Patch>> = Mutex::new(Vec::new());
-    pub static EFFECT_PATCH: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
     pub static TE_HOOK: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
     pub static BUBBLE: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
@@ -2005,34 +1922,6 @@ mod hook_state {
         FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
-    /// The loaded server.dll as it is in memory right now (headers and every
-    /// section at its virtual address, so offsets are RVAs). It includes this
-    /// module's own detours.
-    pub unsafe fn dump_server_image() -> Result<Vec<u8>, &'static str> {
-        let base = engine_hook::win::server_base();
-        if base.is_null() {
-            return Err("server.dll is not loaded");
-        }
-        let rd32 = |off: usize| (base.add(off) as *const u32).read_unaligned();
-        let rd16 = |off: usize| (base.add(off) as *const u16).read_unaligned();
-        let nt = rd32(0x3C) as usize;
-        let size_of_image = rd32(nt + 24 + 56) as usize;
-        let size_of_headers = rd32(nt + 24 + 60) as usize;
-        let nsec = rd16(nt + 6) as usize;
-        let sections = nt + 24 + rd16(nt + 20) as usize;
-        let mut out = vec![0u8; size_of_image];
-        out[..size_of_headers].copy_from_slice(std::slice::from_raw_parts(base, size_of_headers));
-        for i in 0..nsec {
-            let sh = sections + i * 40;
-            let vsize = rd32(sh + 8) as usize;
-            let va = rd32(sh + 12) as usize;
-            if va + vsize <= size_of_image {
-                out[va..va + vsize].copy_from_slice(std::slice::from_raw_parts(base.add(va), vsize));
-            }
-        }
-        Ok(out)
-    }
-
     pub unsafe fn uninstall_contents() {
         engine_hook::RAY_SWEPT_OFFSET
             .store(engine_hook::RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
@@ -2041,9 +1930,6 @@ mod hook_state {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
         engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
-        if let Some(patch) = EFFECT_PATCH.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
-        }
         for patch in std::mem::take(&mut *EXPLOSIONS.lock().unwrap_or_else(|e| e.into_inner())) {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
@@ -2088,9 +1974,6 @@ mod hook_state {
     pub unsafe fn fluid_detach_all() {}
     pub fn fluid_count() -> usize {
         0
-    }
-    pub unsafe fn dump_server_image() -> Result<Vec<u8>, &'static str> {
-        Err("only available for the Windows x64 server.dll")
     }
 }
 
@@ -2390,16 +2273,6 @@ unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
     1
 }
 
-/// waterlevel.TraceWaterCalls() - engine traces seen with a water bit in the mask
-unsafe extern "C-unwind" fn l_trace_water_calls(l: LuaState) -> c_int {
-    #[cfg(target_arch = "x86_64")]
-    let n = engine_hook::TRACE_WATER_MASK_CALLS.load(std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(target_arch = "x86_64"))]
-    let n = 0u64;
-    (api().pushnumber)(l, n as f64);
-    1
-}
-
 /// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -> id | nil, err
 /// Makes `physobj` an engine fluid (buoyancy + drag for props inside it).
 /// The plane is in world space with the normal pointing out of the fluid;
@@ -2497,30 +2370,6 @@ unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int {
     1
 }
 
-/// waterlevel.DumpServerImage(path) -> bytes written | nil, err
-/// Writes the loaded server.dll image (as in memory, RVA layout) to `path`.
-unsafe extern "C-unwind" fn l_dump_server_image(l: LuaState) -> c_int {
-    let a = api();
-    let p = (a.tolstring)(l, 1, std::ptr::null_mut());
-    if p.is_null() {
-        return fail(l, c"expected a file path");
-    }
-    let path = CStr::from_ptr(p).to_string_lossy().to_string();
-    match hook_state::dump_server_image() {
-        Ok(bytes) => match std::fs::write(&path, &bytes) {
-            Ok(()) => {
-                (a.pushnumber)(l, bytes.len() as f64);
-                1
-            }
-            Err(_) => fail(l, c"could not write the file"),
-        },
-        Err(why) => {
-            let c = CString::new(why).unwrap_or_default();
-            fail(l, &c)
-        }
-    }
-}
-
 /// waterlevel.FluidCount()
 unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
     (api().pushnumber)(l, hook_state::fluid_count() as f64);
@@ -2544,52 +2393,6 @@ unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
     #[cfg(not(target_arch = "x86_64"))]
     let n = 0u64;
     (api().pushnumber)(l, n as f64);
-    1
-}
-
-/// waterlevel.ExplosionCalls() -> calls1, calls2, calls3, then for each
-/// function the water level and origin z it last saw (before the fix).
-unsafe extern "C-unwind" fn l_explosion_calls(l: LuaState) -> c_int {
-    let a = api();
-    #[cfg(target_arch = "x86_64")]
-    {
-        use std::sync::atomic::Ordering::Relaxed;
-        for c in engine_hook::EXPLOSION_CALLS.iter() {
-            (a.pushnumber)(l, c.load(Relaxed) as f64);
-        }
-        for c in engine_hook::EXPLOSION_LAST.iter() {
-            let v = c.load(Relaxed);
-            (a.pushnumber)(l, (v >> 32) as f64);
-            (a.pushnumber)(l, f32::from_bits(v as u32) as f64);
-        }
-        return 9;
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        for _ in 0..9 {
-            (a.pushnumber)(l, 0.0);
-        }
-        9
-    }
-}
-
-/// waterlevel.EffectLog([clear]) -> the last effects the server dispatched,
-/// one per line (oldest first).
-unsafe extern "C-unwind" fn l_effect_log(l: LuaState) -> c_int {
-    let a = api();
-    #[cfg(target_arch = "x86_64")]
-    let text = {
-        let mut log = engine_hook::EFFECT_LOG.lock().unwrap_or_else(|e| e.into_inner());
-        let t = log.join("\n");
-        if (a.gettop)(l) >= 1 {
-            log.clear();
-        }
-        t
-    };
-    #[cfg(not(target_arch = "x86_64"))]
-    let text = String::new();
-    let c = std::ffi::CString::new(text.replace('\0', "")).unwrap_or_default();
-    (a.pushstring)(l, c.as_ptr());
     1
 }
 
@@ -2726,12 +2529,8 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
     set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
     set_fn(l, t, c"ContentsHits", l_contents_hits);
     set_fn(l, t, c"TraceHits", l_trace_hits);
-    set_fn(l, t, c"TraceWaterCalls", l_trace_water_calls);
     set_fn(l, t, c"BubbleClips", l_bubble_clips);
     set_fn(l, t, c"ExplosionFixes", l_explosion_fixes);
-    set_fn(l, t, c"ExplosionCalls", l_explosion_calls);
-    set_fn(l, t, c"EffectLog", l_effect_log);
-    set_fn(l, t, c"DumpServerImage", l_dump_server_image);
     set_fn(l, t, c"ExplosionsRedirected", l_explosions_redirected);
     set_fn(l, t, c"AttachFluid", l_attach_fluid);
     set_fn(l, t, c"DetachFluid", l_detach_fluid);
@@ -3253,7 +3052,7 @@ mod tests {
             return;
         };
         let pe = parse_pe(&d);
-        let (_, text_rva, _, text_raw, _, _) =
+        let (_, _text_rva, _, text_raw, _, _) =
             pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
         let pat = parse_sig(BUBBLE_TRAIL_SIG);
         let at = find_all(&d[text_raw..], &pat)[0];
@@ -3345,30 +3144,6 @@ mod tests {
     }
     unsafe extern "win64" fn fake_set_flags(_: *mut c_void, f: u16) {
         FLAGS.store(f, std::sync::atomic::Ordering::SeqCst)
-    }
-
-    /// Optional: a memory dump from `wl_dump_server` (SERVER_DUMP_X64) is
-    /// already in memory layout, so the lookups run on it exactly as they do
-    /// in the game.
-    #[test]
-    fn lookups_work_on_a_memory_dump() {
-        let Ok(path) = std::env::var("SERVER_DUMP_X64") else {
-            eprintln!("SERVER_DUMP_X64 not set; skipping");
-            return;
-        };
-        let dump = std::fs::read(path).unwrap();
-        let base = dump.as_ptr();
-        unsafe {
-            let vt = te_explosion_vtable(base);
-            eprintln!("te vtable: {:?}", vt.map(|v| v - base as usize));
-            let world = entity_array_global(base);
-            eprintln!("entity array: {:?}", world.map(|v| v - base as usize));
-            for i in 0..EXPLOSION_TARGETS.len() {
-                eprintln!("explosion sig: {:?}", find_explosion_target(base, i).map(|v| v.0 as usize - base as usize));
-            }
-            eprintln!("dispatch: {:?}", scan_sig(base, DISPATCH_EFFECT_SIG).map(|v| v as usize - base as usize));
-            eprintln!("ctor sigs: {:?}", scan_sig_all(base, TE_EXPLOSION_CTOR_SIG).map(|v| v.len()));
-        }
     }
 
     #[test]
@@ -3552,20 +3327,6 @@ mod tests {
             let b = std::slice::from_raw_parts(at, DISPATCH_EFFECT_STOLEN + 5);
             assert_eq!(b[DISPATCH_EFFECT_STOLEN], 0x48); // next instruction starts here (lea rcx,[rsp+30h])
         }
-    }
-
-    #[test]
-    fn effect_log_records_name_origin_and_volume() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER });
-        EFFECT_LOG.lock().unwrap().clear();
-        let data = [50.0f32, 50.0, 50.0];
-        unsafe { log_effect(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr() as *const u8) };
-        let log = EFFECT_LOG.lock().unwrap().clone();
-        assert_eq!(log, vec!["WaterSurfaceExplosion at (50 50 50) [in volume]".to_string()]);
-        volumes().clear();
-        EFFECT_LOG.lock().unwrap().clear();
     }
 
     #[test]
