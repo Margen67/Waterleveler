@@ -194,6 +194,25 @@ static OVERRIDES: Mutex<BTreeMap<i32, u8>> = Mutex::new(BTreeMap::new());
 /// `None` = default key, `Some("")` = engine writes disabled.
 static SAVE_KEY: Mutex<Option<String>> = Mutex::new(None);
 
+/// The settings of a fluid controller (`fluidparams_t`) besides its surface plane.
+/// A map's water brush has torque, viscosity and aerodynamics at 0 (its fluid
+/// data only carries the plane, current, damping and contents), so those are the
+/// defaults; damping is 0.01.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FluidSettings {
+    pub damping: f32,
+    pub current: [f32; 3],
+    pub torque: f32,
+    pub viscosity: f32,
+    pub aerodynamics: bool,
+}
+
+impl Default for FluidSettings {
+    fn default() -> Self {
+        FluidSettings { damping: 0.01, current: [0.0; 3], torque: 0.0, viscosity: 0.0, aerodynamics: false }
+    }
+}
+
 fn overrides() -> std::sync::MutexGuard<'static, BTreeMap<i32, u8>> {
     OVERRIDES.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -1917,28 +1936,28 @@ mod hook_state {
         Ok(env)
     }
 
-    pub unsafe fn fluid_attach(object: usize, plane: [f32; 4], damping: f32) -> Result<u32, &'static str> {
+    pub unsafe fn fluid_attach(object: usize, plane: [f32; 4], fluid: &super::FluidSettings) -> Result<u32, &'static str> {
         let env = physenv()?;
         let params = engine_hook::FluidParams {
             surface_plane: plane,
-            current_velocity: [0.0; 3],
-            damping,
-            torque_factor: 0.05,
-            viscosity_factor: 0.0,
+            current_velocity: fluid.current,
+            damping: fluid.damping,
+            torque_factor: fluid.torque,
+            viscosity_factor: fluid.viscosity,
             game_data: std::ptr::null_mut(),
-            use_aerodynamics: 0,
+            use_aerodynamics: fluid.aerodynamics as u8,
             contents: CONTENTS_WATER,
         };
         if object == 0 {
             return Err("null physics object");
         }
         engine_hook::add_fluid_callback_flag(object as *mut _);
-        let fluid = engine_hook::create_fluid(env, object as *mut _, &params);
-        if fluid.is_null() {
+        let controller = engine_hook::create_fluid(env, object as *mut _, &params);
+        if controller.is_null() {
             return Err("the engine refused to create a fluid controller (object has no physics?)");
         }
         let id = NEXT_FLUID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).push((id, fluid as usize));
+        FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).push((id, controller as usize));
         Ok(id)
     }
 
@@ -2042,7 +2061,7 @@ mod hook_state {
     pub fn contents_active() -> bool {
         false
     }
-    pub unsafe fn fluid_attach(_: usize, _: [f32; 4], _: f32) -> Result<u32, &'static str> {
+    pub unsafe fn fluid_attach(_: usize, _: [f32; 4], _: &super::FluidSettings) -> Result<u32, &'static str> {
         Err("fluids are only available for the Windows x64 server.dll")
     }
     pub unsafe fn fluid_detach(_: u32) -> bool {
@@ -2340,10 +2359,13 @@ unsafe extern "C-unwind" fn l_trace_water_calls(l: LuaState) -> c_int {
     1
 }
 
-/// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping]) -> id | nil, err
+/// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -> id | nil, err
 /// Makes `physobj` an engine fluid (buoyancy + drag for props inside it).
 /// The plane is in world space with the normal pointing out of the fluid;
 /// for a water volume that is (0, 0, 1) and the world Z of its top face.
+/// `options` is an optional table (it may also be the 6th argument): damping,
+/// torque, viscosity, aerodynamics (boolean), currentx, currenty, currentz.
+/// Defaults are those of a map's water brush (see FluidSettings).
 unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
     let a = api();
     if (a.type_)(l, 1) != LUA_TUSERDATA {
@@ -2370,8 +2392,44 @@ unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
         }
         *slot = n as f32;
     }
-    let damping = if (a.type_)(l, 6) == LUA_TNUMBER { (a.tonumber)(l, 6) as f32 } else { 0.01 };
-    match hook_state::fluid_attach(obj as usize, v, damping) {
+    let mut fluid = FluidSettings::default();
+    let mut opts = 0;
+    if (a.type_)(l, 6) == LUA_TNUMBER {
+        fluid.damping = (a.tonumber)(l, 6) as f32;
+    } else if (a.type_)(l, 6) == LUA_TTABLE {
+        opts = 6;
+    }
+    if (a.type_)(l, 7) == LUA_TTABLE {
+        opts = 7;
+    }
+    if opts != 0 {
+        let num = |name: &CStr, slot: &mut f32| -> bool {
+            (a.getfield)(l, opts, name.as_ptr());
+            let present = (a.type_)(l, -1) == LUA_TNUMBER;
+            if present {
+                *slot = (a.tonumber)(l, -1) as f32;
+            }
+            (a.settop)(l, -2);
+            present
+        };
+        num(c"damping", &mut fluid.damping);
+        num(c"torque", &mut fluid.torque);
+        num(c"viscosity", &mut fluid.viscosity);
+        num(c"currentx", &mut fluid.current[0]);
+        num(c"currenty", &mut fluid.current[1]);
+        num(c"currentz", &mut fluid.current[2]);
+        (a.getfield)(l, opts, c"aerodynamics".as_ptr());
+        fluid.aerodynamics = (a.toboolean)(l, -1) != 0;
+        (a.settop)(l, -2);
+    }
+    let finite = fluid.damping.is_finite()
+        && fluid.torque.is_finite()
+        && fluid.viscosity.is_finite()
+        && fluid.current.iter().all(|c| c.is_finite());
+    if !finite {
+        return fail(l, c"fluid settings must be finite numbers");
+    }
+    match hook_state::fluid_attach(obj as usize, v, &fluid) {
         Ok(id) => {
             (a.pushnumber)(l, id as f64);
             1
@@ -3386,6 +3444,13 @@ mod tests {
         // the effect keeps its surface origin afterwards
         assert_eq!(f32::from_le_bytes(obj[ORIGIN_OFFSET + 8..ORIGIN_OFFSET + 12].try_into().unwrap()), 1000.0);
         assert!(!ACTIVE.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn fluid_defaults_match_a_map_water_brush() {
+        let d = FluidSettings::default();
+        assert_eq!((d.torque, d.viscosity, d.aerodynamics, d.current), (0.0, 0.0, false, [0.0; 3]));
+        assert_eq!(d.damping, 0.01);
     }
 
     #[test]

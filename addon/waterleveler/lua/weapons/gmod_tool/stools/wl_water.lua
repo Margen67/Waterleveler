@@ -14,6 +14,13 @@ TOOL.ClientConVar = {
     sizez = "128",
     offset = "0",
     fluid = "1",
+    fluid_damping = "0.01",
+    fluid_torque = "0",
+    fluid_viscosity = "0",
+    fluid_aero = "0",
+    fluid_currentx = "0",
+    fluid_currenty = "0",
+    fluid_currentz = "0",
     surface = "nature/water_movingplane",
     body = "nature/water_movingplane",
 }
@@ -61,6 +68,15 @@ function TOOL:LeftClick(trace)
     local mins, maxs = WLWater.Placement(trace, size, readOffset(get, size))
     local id, err = WLWater.Spawn(ply, mins, maxs, {
         fluid = self:GetClientNumber("fluid", 1) ~= 0,
+        fluidOptions = {
+            damping = self:GetClientNumber("fluid_damping", 0.01),
+            torque = self:GetClientNumber("fluid_torque", 0),
+            viscosity = self:GetClientNumber("fluid_viscosity", 0),
+            aerodynamics = self:GetClientNumber("fluid_aero", 0) ~= 0,
+            currentx = self:GetClientNumber("fluid_currentx", 0),
+            currenty = self:GetClientNumber("fluid_currenty", 0),
+            currentz = self:GetClientNumber("fluid_currentz", 0),
+        },
         surface = self:GetClientInfo("surface"),
         body = self:GetClientInfo("body"),
     })
@@ -123,6 +139,14 @@ if CLIENT then
         updateOffsetRange()
 
         panel:CheckBox("Buoyancy (props float)", "wl_water_fluid")
+        panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.")
+        panel:NumSlider("Damping (drag)", "wl_water_fluid_damping", 0, 10, 3)
+        panel:NumSlider("Torque factor", "wl_water_fluid_torque", 0, 10, 3)
+        panel:NumSlider("Viscosity factor", "wl_water_fluid_viscosity", 0, 10, 3)
+        panel:CheckBox("Aerodynamic drag", "wl_water_fluid_aero")
+        panel:NumSlider("Current X", "wl_water_fluid_currentx", -1000, 1000, 0)
+        panel:NumSlider("Current Y", "wl_water_fluid_currenty", -1000, 1000, 0)
+        panel:NumSlider("Current Z", "wl_water_fluid_currentz", -1000, 1000, 0)
 
         local function materialRow(label, convar)
             panel:Help(label)

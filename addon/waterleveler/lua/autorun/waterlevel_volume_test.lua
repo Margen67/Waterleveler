@@ -63,7 +63,7 @@ if SERVER then
             self:DrawShadow(false)
             self:SetCollisionGroup(COLLISION_GROUP_DEBRIS_TRIGGER)
             local top = self:GetPos().z + h.z
-            local id, err = waterleveler.AttachFluid(phys, 0, 0, 1, top)
+            local id, err = waterleveler.AttachFluid(phys, 0, 0, 1, top, self.WLFluidOptions)
             if not id then return print("[wl] AttachFluid failed: " .. tostring(err)) end
             self.WLFluid = id
             -- Rays (crowbar, bullets, the use key) must pass through: the water
@@ -196,6 +196,8 @@ if SERVER then
     --- Create a volume (engine water + optional buoyancy + undo entry).
     --- opts: fluid (default true), surface / body (material paths, "" = client default).
     --- Returns the volume id, or nil, err.
+    --- opts: fluid (default true), surface, body (material names), fluidOptions (the options table
+    --- of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics, currentx/y/z).
     function WLWater.Spawn(ply, mins, maxs, opts)
         opts = opts or {}
         local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z)
@@ -207,6 +209,7 @@ if SERVER then
             local e = ents.Create("wl_fluid")
             if IsValid(e) then
                 e.WLHalf = (maxs - mins) / 2
+                e.WLFluidOptions = opts.fluidOptions -- nil = a map water brush's values
                 e:SetPos((mins + maxs) / 2)
                 e:Spawn()
                 fluids[#fluids + 1] = e

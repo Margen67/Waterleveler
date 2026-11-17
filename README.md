@@ -87,7 +87,7 @@ waterleveler.IsContentsHooked()
 waterleveler.ContentsHits()           -- engine point queries answered with water
 waterleveler.TraceHits()              -- traces rewritten or flagged by a volume
 waterleveler.BubbleClips()            -- bullet bubble trails clipped to a volume
-waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping])  -- experimental buoyancy
+waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options])  -- experimental buoyancy
 waterleveler.DetachFluid(id)
 waterleveler.FluidCount()
 ```
@@ -115,9 +115,9 @@ Limits (read these):
   is a static physics object with the `water` material plus
   `physenv->CreateFluidController(obj, &fluidparams_t)` (vtable slot 11; read
   from server.dll's world setup and vphysics.dll). `waterleveler.AttachFluid(
-  physobj, nx, ny, nz, dist [, damping])` does the same for a PhysObj you
+  physobj, nx, ny, nz, dist [, damping] [, options])` does the same for a PhysObj you
   created (plane in world space, normal out of the fluid) and
-  `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
+  `options` is an optional table (also accepted as the 6th argument) with `damping` (default 0.01), `torque`, `viscosity`, `aerodynamics` (boolean) and the flow `currentx`, `currenty`, `currentz` (units/s). The defaults are what a map's water brush has: the engine reads only the plane, current, damping and contents from the map, so torque, viscosity and aerodynamics are 0. The Water Volume tool has a control for each. `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
   removed**. The `physenv` pointer is found by signature. `wl_water_spawn
   <size> fluid` in the test script builds one. Unknowns: whether a Lua-created
   object is accepted exactly like the world's, and the engine-side teardown.
