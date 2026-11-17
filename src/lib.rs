@@ -1437,16 +1437,41 @@ mod engine_hook {
     }
 
     /// The water explosion effect plays its sound at its own origin, which is on
-    /// the surface. The effect is therefore sent with TE_EXPLFLAG_NOSOUND and the
-    /// sound is queued to be played where the blast happened (see
-    /// `waterleveler.PopExplosionSound`): underneath the surface, so it is heard
-    /// (and muffled) as an underwater explosion whatever the volume's depth.
+    /// the surface. When the server's EmitSound is known the effect is sent with
+    /// TE_EXPLFLAG_NOSOUND and the sound is emitted where the blast happened
+    /// (underneath the surface), to the same recipients as the explosion event,
+    /// so it is heard and muffled as an underwater explosion whatever the
+    /// volume's depth.
     pub const TE_EXPLFLAG_NOSOUND: u32 = 0x4;
-    pub static EXPLOSION_SOUNDS: Mutex<Vec<[f32; 4]>> = Mutex::new(Vec::new());
-    const MAX_QUEUED_SOUNDS: usize = 64;
+
+    /// `static void CBaseEntity::EmitSound(IRecipientFilter &filter, int entindex,
+    /// const char *soundname, const Vector *origin, float soundtime, float *duration)`
+    pub const EMIT_SOUND_SIG: &str = "4D 85 C0 0F 84 ?? ?? ?? ?? 48 8B C4 48 89 70 18 48 89 78 20 \
+        55 41 56 41 57 48 8D 68 B1 48 81 EC A0 00 00 00 48 89 58 08 4C 8B F9 48 8B 0D ?? ?? ?? ?? \
+        4D 8B F1 49 8B F8";
+    pub static EMIT_SOUND_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+    pub type EmitSoundFn = unsafe extern "win64" fn(*mut c_void, c_int, *const u8, *const f32, f32, *mut f32);
+
+    /// Emits `scale > 128 ? WaterExplosionEffect.Sound : BaseExplosionEffect.Sound`
+    /// (the client's own choice) at `origin` for `filter`'s recipients.
+    pub unsafe fn emit_explosion_sound(filter: *mut c_void, origin: &[f32; 3], scale: f32) -> bool {
+        let addr = EMIT_SOUND_ADDR.load(Ordering::Relaxed);
+        if addr == 0 || filter.is_null() {
+            return false;
+        }
+        let name: &[u8] = if scale > 128.0 {
+            b"WaterExplosionEffect.Sound\0"
+        } else {
+            b"BaseExplosionEffect.Sound\0"
+        };
+        let f: EmitSoundFn = std::mem::transmute(addr);
+        f(filter, 0, name.as_ptr(), origin.as_ptr(), 0.0, std::ptr::null_mut());
+        true
+    }
 
     /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
-    pub unsafe fn redirect_explosion(this: *const u8) -> bool {
+    pub unsafe fn redirect_explosion(this: *const u8, filter: *mut c_void) -> bool {
         let dispatch = DISPATCH_EFFECT_ADDR.load(Ordering::Relaxed);
         if this.is_null() || dispatch == 0 {
             return false;
@@ -1465,12 +1490,9 @@ mod engine_hook {
         let scale = this.add(0x28).cast::<f32>().read_unaligned();
         let flags = this.add(0x2c).cast::<u32>().read_unaligned();
         let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
-        let data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags | TE_EXPLFLAG_NOSOUND, scale, magnitude);
-        if let Ok(mut q) = EXPLOSION_SOUNDS.try_lock() {
-            if q.len() < MAX_QUEUED_SOUNDS {
-                q.push([origin[0], origin[1], origin[2], scale]);
-            }
-        }
+        let silent = emit_explosion_sound(filter, &origin, scale);
+        let flags = if silent { flags | TE_EXPLFLAG_NOSOUND } else { flags };
+        let data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags, scale, magnitude);
         let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
         f(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr());
         EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
@@ -1487,7 +1509,7 @@ mod engine_hook {
 
     pub unsafe extern "win64" fn hook_te_create(this: *mut u8, filter: *mut c_void, delay: f32) {
         let vtable = TE_EXPLOSION_VTABLE.load(Ordering::Relaxed);
-        if vtable != 0 && !this.is_null() && (this as *const usize).read() == vtable && redirect_explosion(this) {
+        if vtable != 0 && !this.is_null() && (this as *const usize).read() == vtable && redirect_explosion(this, filter) {
             return;
         }
         let original: unsafe extern "win64" fn(*mut u8, *mut c_void, f32) =
@@ -1658,6 +1680,11 @@ mod hook_state {
         }) {
             engine_hook::DISPATCH_EFFECT_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
             *EFFECT_PATCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
+        }
+
+        // The server's EmitSound, used to play that effect's sound at the blast.
+        if let Ok(t) = engine_hook::scan_sig(base, engine_hook::EMIT_SOUND_SIG) {
+            engine_hook::EMIT_SOUND_ADDR.store(t as usize, std::sync::atomic::Ordering::SeqCst);
         }
 
         // Explosion events in a volume become the water explosion effect.
@@ -2311,26 +2338,6 @@ unsafe extern "C-unwind" fn l_effect_log(l: LuaState) -> c_int {
     1
 }
 
-/// waterleveler.PopExplosionSound() -> x, y, z, scale of the oldest queued
-/// underwater explosion sound, or nothing when the queue is empty.
-unsafe extern "C-unwind" fn l_pop_explosion_sound(_l: LuaState) -> c_int {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ev = {
-            let mut q = engine_hook::EXPLOSION_SOUNDS.lock().unwrap_or_else(|e| e.into_inner());
-            if q.is_empty() { None } else { Some(q.remove(0)) }
-        };
-        if let Some(v) = ev {
-            let a = api();
-            for x in v {
-                (a.pushnumber)(_l, x as f64);
-            }
-            return 4;
-        }
-    }
-    0
-}
-
 /// waterlevel.ExplosionsRedirected() - explosion events sent as the water explosion
 unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
     #[cfg(target_arch = "x86_64")]
@@ -2464,7 +2471,6 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
     set_fn(l, t, c"EffectLog", l_effect_log);
     set_fn(l, t, c"DumpServerImage", l_dump_server_image);
     set_fn(l, t, c"ExplosionsRedirected", l_explosions_redirected);
-    set_fn(l, t, c"PopExplosionSound", l_pop_explosion_sound);
     set_fn(l, t, c"AttachFluid", l_attach_fluid);
     set_fn(l, t, c"DetachFluid", l_detach_fluid);
     set_fn(l, t, c"FluidCount", l_fluid_count);
@@ -3150,35 +3156,62 @@ mod tests {
             }
         };
         put(&mut te, [500.0, 0.0, 0.0]);
-        assert!(!unsafe { redirect_explosion(te.as_ptr()) });
+        assert!(!unsafe { redirect_explosion(te.as_ptr(), std::ptr::null_mut()) });
         put(&mut te, [50.0, 50.0, 50.0]);
-        assert!(unsafe { redirect_explosion(te.as_ptr()) });
+        assert!(unsafe { redirect_explosion(te.as_ptr(), std::ptr::null_mut()) });
         assert_eq!(NAMES.lock().unwrap().as_slice(), ["WaterSurfaceExplosion".to_string()]);
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
         volumes().clear();
     }
 
     #[test]
-    fn redirected_explosion_queues_its_sound_at_the_blast() {
+    fn redirected_explosion_emits_its_sound_at_the_blast_and_silences_the_effect() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         volumes().clear();
         volumes().push(Volume { id: 1, min: [0.0; 3], max: [1000.0; 3] });
+        static SOUNDS: Mutex<Vec<(String, [f32; 3])>> = Mutex::new(Vec::new());
+        static FLAGS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+        unsafe extern "win64" fn fake_emit(_f: *mut c_void, ent: c_int, name: *const u8, o: *const f32, _t: f32, _d: *mut f32) {
+            assert_eq!(ent, 0);
+            let n = std::ffi::CStr::from_ptr(name as *const _).to_string_lossy().to_string();
+            SOUNDS.lock().unwrap().push((n, [*o, *o.add(1), *o.add(2)]));
+        }
         unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
-            let flags = u32::from_le_bytes(std::slice::from_raw_parts(data.add(0x30), 4).try_into().unwrap());
-            assert_eq!(flags & TE_EXPLFLAG_NOSOUND, TE_EXPLFLAG_NOSOUND);
+            let f = u32::from_le_bytes(std::slice::from_raw_parts(data.add(0x30), 4).try_into().unwrap());
+            FLAGS.lock().unwrap().push(f);
         }
         DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
-        EXPLOSION_SOUNDS.lock().unwrap().clear();
+        EMIT_SOUND_ADDR.store(fake_emit as *const () as usize, Ordering::SeqCst);
         let mut te = vec![0u8; 0x38];
         for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
             te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
         }
         te[0x28..0x2c].copy_from_slice(&200.0f32.to_le_bytes());
-        assert!(unsafe { redirect_explosion(te.as_ptr()) });
-        assert_eq!(EXPLOSION_SOUNDS.lock().unwrap().as_slice(), [[10.0, 20.0, 30.0, 200.0]]);
+        let mut filter = 0u8;
+        assert!(unsafe { redirect_explosion(te.as_ptr(), &mut filter as *mut u8 as *mut c_void) });
+        assert_eq!(SOUNDS.lock().unwrap().as_slice(), [("WaterExplosionEffect.Sound".to_string(), [10.0, 20.0, 30.0])]);
+        assert_eq!(FLAGS.lock().unwrap()[0] & TE_EXPLFLAG_NOSOUND, TE_EXPLFLAG_NOSOUND);
+        // Without EmitSound the effect keeps its own sound.
+        EMIT_SOUND_ADDR.store(0, Ordering::SeqCst);
+        assert!(unsafe { redirect_explosion(te.as_ptr(), &mut filter as *mut u8 as *mut c_void) });
+        assert_eq!(FLAGS.lock().unwrap()[1] & TE_EXPLFLAG_NOSOUND, 0);
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
-        EXPLOSION_SOUNDS.lock().unwrap().clear();
         volumes().clear();
+    }
+
+    #[test]
+    fn emit_sound_signature_is_unique_and_checks_the_sound_name() {
+        let Some(d) = server_dll() else {
+            eprintln!("SERVER_DLL_X64 not set; skipping");
+            return;
+        };
+        let pe = parse_pe(&d);
+        let img = map_image(&d, &pe);
+        unsafe {
+            let at = scan_sig(img.as_ptr(), EMIT_SOUND_SIG).expect("must match once");
+            // `test r8, r8; je` - the sound name (3rd argument) is checked first.
+            assert_eq!(std::slice::from_raw_parts(at, 3), &[0x4D, 0x85, 0xC0]);
+        }
     }
 
     #[test]

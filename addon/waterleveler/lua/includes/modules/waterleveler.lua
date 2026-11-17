@@ -70,14 +70,4 @@ function lib.InWater(pos)
     return core.PointInVolume(pos.x, pos.y, pos.z)
 end
 
--- Underwater explosions inside a volume: the effect's splash is on the surface, so the
--- module sends it without sound and queues the sound; it is played where the blast was.
-hook.Add("Think", "waterleveler_explosion_sounds", function()
-    while true do
-        local x, y, z, scale = core.PopExplosionSound()
-        if not x then return end
-        sound.Play(scale > 128 and "WaterExplosionEffect.Sound" or "BaseExplosionEffect.Sound", Vector(x, y, z), 140, 100, 1)
-    end
-end)
-
 return lib
