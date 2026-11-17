@@ -55,7 +55,10 @@ if SERVER then
             self:PhysicsInitBox(-h, h)
             local phys = self:GetPhysicsObject()
             if not IsValid(phys) then return print("[wl] fluid: no physics object") end
-            phys:SetMaterial("water") -- density comes from this material
+            -- The density (and so how high props float) comes from this material; "water"
+            -- is what a map's water brush uses.
+            local material = self.WLFluidOptions and self.WLFluidOptions.material
+            phys:SetMaterial(isstring(material) and material ~= "" and material or "water")
             phys:EnableMotion(false)
             -- Invisible, no shadow, and not solid to players (the engine's
             -- fluid object is a trigger for props; the entity itself isn't).
@@ -197,7 +200,8 @@ if SERVER then
     --- opts: fluid (default true), surface / body (material paths, "" = client default).
     --- Returns the volume id, or nil, err.
     --- opts: fluid (default true), surface, body (material names), fluidOptions (the options table
-    --- of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics, currentx/y/z).
+    --- of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics, currentx/y/z, plus
+    --- material: the physics material of the fluid object, whose density sets the buoyancy).
     function WLWater.Spawn(ply, mins, maxs, opts)
         opts = opts or {}
         local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z)

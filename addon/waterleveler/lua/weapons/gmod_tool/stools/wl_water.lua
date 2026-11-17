@@ -14,6 +14,7 @@ TOOL.ClientConVar = {
     sizez = "128",
     offset = "0",
     fluid = "1",
+    fluid_material = "water",
     fluid_damping = "0.01",
     fluid_torque = "0",
     fluid_viscosity = "0",
@@ -69,6 +70,7 @@ function TOOL:LeftClick(trace)
     local id, err = WLWater.Spawn(ply, mins, maxs, {
         fluid = self:GetClientNumber("fluid", 1) ~= 0,
         fluidOptions = {
+            material = self:GetClientInfo("fluid_material"),
             damping = self:GetClientNumber("fluid_damping", 0.01),
             torque = self:GetClientNumber("fluid_torque", 0),
             viscosity = self:GetClientNumber("fluid_viscosity", 0),
@@ -140,6 +142,8 @@ if CLIENT then
 
         panel:CheckBox("Buoyancy (props float)", "wl_water_fluid")
         panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.")
+        panel:Help("Fluid physics material (its density sets how high props float)")
+        panel:TextEntry("", "wl_water_fluid_material")
         panel:NumSlider("Damping (drag)", "wl_water_fluid_damping", 0, 10, 3)
         panel:NumSlider("Torque factor", "wl_water_fluid_torque", 0, 10, 3)
         panel:NumSlider("Viscosity factor", "wl_water_fluid_viscosity", 0, 10, 3)
