@@ -1436,42 +1436,14 @@ mod engine_hook {
         d
     }
 
-    /// The water explosion effect plays its sound at its own origin, which is on
-    /// the surface. When the server's EmitSound is known the effect is sent with
-    /// TE_EXPLFLAG_NOSOUND and the sound is emitted where the blast happened
-    /// (underneath the surface), to the same recipients as the explosion event,
-    /// so it is heard and muffled as an underwater explosion whatever the
-    /// volume's depth.
-    pub const TE_EXPLFLAG_NOSOUND: u32 = 0x4;
-
-    /// `static void CBaseEntity::EmitSound(IRecipientFilter &filter, int entindex,
-    /// const char *soundname, const Vector *origin, float soundtime, float *duration)`
-    pub const EMIT_SOUND_SIG: &str = "4D 85 C0 0F 84 ?? ?? ?? ?? 48 8B C4 48 89 70 18 48 89 78 20 \
-        55 41 56 41 57 48 8D 68 B1 48 81 EC A0 00 00 00 48 89 58 08 4C 8B F9 48 8B 0D ?? ?? ?? ?? \
-        4D 8B F1 49 8B F8";
-    pub static EMIT_SOUND_ADDR: AtomicUsize = AtomicUsize::new(0);
-
-    pub type EmitSoundFn = unsafe extern "win64" fn(*mut c_void, c_int, *const u8, *const f32, f32, *mut f32);
-
-    /// Emits `scale > 128 ? WaterExplosionEffect.Sound : BaseExplosionEffect.Sound`
-    /// (the client's own choice) at `origin` for `filter`'s recipients.
-    pub unsafe fn emit_explosion_sound(filter: *mut c_void, origin: &[f32; 3], scale: f32) -> bool {
-        let addr = EMIT_SOUND_ADDR.load(Ordering::Relaxed);
-        if addr == 0 || filter.is_null() {
-            return false;
-        }
-        let name: &[u8] = if scale > 128.0 {
-            b"WaterExplosionEffect.Sound\0"
-        } else {
-            b"BaseExplosionEffect.Sound\0"
-        };
-        let f: EmitSoundFn = std::mem::transmute(addr);
-        f(filter, 0, name.as_ptr(), origin.as_ptr(), 0.0, std::ptr::null_mut());
-        true
-    }
+    /// The blast point travels in the effect's `m_vStart` (CEffectData +0x0c),
+    /// which this effect does not use. The effect itself stays on the surface;
+    /// a client that has the module (gmcl_waterlevelercore) plays the
+    /// explosion's sound at the blast point instead of on the surface.
+    pub const EFFECT_START_OFFSET: usize = 0x0c;
 
     /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
-    pub unsafe fn redirect_explosion(this: *const u8, filter: *mut c_void) -> bool {
+    pub unsafe fn redirect_explosion(this: *const u8) -> bool {
         let dispatch = DISPATCH_EFFECT_ADDR.load(Ordering::Relaxed);
         if this.is_null() || dispatch == 0 {
             return false;
@@ -1490,9 +1462,10 @@ mod engine_hook {
         let scale = this.add(0x28).cast::<f32>().read_unaligned();
         let flags = this.add(0x2c).cast::<u32>().read_unaligned();
         let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
-        let silent = emit_explosion_sound(filter, &origin, scale);
-        let flags = if silent { flags | TE_EXPLFLAG_NOSOUND } else { flags };
-        let data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags, scale, magnitude);
+        let mut data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags, scale, magnitude);
+        for (i, v) in origin.iter().enumerate() {
+            data[EFFECT_START_OFFSET + i * 4..EFFECT_START_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
         let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
         f(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr());
         EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
@@ -1509,7 +1482,7 @@ mod engine_hook {
 
     pub unsafe extern "win64" fn hook_te_create(this: *mut u8, filter: *mut c_void, delay: f32) {
         let vtable = TE_EXPLOSION_VTABLE.load(Ordering::Relaxed);
-        if vtable != 0 && !this.is_null() && (this as *const usize).read() == vtable && redirect_explosion(this, filter) {
+        if vtable != 0 && !this.is_null() && (this as *const usize).read() == vtable && redirect_explosion(this) {
             return;
         }
         let original: unsafe extern "win64" fn(*mut u8, *mut c_void, f32) =
@@ -1564,6 +1537,187 @@ mod engine_hook {
         pub unsafe fn server_base() -> *const u8 {
             GetModuleHandleA(c"server.dll".as_ptr()) as *const u8
         }
+
+        pub unsafe fn client_base() -> *const u8 {
+            GetModuleHandleA(c"client.dll".as_ptr()) as *const u8
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Client realm (gmcl_waterlevelercore): the water explosion's sound
+// ---------------------------------------------------------------------------
+//
+// The server sends a volume explosion as a "WaterSurfaceExplosion" effect on the
+// water surface and puts the blast point in the effect's unused m_vStart. The
+// client's effect class plays its explosion sound at its own origin, i.e. at the
+// surface, so with a deep volume it is far away and barely muffled. Two entries
+// of that class' vtable (found in client.dll by signature, pointers swapped) make
+// it play the sound at the blast point:
+//   slot 0  Create(this, const CEffectData *, magnitude, scale, flags)  remembers m_vStart
+//   slot 1  the sound                                                   runs with the origin
+//                                                                       temporarily set to it
+// Everything else (splash, wake) still uses the surface origin.
+
+#[cfg(target_arch = "x86_64")]
+mod client_hook {
+    use super::engine_hook::{self, Platform};
+    #[cfg(windows)]
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+
+    /// Slot 0: `void Create(this, const CEffectData &, float magnitude, float scale, int flags)`.
+    pub const CREATE_SIG: &str = "40 53 48 83 EC 40 8B 02 4C 8D 49 14 89 41 08 48 8B D9 8B 42 04 \
+        89 41 0C 8B 42 08 48 8D 51 08 89 41 10 8B 44 24 70 89 41 24";
+    /// Slot 1: the explosion sound (`test [this+0x24], TE_EXPLFLAG_NOSOUND` first).
+    pub const SOUND_SIG: &str = "40 53 48 83 EC 70 F6 41 24 04 48 8B D9 75 3D 48 8D 4C 24 30 E8 ?? ?? ?? ?? \
+        0F 57 C0 48 C7 44 24 28 00 00 00 00 4C 8D 4B 08";
+    /// Position of the effect's origin inside the effect object.
+    pub const ORIGIN_OFFSET: usize = 8;
+
+    pub static SLOT: AtomicUsize = AtomicUsize::new(0);
+    pub static ORIG_CREATE: AtomicUsize = AtomicUsize::new(0);
+    pub static ORIG_SOUND: AtomicUsize = AtomicUsize::new(0);
+    pub static ACTIVE: AtomicBool = AtomicBool::new(false);
+    pub static START: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+    pub static SOUNDS_MOVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// Is `start` a blast point sent by the server for an effect at `origin`? It is
+    /// directly below the origin (same column, lower) - the server puts the effect
+    /// on the surface above the blast. Effects without a start (0,0,0) are not.
+    pub fn is_blast_point(origin: [f32; 3], start: [f32; 3]) -> bool {
+        start != [0.0; 3]
+            && (start[0] - origin[0]).abs() <= 2.0
+            && (start[1] - origin[1]).abs() <= 2.0
+            && start[2] < origin[2] - 1.0
+    }
+
+    type CreateFn = unsafe extern "win64" fn(*mut u8, *const f32, f32, f32, u32);
+    type SoundFn = unsafe extern "win64" fn(*mut u8);
+
+    pub unsafe extern "win64" fn hook_create(this: *mut u8, data: *const f32, magnitude: f32, scale: f32, flags: u32) {
+        let original: CreateFn = std::mem::transmute(ORIG_CREATE.load(Ordering::Relaxed));
+        if !data.is_null() {
+            let rd = |i: usize| data.add(i).read_unaligned();
+            if is_blast_point([rd(0), rd(1), rd(2)], [rd(3), rd(4), rd(5)]) {
+                for i in 0..3 {
+                    START[i].store(rd(3 + i).to_bits(), Ordering::Relaxed);
+                }
+                ACTIVE.store(true, Ordering::Relaxed);
+            }
+        }
+        original(this, data, magnitude, scale, flags);
+        ACTIVE.store(false, Ordering::Relaxed);
+    }
+
+    pub unsafe extern "win64" fn hook_sound(this: *mut u8) {
+        let original: SoundFn = std::mem::transmute(ORIG_SOUND.load(Ordering::Relaxed));
+        if !ACTIVE.load(Ordering::Relaxed) || this.is_null() {
+            return original(this);
+        }
+        let o = this.add(ORIGIN_OFFSET) as *mut u32;
+        let saved = [o.read_unaligned(), o.add(1).read_unaligned(), o.add(2).read_unaligned()];
+        for i in 0..3 {
+            o.add(i).write_unaligned(START[i].load(Ordering::Relaxed));
+        }
+        original(this);
+        for i in 0..3 {
+            o.add(i).write_unaligned(saved[i]);
+        }
+        SOUNDS_MOVED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The vtable slot (address of slot 0) whose slot 0 is `create` and slot 1 is `sound`.
+    pub unsafe fn find_vtable_slot(base: *const u8, create: usize, sound: usize) -> Result<*mut usize, &'static str> {
+        let rd32 = |off: usize| (base.add(off) as *const u32).read_unaligned();
+        let rd16 = |off: usize| (base.add(off) as *const u16).read_unaligned();
+        let nt = rd32(0x3C) as usize;
+        let nsec = rd16(nt + 6) as usize;
+        let sections = nt + 24 + rd16(nt + 20) as usize;
+        let mut found = Vec::new();
+        for i in 0..nsec {
+            let s = sections + i * 40;
+            if rd32(s + 36) & 0x2000_0000 != 0 {
+                continue; // code
+            }
+            let va = rd32(s + 12) as usize;
+            let size = rd32(s + 8) as usize;
+            let mut off = 0;
+            while off + 16 <= size {
+                let p = base.add(va + off) as *const usize;
+                if p.read() == create && p.add(1).read() == sound {
+                    found.push(p as *mut usize);
+                }
+                off += 8;
+            }
+        }
+        match found.len() {
+            1 => Ok(found[0]),
+            0 => Err("effect vtable not found"),
+            _ => Err("effect vtable is ambiguous"),
+        }
+    }
+
+    pub unsafe fn install_at(base: *const u8, p: &Platform) -> Result<(), &'static str> {
+        if SLOT.load(Ordering::Relaxed) != 0 {
+            return Ok(());
+        }
+        let create = engine_hook::scan_sig(base, CREATE_SIG)? as usize;
+        let sound = engine_hook::scan_sig(base, SOUND_SIG)? as usize;
+        let slot = find_vtable_slot(base, create, sound)?;
+        let Some(old) = (p.make_writable)(slot as *mut u8, 16) else {
+            return Err("could not make the vtable writable");
+        };
+        ORIG_CREATE.store(create, Ordering::SeqCst);
+        ORIG_SOUND.store(sound, Ordering::SeqCst);
+        slot.write(hook_create as *const () as usize);
+        slot.add(1).write(hook_sound as *const () as usize);
+        (p.restore_protect)(slot as *mut u8, 16, old);
+        SLOT.store(slot as usize, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    pub unsafe fn install() -> Result<(), &'static str> {
+        let base = engine_hook::win::client_base();
+        if base.is_null() {
+            return Err("client.dll is not loaded");
+        }
+        install_at(base, &engine_hook::win::PLATFORM)
+    }
+
+    #[cfg(windows)]
+    pub unsafe fn uninstall() {
+        let slot = SLOT.swap(0, Ordering::SeqCst) as *mut usize;
+        if slot.is_null() {
+            return;
+        }
+        let p = &engine_hook::win::PLATFORM;
+        if let Some(old) = (p.make_writable)(slot as *mut u8, 16) {
+            slot.write(ORIG_CREATE.load(Ordering::SeqCst));
+            slot.add(1).write(ORIG_SOUND.load(Ordering::SeqCst));
+            (p.restore_protect)(slot as *mut u8, 16, old);
+        }
+    }
+
+    #[cfg(windows)]
+    /// True when this DLL was loaded as the client module (file name gmcl_*).
+    pub unsafe fn is_client_module() -> bool {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetModuleHandleExA(flags: u32, addr: *const c_void, out: *mut *mut c_void) -> i32;
+            fn GetModuleFileNameA(module: *mut c_void, buf: *mut u8, size: u32) -> u32;
+        }
+        const FROM_ADDRESS_UNCHANGED: u32 = 0x4 | 0x2;
+        let mut module: *mut c_void = std::ptr::null_mut();
+        if GetModuleHandleExA(FROM_ADDRESS_UNCHANGED, is_client_module as *const c_void, &mut module) == 0 {
+            return false;
+        }
+        let mut buf = [0u8; 520];
+        let n = GetModuleFileNameA(module, buf.as_mut_ptr(), buf.len() as u32) as usize;
+        let path = String::from_utf8_lossy(&buf[..n.min(buf.len())]).to_lowercase();
+        let name = path.rsplit(['\\', '/']).next().unwrap_or("");
+        name.starts_with("gmcl_")
     }
 }
 
@@ -1680,11 +1834,6 @@ mod hook_state {
         }) {
             engine_hook::DISPATCH_EFFECT_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
             *EFFECT_PATCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
-        }
-
-        // The server's EmitSound, used to play that effect's sound at the blast.
-        if let Ok(t) = engine_hook::scan_sig(base, engine_hook::EMIT_SOUND_SIG) {
-            engine_hook::EMIT_SOUND_ADDR.store(t as usize, std::sync::atomic::Ordering::SeqCst);
         }
 
         // Explosion events in a volume become the water explosion effect.
@@ -2446,6 +2595,13 @@ unsafe fn push_entity_meta(l: LuaState) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
+    // Loaded as gmcl_waterlevelercore: only patches the client's water explosion.
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    if client_hook::is_client_module() {
+        let _ = l;
+        let _ = client_hook::install();
+        return 0;
+    }
     let Some(loaded) = load_api() else {
         return 0;
     };
@@ -2528,6 +2684,8 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    client_hook::uninstall();
     if API.get().is_none() {
         return 0;
     }
@@ -3156,62 +3314,78 @@ mod tests {
             }
         };
         put(&mut te, [500.0, 0.0, 0.0]);
-        assert!(!unsafe { redirect_explosion(te.as_ptr(), std::ptr::null_mut()) });
+        assert!(!unsafe { redirect_explosion(te.as_ptr()) });
         put(&mut te, [50.0, 50.0, 50.0]);
-        assert!(unsafe { redirect_explosion(te.as_ptr(), std::ptr::null_mut()) });
+        assert!(unsafe { redirect_explosion(te.as_ptr()) });
         assert_eq!(NAMES.lock().unwrap().as_slice(), ["WaterSurfaceExplosion".to_string()]);
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
         volumes().clear();
     }
 
     #[test]
-    fn redirected_explosion_emits_its_sound_at_the_blast_and_silences_the_effect() {
+    fn redirected_explosion_carries_the_blast_point_in_the_effect_start() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         volumes().clear();
         volumes().push(Volume { id: 1, min: [0.0; 3], max: [1000.0; 3] });
-        static SOUNDS: Mutex<Vec<(String, [f32; 3])>> = Mutex::new(Vec::new());
-        static FLAGS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-        unsafe extern "win64" fn fake_emit(_f: *mut c_void, ent: c_int, name: *const u8, o: *const f32, _t: f32, _d: *mut f32) {
-            assert_eq!(ent, 0);
-            let n = std::ffi::CStr::from_ptr(name as *const _).to_string_lossy().to_string();
-            SOUNDS.lock().unwrap().push((n, [*o, *o.add(1), *o.add(2)]));
-        }
+        static SEEN: Mutex<Vec<[f32; 6]>> = Mutex::new(Vec::new());
         unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
-            let f = u32::from_le_bytes(std::slice::from_raw_parts(data.add(0x30), 4).try_into().unwrap());
-            FLAGS.lock().unwrap().push(f);
+            let f = data as *const f32;
+            SEEN.lock().unwrap().push([
+                f.read_unaligned(), f.add(1).read_unaligned(), f.add(2).read_unaligned(),
+                f.add(3).read_unaligned(), f.add(4).read_unaligned(), f.add(5).read_unaligned(),
+            ]);
         }
         DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
-        EMIT_SOUND_ADDR.store(fake_emit as *const () as usize, Ordering::SeqCst);
         let mut te = vec![0u8; 0x38];
         for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
             te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
         }
-        te[0x28..0x2c].copy_from_slice(&200.0f32.to_le_bytes());
-        let mut filter = 0u8;
-        assert!(unsafe { redirect_explosion(te.as_ptr(), &mut filter as *mut u8 as *mut c_void) });
-        assert_eq!(SOUNDS.lock().unwrap().as_slice(), [("WaterExplosionEffect.Sound".to_string(), [10.0, 20.0, 30.0])]);
-        assert_eq!(FLAGS.lock().unwrap()[0] & TE_EXPLFLAG_NOSOUND, TE_EXPLFLAG_NOSOUND);
-        // Without EmitSound the effect keeps its own sound.
-        EMIT_SOUND_ADDR.store(0, Ordering::SeqCst);
-        assert!(unsafe { redirect_explosion(te.as_ptr(), &mut filter as *mut u8 as *mut c_void) });
-        assert_eq!(FLAGS.lock().unwrap()[1] & TE_EXPLFLAG_NOSOUND, 0);
+        assert!(unsafe { redirect_explosion(te.as_ptr()) });
+        // origin on the surface (z 1000), start at the blast
+        assert_eq!(SEEN.lock().unwrap().as_slice(), [[10.0, 20.0, 1000.0, 10.0, 20.0, 30.0]]);
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
         volumes().clear();
     }
 
     #[test]
-    fn emit_sound_signature_is_unique_and_checks_the_sound_name() {
-        let Some(d) = server_dll() else {
-            eprintln!("SERVER_DLL_X64 not set; skipping");
-            return;
-        };
-        let pe = parse_pe(&d);
-        let img = map_image(&d, &pe);
-        unsafe {
-            let at = scan_sig(img.as_ptr(), EMIT_SOUND_SIG).expect("must match once");
-            // `test r8, r8; je` - the sound name (3rd argument) is checked first.
-            assert_eq!(std::slice::from_raw_parts(at, 3), &[0x4D, 0x85, 0xC0]);
+    fn blast_point_is_recognised_only_below_the_effect_origin() {
+        use client_hook::is_blast_point as ok;
+        assert!(ok([10.0, 20.0, 1000.0], [10.0, 20.0, 30.0]));
+        assert!(!ok([10.0, 20.0, 1000.0], [0.0; 3]));
+        assert!(!ok([10.0, 20.0, 1000.0], [10.0, 20.0, 1000.0]));
+        assert!(!ok([10.0, 20.0, 1000.0], [500.0, 20.0, 30.0]));
+    }
+
+    #[test]
+    fn client_hooks_move_the_sound_origin_only_while_create_runs() {
+        use client_hook::*;
+        use std::sync::atomic::Ordering;
+        static SOUND_AT: Mutex<Vec<[f32; 3]>> = Mutex::new(Vec::new());
+        unsafe extern "win64" fn fake_create(this: *mut u8, _d: *const f32, _m: f32, _s: f32, _f: u32) {
+            // the real Create copies the origin and calls the sound through the vtable
+            hook_sound(this);
         }
+        unsafe extern "win64" fn fake_sound(this: *mut u8) {
+            let o = this.add(ORIGIN_OFFSET) as *const f32;
+            SOUND_AT.lock().unwrap().push([o.read(), o.add(1).read(), o.add(2).read()]);
+        }
+        ORIG_CREATE.store(fake_create as *const () as usize, Ordering::SeqCst);
+        ORIG_SOUND.store(fake_sound as *const () as usize, Ordering::SeqCst);
+        let mut obj = [0u8; 0x80];
+        let set = |obj: &mut [u8; 0x80], v: [f32; 3]| {
+            for i in 0..3 {
+                obj[ORIGIN_OFFSET + i * 4..ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v[i].to_le_bytes());
+            }
+        };
+        set(&mut obj, [10.0, 20.0, 1000.0]);
+        let data = [10.0f32, 20.0, 1000.0, 10.0, 20.0, 30.0];
+        unsafe { hook_create(obj.as_mut_ptr(), data.as_ptr(), 0.0, 0.0, 0) };
+        let data2 = [10.0f32, 20.0, 1000.0, 0.0, 0.0, 0.0];
+        unsafe { hook_create(obj.as_mut_ptr(), data2.as_ptr(), 0.0, 0.0, 0) };
+        assert_eq!(SOUND_AT.lock().unwrap().as_slice(), [[10.0, 20.0, 30.0], [10.0, 20.0, 1000.0]]);
+        // the effect keeps its surface origin afterwards
+        assert_eq!(f32::from_le_bytes(obj[ORIGIN_OFFSET + 8..ORIGIN_OFFSET + 12].try_into().unwrap()), 1000.0);
+        assert!(!ACTIVE.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -15,6 +15,8 @@ GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 | Linux 64 | `gmsv_waterlevelercore_linux64.dll`   |
 | Win 64   | `gmsv_waterlevelercore_win64.dll`     |
 
+The same DLL, copied as `gmcl_waterlevelercore_win64.dll` (Win 64 only), is the optional *client* module. A client that has it hears the water explosion of a volume at the blast point instead of on the surface, so the sound is muffled by the water around it however deep the volume is. The server puts the blast point in the effect's unused start vector and keeps the effect on the surface; clients without the module just hear it at the surface. It patches two entries of the effect's vtable in `client.dll`, found by signature.
+
 (The Linux file really is named `.dll`; GMod's module loader expects that.)
 
 ```lua
@@ -209,7 +211,7 @@ A water hit produced for a volume names the world entity (entry 0 of the engine'
 
 ## Explosion events
 
-Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect (splash and wake) is on the volume's surface. Its sound would play there too, so when the server's `EmitSound` is found (by signature) the effect is sent with its sound switched off and the sound is emitted natively where the blast happened, to the same recipients; its muffling then does not depend on how deep the volume is. `waterleveler.ExplosionsRedirected()` counts them.
+Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect (splash and wake) is on the volume's surface; the blast point travels in its start vector (see the client module above). `waterleveler.ExplosionsRedirected()` counts them.
 
 ## License
 

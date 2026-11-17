@@ -24,6 +24,7 @@ jobs:
           set -e
           mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
           cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
+          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmcl_waterlevelercore_win64.dll
           cp -r addon/waterleveler/. package/garrysmod/addons/waterleveler/
           cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
           find package -type f | sort
