@@ -1436,16 +1436,14 @@ mod engine_hook {
         d
     }
 
-    /// The client plays the water explosion's sound at the effect's origin, so
-    /// an effect on a surface far above the blast is heard from far away and
-    /// barely muffled. The origin therefore stays within this many units
-    /// above the explosion (the splash is on the surface up to that depth).
-    pub const MAX_SURFACE_RISE: f32 = 172.0;
-
-    /// Height of the water explosion effect for a blast at `z` under `surface`.
-    pub fn explosion_effect_z(z: f32, surface: f32) -> f32 {
-        surface.min(z + MAX_SURFACE_RISE)
-    }
+    /// The water explosion effect plays its sound at its own origin, which is on
+    /// the surface. The effect is therefore sent with TE_EXPLFLAG_NOSOUND and the
+    /// sound is queued to be played where the blast happened (see
+    /// `waterleveler.PopExplosionSound`): underneath the surface, so it is heard
+    /// (and muffled) as an underwater explosion whatever the volume's depth.
+    pub const TE_EXPLFLAG_NOSOUND: u32 = 0x4;
+    pub static EXPLOSION_SOUNDS: Mutex<Vec<[f32; 4]>> = Mutex::new(Vec::new());
+    const MAX_QUEUED_SOUNDS: usize = 64;
 
     /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
     pub unsafe fn redirect_explosion(this: *const u8) -> bool {
@@ -1467,7 +1465,12 @@ mod engine_hook {
         let scale = this.add(0x28).cast::<f32>().read_unaligned();
         let flags = this.add(0x2c).cast::<u32>().read_unaligned();
         let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
-        let data = water_explosion_effect_data_with([origin[0], origin[1], explosion_effect_z(origin[2], surface)], flags, scale, magnitude);
+        let data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags | TE_EXPLFLAG_NOSOUND, scale, magnitude);
+        if let Ok(mut q) = EXPLOSION_SOUNDS.try_lock() {
+            if q.len() < MAX_QUEUED_SOUNDS {
+                q.push([origin[0], origin[1], origin[2], scale]);
+            }
+        }
         let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
         f(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr());
         EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
@@ -2308,6 +2311,26 @@ unsafe extern "C-unwind" fn l_effect_log(l: LuaState) -> c_int {
     1
 }
 
+/// waterleveler.PopExplosionSound() -> x, y, z, scale of the oldest queued
+/// underwater explosion sound, or nothing when the queue is empty.
+unsafe extern "C-unwind" fn l_pop_explosion_sound(_l: LuaState) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ev = {
+            let mut q = engine_hook::EXPLOSION_SOUNDS.lock().unwrap_or_else(|e| e.into_inner());
+            if q.is_empty() { None } else { Some(q.remove(0)) }
+        };
+        if let Some(v) = ev {
+            let a = api();
+            for x in v {
+                (a.pushnumber)(_l, x as f64);
+            }
+            return 4;
+        }
+    }
+    0
+}
+
 /// waterlevel.ExplosionsRedirected() - explosion events sent as the water explosion
 unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
     #[cfg(target_arch = "x86_64")]
@@ -2441,6 +2464,7 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
     set_fn(l, t, c"EffectLog", l_effect_log);
     set_fn(l, t, c"DumpServerImage", l_dump_server_image);
     set_fn(l, t, c"ExplosionsRedirected", l_explosions_redirected);
+    set_fn(l, t, c"PopExplosionSound", l_pop_explosion_sound);
     set_fn(l, t, c"AttachFluid", l_attach_fluid);
     set_fn(l, t, c"DetachFluid", l_detach_fluid);
     set_fn(l, t, c"FluidCount", l_fluid_count);
@@ -3135,9 +3159,26 @@ mod tests {
     }
 
     #[test]
-    fn explosion_effect_height_is_capped_above_the_blast() {
-        assert_eq!(explosion_effect_z(10.0, 100.0), 100.0);
-        assert_eq!(explosion_effect_z(10.0, 5000.0), 10.0 + MAX_SURFACE_RISE);
+    fn redirected_explosion_queues_its_sound_at_the_blast() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        volumes().clear();
+        volumes().push(Volume { id: 1, min: [0.0; 3], max: [1000.0; 3] });
+        unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
+            let flags = u32::from_le_bytes(std::slice::from_raw_parts(data.add(0x30), 4).try_into().unwrap());
+            assert_eq!(flags & TE_EXPLFLAG_NOSOUND, TE_EXPLFLAG_NOSOUND);
+        }
+        DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
+        EXPLOSION_SOUNDS.lock().unwrap().clear();
+        let mut te = vec![0u8; 0x38];
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        te[0x28..0x2c].copy_from_slice(&200.0f32.to_le_bytes());
+        assert!(unsafe { redirect_explosion(te.as_ptr()) });
+        assert_eq!(EXPLOSION_SOUNDS.lock().unwrap().as_slice(), [[10.0, 20.0, 30.0, 200.0]]);
+        DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
+        EXPLOSION_SOUNDS.lock().unwrap().clear();
+        volumes().clear();
     }
 
     #[test]
