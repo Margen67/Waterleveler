@@ -567,6 +567,9 @@ if CLIENT then
         render.SetBlend(1)
     end
 
+    -- Also used by the Water Volume tool for its preview.
+    WLWater.DrawVolume = drawVolume
+
     scripted_ents.Register({
         Type = "anim",
         Base = "base_anim",

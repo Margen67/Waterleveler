@@ -209,7 +209,7 @@ A water hit produced for a volume names the world entity (entry 0 of the engine'
 
 ## Explosion events
 
-Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. `waterleveler.ExplosionsRedirected()` counts them.
+Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect is placed on the volume's surface, but at most 172 units above the blast, because the client plays the sound at the effect's position: a surface far above would make it distant and barely muffled. `waterleveler.ExplosionsRedirected()` counts them.
 
 ## License
 

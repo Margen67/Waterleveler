@@ -18,7 +18,7 @@ TOOL.ClientConVar = {
     body = "nature/water_movingplane",
 }
 
-local MIN_SIZE, MAX_SIZE = 16, 2048
+local MIN_SIZE, MAX_SIZE = 1, 16384
 
 local function readSize(get)
     return Vector(
@@ -96,6 +96,22 @@ if CLIENT then
             if math.abs(cur) > max then RunConsoleCommand("wl_water_offset", tostring(math.Clamp(cur, -max, max))) end
         end
 
+        -- Sets all three axes at once.
+        local all = panel:NumSlider("All axes", "", MIN_SIZE, MAX_SIZE, 0)
+        all:SetValue(math.max(
+            GetConVar("wl_water_sizex"):GetFloat(),
+            GetConVar("wl_water_sizey"):GetFloat(),
+            GetConVar("wl_water_sizez"):GetFloat()))
+        all.OnValueChanged = function(_, value)
+            value = math.Round(value)
+            for _, axis in ipairs({ "x", "y", "z" }) do
+                if GetConVar("wl_water_size" .. axis):GetInt() ~= value then
+                    RunConsoleCommand("wl_water_size" .. axis, tostring(value))
+                end
+            end
+            timer.Simple(0, updateOffsetRange)
+        end
+
         for _, axis in ipairs({ { "x", "Width (X)" }, { "y", "Length (Y)" }, { "z", "Height (Z)" } }) do
             local sl = panel:NumSlider(axis[2], "wl_water_size" .. axis[1], MIN_SIZE, MAX_SIZE, 0)
             sl.OnValueChanged = function() timer.Simple(0, updateOffsetRange) end
@@ -124,7 +140,7 @@ if CLIENT then
         materialRow("Body material (bottom and sides)", "wl_water_body")
     end
 
-    -- Preview: an outline of the volume where the player is looking, with the surface face tinted.
+    -- Preview: the volume drawn with the selected materials, plus an outline, where the player is looking.
     local function convar(name, default)
         local cv = GetConVar(name)
         return cv and cv:GetFloat() or default
@@ -143,8 +159,18 @@ if CLIENT then
         local size = readSize(function(name) return convar("wl_water_" .. name, 128) end)
         local mins, maxs = WLWater.Placement(tr, size, readOffset(function(name) return convar("wl_water_" .. name, 0) end, size))
 
-        render.SetColorMaterial()
-        render.DrawBox(Vector(0, 0, 0), Angle(0, 0, 0), Vector(mins.x, mins.y, maxs.z - 0.5), Vector(maxs.x, maxs.y, maxs.z), Color(60, 150, 255, 70))
+        if WLWater.DrawVolume then
+            local function str(name, default)
+                local cv = GetConVar(name)
+                return cv and cv:GetString() or default
+            end
+            WLWater.DrawVolume({
+                mins = mins,
+                maxs = maxs,
+                surface = str("wl_water_surface", ""),
+                body = str("wl_water_body", ""),
+            })
+        end
         render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(90, 190, 255, 255), true)
         render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(90, 190, 255, 60), false)
     end)

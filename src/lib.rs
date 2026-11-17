@@ -1436,6 +1436,17 @@ mod engine_hook {
         d
     }
 
+    /// The client plays the water explosion's sound at the effect's origin, so
+    /// an effect on a surface far above the blast is heard from far away and
+    /// barely muffled. The origin therefore stays within this many units
+    /// above the explosion (the splash is on the surface up to that depth).
+    pub const MAX_SURFACE_RISE: f32 = 172.0;
+
+    /// Height of the water explosion effect for a blast at `z` under `surface`.
+    pub fn explosion_effect_z(z: f32, surface: f32) -> f32 {
+        surface.min(z + MAX_SURFACE_RISE)
+    }
+
     /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
     pub unsafe fn redirect_explosion(this: *const u8) -> bool {
         let dispatch = DISPATCH_EFFECT_ADDR.load(Ordering::Relaxed);
@@ -1456,7 +1467,7 @@ mod engine_hook {
         let scale = this.add(0x28).cast::<f32>().read_unaligned();
         let flags = this.add(0x2c).cast::<u32>().read_unaligned();
         let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
-        let data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags, scale, magnitude);
+        let data = water_explosion_effect_data_with([origin[0], origin[1], explosion_effect_z(origin[2], surface)], flags, scale, magnitude);
         let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
         f(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr());
         EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
@@ -3121,6 +3132,12 @@ mod tests {
         assert_eq!(NAMES.lock().unwrap().as_slice(), ["WaterSurfaceExplosion".to_string()]);
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
         volumes().clear();
+    }
+
+    #[test]
+    fn explosion_effect_height_is_capped_above_the_blast() {
+        assert_eq!(explosion_effect_z(10.0, 100.0), 100.0);
+        assert_eq!(explosion_effect_z(10.0, 5000.0), 10.0 + MAX_SURFACE_RISE);
     }
 
     #[test]
