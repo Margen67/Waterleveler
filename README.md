@@ -114,8 +114,7 @@ Limits (read these):
   physobj, nx, ny, nz, dist [, damping] [, options])` does the same for a PhysObj you
   created (plane in world space, normal out of the fluid) and
   `options` is an optional table (also accepted as the 6th argument) with `damping` (default 0.01), `torque`, `viscosity`, `aerodynamics` (boolean) and the flow `currentx`, `currenty`, `currentz` (units/s). The defaults are what a map's water brush has: the engine reads only the plane, current, damping and contents from the map, so torque, viscosity and aerodynamics are 0. The Water Volume tool has a control for each. The fluid object's physics material (its density sets how high props float) follows the liquid: `water` or `slime`. `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
-  removed**. The `physenv` pointer is found by signature. `wl_water_spawn
-  <size> fluid` builds one. Unknowns: whether a Lua-created
+  removed**. The `physenv` pointer is found by signature. the Water Volume tool builds one. Unknowns: whether a Lua-created
   object is accepted exactly like the world's, and the engine-side teardown.
 - **Traces.** `IEngineTrace::TraceRay` (vtable slot 4, 214 call sites in
   server.dll) is hooked too: when the mask contains `CONTENTS_WATER`, a ray or
@@ -149,10 +148,13 @@ Tool: **Water Volume** under Tools > Construction (size per axis, vertical offse
 biggest size, buoyancy, and surface/body materials; an outline previews the volume where you
 are looking).
 
-Every numeric `wl_water_*` convar has limits (sizes 1-16384, offset +-16384, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).
+Every numeric `waterleveler_*` convar has limits (sizes 1-16384, offset +-16384, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).
 
-Commands: `wl_water_spawn [size]` (a 128 cube resting on whatever your
-crosshair hits; undoable), `wl_water_clear`, `wl_water_status`.
+Debugging commands (the volumes themselves come from the Water Volume tool):
+`waterleveler_status` (server: hook status, counters, your water level),
+`waterleveler_explode` (server, superadmin: explode where you look, through the normal explosion path),
+`waterleveler_client_status` (client: module status, counters, your eyes against the volumes) and
+`waterleveler_watch [0|1]` (client: once a second, how many point queries and traces the engine made against the volumes, plus what `util.PointContents` answers at your eyes; for the underwater sound muffling).
 
 ## Engine layout notes
 

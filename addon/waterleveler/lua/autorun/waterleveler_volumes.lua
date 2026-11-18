@@ -4,21 +4,20 @@
 -- Put this in garrysmod/lua/autorun/  (NOT autorun/server - it is shared, the
 -- client half draws the placeholder box).
 --
--- Console commands (server, superadmin or listen-server host):
---   wl_water_spawn [size] [nofluid]
---                           spawn a water volume (default 128x128x128, 1-16384) that
---                           rests on whatever surface you are looking at.
---                           Buoyancy is on by default; add "nofluid" to skip it.
---   wl_water_clear          remove all water volumes
---   wl_water_status         hook status, volume count, engine hit counter,
---                           and your own water level / whether you are inside
+-- Volumes are created with the Water Volume tool (Tools > Construction) or
+-- the waterleveler library. Debugging commands:
+--   waterleveler_status         (server) hook status, counters, your water level
+--   waterleveler_explode        (server) explode where you look, through the normal
+--                               explosion path (water explosion, sound, particles)
+--   waterleveler_client_status  (client) client hook status, counters, where your eyes are
+--   waterleveler_watch [0|1]    (client) print, once a second, what the client's water
+--                               queries answer at your eyes (underwater muffling)
 --
 -- The volume is REAL to the engine's water logic (swimming, WaterLevel(),
 -- OnEntityWaterLevelChanged) because the module makes the engine report
 -- CONTENTS_WATER for every point inside it. The translucent box you see is
 -- only a client-side placeholder: there is no real water surface shader.
 
-local SIZE = 128
 local MIN_SIZE, MAX_SIZE = 1, 16384
 local DEFAULT_MATERIAL = "nature/water_movingplane" -- when a volume names none
 
@@ -43,7 +42,7 @@ if SERVER then
     -- Buoyancy. Creates the same kind of engine object a map's
     -- water brush uses: a static physics box with the liquid's material that
     -- gets a fluid controller (waterleveler.AttachFluid). vphysics then floats
-    -- props that overlap it. Created by wl_water_spawn unless it is given "nofluid".
+    -- props that overlap it. Created with every volume unless the tool's buoyancy option is off.
     do
         local ENT = {}
         ENT.Type = "anim"
@@ -179,37 +178,7 @@ if SERVER then
 
     local allowed = WLWater.Allowed
 
-    concommand.Add("wl_water_spawn", function(caller, _, args)
-        if not allowed(caller) then return end
-        local ply = resolve(caller)
-        if not IsValid(ply) then return print("[wl] no player to aim from") end
-
-        local size = math.Clamp(tonumber(args[1]) or SIZE, MIN_SIZE, MAX_SIZE)
-        local tr = util.TraceLine({
-            start = ply:EyePos(),
-            endpos = ply:EyePos() + ply:GetAimVector() * 16384,
-            filter = ply,
-        })
-        if not tr.Hit then return print("[wl] crosshair does not hit anything") end
-
-        -- Rest the box on the surface under the crosshair.
-        local mins, maxs, center = WLWater.Placement(tr, Vector(size, size, size))
-        local id, err = WLWater.Spawn(ply, mins, maxs, { fluid = args[2] ~= "nofluid" })
-        if not id then return print("[wl] AddVolume failed: " .. tostring(err)) end
-        print(("[wl] water volume #%d spawned, %dx%dx%d at %s"):format(id, size, size, size, tostring(center)))
-    end)
-
-    concommand.Add("wl_water_clear", function(caller)
-        if not allowed(caller) then return end
-        for _, e in ipairs(fluids) do if IsValid(e) then e:Remove() end end -- detaches the controller
-        fluids = {}
-        waterleveler.ClearVolumes()
-        boxes = {}
-        sync()
-        print("[wl] all water volumes removed")
-    end)
-
-    concommand.Add("wl_water_status", function(caller)
+    concommand.Add("waterleveler_status", function(caller)
         print("[wl] " .. waterleveler.HookStatus())
         print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d")
             :format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(),
@@ -222,6 +191,24 @@ if SERVER then
             print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s")
                 :format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))))
         end
+    end)
+
+    concommand.Add("waterleveler_explode", function(caller)
+        if not allowed(caller) then return end
+        local ply = resolve(caller)
+        if not IsValid(ply) then return end
+        local tr = util.TraceLine({ start = ply:EyePos(), endpos = ply:EyePos() + ply:GetAimVector() * 16384, filter = ply })
+        local pos = tr.HitPos + tr.HitNormal * 8
+        local e = ents.Create("env_explosion")
+        if not IsValid(e) then return end
+        e:SetPos(pos)
+        e:SetKeyValue("iMagnitude", "100")
+        e:SetOwner(ply)
+        e:Spawn()
+        e:Fire("Explode", "", 0)
+        e:Fire("Kill", "", 1)
+        print(("[wl] env_explosion at %s, inside a volume: %s, redirected so far: %d"):format(
+            tostring(pos), tostring(waterleveler.PointInVolume(pos.x, pos.y, pos.z)), waterleveler.ExplosionsRedirected()))
     end)
 
     hook.Add("PlayerInitialSpawn", "wl_volumes_sync", function(ply)
@@ -301,6 +288,7 @@ if CLIENT then
                         ["$refractamount"] = 0.1,
                         ["$bluramount"] = 0,
                         ["$scale"] = "[1 1]",
+                        ["$nocull"] = 1,
                         ["$refracttint"] = "{190 215 255}",
                     }
                     local dm = m:GetString("$bumpmap")
@@ -313,7 +301,7 @@ if CLIENT then
                             texturescrollrate = 0.02, texturescrollangle = 25 },
                     }
                     entry = { mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", params),
-                        color = color_white, vcol = false, cull = true, refract = true }
+                        color = color_white, vcol = false, refract = true }
                 elseif shader == "refract" and m:GetInt("$model") == 1 and nm and nm ~= "" then
                     -- Refract materials flagged "$model 1" (models/shadertest/shader3, ...)
                     -- are built for model vertex data and an env_cubemap; on a plain
@@ -324,6 +312,7 @@ if CLIENT then
                         ["$refractamount"] = m:GetFloat("$refractamount") or 0.25,
                         ["$bluramount"] = m:GetInt("$bluramount") or 1,
                         ["$scale"] = "[1 1]",
+                        ["$nocull"] = 1,
                         Proxies = { TextureScroll = {
                             texturescrollvar = "$bumptransform", texturescrollrate = 0.3, texturescrollangle = -90 } },
                     }
@@ -333,7 +322,7 @@ if CLIENT then
                         params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255)
                     end
                     entry = { mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params),
-                        color = color_white, vcol = false, cull = true, refract = true }
+                        color = color_white, vcol = false, refract = true }
                 elseif not passthrough[shader] and bump and bump ~= "" then
                     -- World water such as nature/water_movingplane: its look is the animated
                     -- bump map (dev/water_normal), which only a refracting shader can show.
@@ -344,10 +333,11 @@ if CLIENT then
                         ["$refractamount"] = 0.1,
                         ["$bluramount"] = 0,
                         ["$scale"] = "[1 1]",
+                        ["$nocull"] = 1,
                         ["$refracttint"] = "{190 215 255}",
                         Proxies = { AnimatedTexture = { animatedtexturevar = "$normalmap",
                             animatedtextureframenumvar = "$bumpframe", animatedtextureframerate = 21 } },
-                    }), color = color_white, vcol = false, cull = true, refract = true }
+                    }), color = color_white, vcol = false, refract = true }
                 elseif passthrough[shader] then
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
                     entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric", refract = shader == "refract" }
@@ -534,6 +524,61 @@ if CLIENT then
 
     -- Map cleanups remove client-side entities too.
     hook.Add("PostCleanupMap", "wl_volumes_entities", function() syncVolumeEntities() end)
+
+    -- Debugging: what do the client's own water queries answer?
+    local function volumeAt(p)
+        for i, b in ipairs(boxes) do
+            if p.x >= b.mins.x and p.x <= b.maxs.x and p.y >= b.mins.y and p.y <= b.maxs.y
+                and p.z >= b.mins.z and p.z <= b.maxs.z then
+                return i, b.maxs.z - p.z
+            end
+        end
+    end
+
+    local function describe()
+        local ply = LocalPlayer()
+        if not IsValid(ply) then return "no player" end
+        local eye = ply:EyePos()
+        local idx, depth = volumeAt(eye)
+        local contents = util.PointContents(eye)
+        local line = ("eye %s | in volume: %s | eye depth below its surface: %s | util.PointContents(eye) = 0x%x (water %s, slime %s) | WaterLevel() = %d")
+            :format(tostring(eye), idx and ("#" .. idx) or "no", depth and ("%.1f"):format(depth) or "-",
+                contents, tostring(bit.band(contents, CONTENTS_WATER) ~= 0), tostring(bit.band(contents, CONTENTS_SLIME) ~= 0), ply:WaterLevel())
+        if waterlevelercore then
+            line = line .. (" | module point-in-volume: %s"):format(tostring(waterlevelercore.PointInVolume(eye.x, eye.y, eye.z)))
+        end
+        return line
+    end
+
+    concommand.Add("waterleveler_client_status", function()
+        print("[wl] map: " .. game.GetMap())
+        if not waterlevelercore then
+            return print("[wl] client module not loaded (gmcl_waterlevelercore_win64.dll missing or failed): the client's water queries do not see volumes")
+        end
+        print("[wl] " .. waterlevelercore.HookStatus())
+        print(("[wl] contents hook: %s | volumes: %d (script knows %d) | point queries answered with water: %d | traces stopped at the surface: %d")
+            :format(tostring(waterlevelercore.IsContentsHooked()), waterlevelercore.VolumeCount(), #boxes,
+                waterlevelercore.ContentsHits(), waterlevelercore.TraceHits()))
+        for i, b in ipairs(boxes) do
+            print(("[wl] volume #%d %s .. %s (%s) depth %.0f"):format(i, tostring(b.mins), tostring(b.maxs), b.liquid, b.maxs.z - b.mins.z))
+        end
+        print("[wl] " .. describe())
+    end)
+
+    local watching, lastContents, lastTraces = false, 0, 0
+    concommand.Add("waterleveler_watch", function(_, _, args)
+        watching = args[1] ~= nil and args[1] ~= "0" or (args[1] == nil and not watching)
+        if not watching then timer.Remove("wl_watch") return print("[wl] watch off") end
+        print("[wl] watch on: each line shows how many point queries and traces the engine made against the volumes during the last second")
+        lastContents = waterlevelercore and waterlevelercore.ContentsHits() or 0
+        lastTraces = waterlevelercore and waterlevelercore.TraceHits() or 0
+        timer.Create("wl_watch", 1, 0, function()
+            local c = waterlevelercore and waterlevelercore.ContentsHits() or 0
+            local t = waterlevelercore and waterlevelercore.TraceHits() or 0
+            print(("[wl] +%d point queries, +%d traces | %s"):format(c - lastContents, t - lastTraces, describe()))
+            lastContents, lastTraces = c, t
+        end)
+    end)
 
     -- Fully submerged (water level 3): the engine's water screen overlay.
     hook.Add("RenderScreenspaceEffects", "wl_volumes_overlay", function()
