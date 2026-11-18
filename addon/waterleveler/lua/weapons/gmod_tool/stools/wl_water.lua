@@ -87,7 +87,7 @@ function TOOL:LeftClick(trace)
     local size = readSize(get)
     local mins, maxs = WLWater.Placement(trace, size, readOffset(get, size))
     local id, err = WLWater.Spawn(ply, mins, maxs, {
-        liquid = self:GetClientInfo("liquid") == "slime" and "slime" or "water",
+        liquid = self:GetClientInfo("liquid"):lower() == "slime" and "slime" or "water",
         fluid = self:GetClientNumber("fluid", 1) ~= 0,
         fluidOptions = {
             damping = math.Clamp(self:GetClientNumber("fluid_damping", 0.01), 0, MAX_FLUID),

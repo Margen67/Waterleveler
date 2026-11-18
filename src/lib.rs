@@ -2356,7 +2356,7 @@ unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'static CStr> 
         LUA_TNONE | LUA_TNIL => Ok(CONTENTS_WATER),
         LUA_TSTRING => {
             let p = (a.tolstring)(l, idx, std::ptr::null_mut());
-            match CStr::from_ptr(p).to_bytes() {
+            match CStr::from_ptr(p).to_bytes().to_ascii_lowercase().as_slice() {
                 b"water" => Ok(CONTENTS_WATER),
                 b"slime" => Ok(CONTENTS_SLIME),
                 _ => Err(c"liquid must be \"water\" or \"slime\""),

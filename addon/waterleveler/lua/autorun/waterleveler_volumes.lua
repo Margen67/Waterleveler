@@ -206,7 +206,7 @@ if SERVER then
     --- Returns the volume id, or nil, err.
     function WLWater.Spawn(ply, mins, maxs, opts)
         opts = opts or {}
-        if opts.liquid ~= "slime" then opts.liquid = "water" end
+        opts.liquid = tostring(opts.liquid or ""):lower() == "slime" and "slime" or "water"
         local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid)
         if not id then return nil, err end
 
@@ -350,6 +350,14 @@ if CLIENT then
     -- else is re-wrapped as UnlitGeneric using the same base texture.
     local passthrough = { refract = true, unlitgeneric = true, spritecard = true, vertexlitgeneric = true }
 
+    -- Scrolls a matrix texture variable (what the TextureScroll proxy does).
+    local function scroll(m, var, rate, angle, t)
+        local a = math.rad(angle)
+        local mtx = Matrix()
+        mtx:SetTranslation(Vector(math.cos(a) * rate * t, math.sin(a) * rate * t, 0))
+        m:SetMatrix(var, mtx)
+    end
+
     local function mat(name)
         local entry = cache[name]
         if entry == nil then
@@ -373,17 +381,26 @@ if CLIENT then
                     -- (dev/water_normal, advanced by $bumpframe) never shows. A Refract
                     -- material with the same normal map and the same animation does.
                     unlitCount = unlitCount + 1
-                    entry = { mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", {
+                    local params = {
                         ["$normalmap"] = nm,
+                        ["$bumpframe"] = 0,
                         ["$refractamount"] = 0.1,
                         ["$bluramount"] = 0,
                         ["$scale"] = "[1 1]",
                         ["$refracttint"] = "{190 215 255}",
-                        Proxies = { AnimatedTexture = {
-                            animatedtexturevar = "$normalmap",
-                            animatedtextureframenumvar = "$bumpframe",
-                            animatedtextureframerate = 30 } },
-                    }), color = color_white, vcol = false, cull = true, refract = true }
+                    }
+                    local dm = m:GetString("$bumpmap")
+                    if dm and dm ~= "" then params["$dudvmap"] = dm end
+                    local rm = CreateMaterial("wl_water_" .. unlitCount, "Refract", params)
+                    local nt = m:GetTexture("$normalmap")
+                    local frames = nt and nt:GetNumAnimationFrames() or 1
+                    -- Animated here, not with proxies: the original's own scroll and frame
+                    -- proxies cannot be read, and proxies on re-created materials did not run.
+                    entry = { mat = rm, color = color_white, vcol = false, cull = true, refract = true,
+                        animate = function(t)
+                            if frames > 1 then rm:SetInt("$bumpframe", math.floor(t * 30) % frames) end
+                            scroll(rm, "$bumptransform", 0.02, 25, t)
+                        end }
                 elseif shader == "refract" and m:GetInt("$model") == 1 and nm and nm ~= "" then
                     -- Refract materials flagged "$model 1" (models/shadertest/shader3, ...)
                     -- are built for model vertex data and an env_cubemap; on a plain
@@ -394,16 +411,15 @@ if CLIENT then
                         ["$refractamount"] = m:GetFloat("$refractamount") or 0.25,
                         ["$bluramount"] = m:GetInt("$bluramount") or 1,
                         ["$scale"] = "[1 1]",
-                        Proxies = { TextureScroll = {
-                            texturescrollvar = "$bumptransform", texturescrollrate = 0.3, texturescrollangle = -90 } },
                     }
                     if dudv and dudv ~= "" then params["$dudvmap"] = dudv end
                     local tint = m:GetVector("$refracttint")
                     if tint then
                         params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255)
                     end
-                    entry = { mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params),
-                        color = color_white, vcol = false, cull = true, refract = true }
+                    local rm = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params)
+                    entry = { mat = rm, color = color_white, vcol = false, cull = true, refract = true,
+                        animate = function(t) scroll(rm, "$bumptransform", 0.3, -90, t) end }
                 elseif passthrough[shader] then
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
                     entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric", refract = shader == "refract" }
@@ -411,6 +427,7 @@ if CLIENT then
                     local tex = m:GetTexture("$basetexture")
                     if tex and not tex:IsError() then
                         unlitCount = unlitCount + 1
+                        local animate
                         -- The animation does not come along with the texture: re-create the
                         -- proxies water materials use. The frame advances like the original
                         -- (about 20 per second); the DX7 water also scrolls and scales its
@@ -422,19 +439,22 @@ if CLIENT then
                             ["$vertexalpha"] = 1,
                             ["$translucent"] = 1,
                             ["$nocull"] = 1,
-                            Proxies = { AnimatedTexture = {
-                                animatedtexturevar = "$basetexture",
-                                animatedtextureframenumvar = "$frame",
-                                animatedtextureframerate = 20 } },
                         }
                         local scale = m:GetString("$texscale")
-                        if scale and scale ~= "" then
-                            params["$texoffset"] = "[0 0]"
-                            params["$texscale"] = scale
-                            params.Proxies.TextureScroll = {
-                                texturescrollvar = "$texoffset", texturescrollrate = 0.025, texturescrollangle = 45 }
-                            params.Proxies.TextureTransform = {
-                                translatevar = "$texoffset", scalevar = "$texscale", resultvar = "$basetexturetransform" }
+                        local scaled = scale and scale ~= ""
+                        if scaled then params["$basetexturetransform"] = "center .5 .5 scale 1 1 rotate 0 translate 0 0" end
+                        local um = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", params)
+                        local frames = tex:GetNumAnimationFrames()
+                        local sv = scaled and m:GetVector("$texscale") or Vector(1, 1, 0)
+                        animate = function(t)
+                            if frames > 1 then um:SetInt("$frame", math.floor(t * 20) % frames) end
+                            if scaled then
+                                local a = math.rad(45)
+                                local m2 = Matrix()
+                                m2:SetScale(Vector(sv.x, sv.y, 1))
+                                m2:SetTranslation(Vector(math.cos(a) * 0.025 * t, math.sin(a) * 0.025 * t, 0))
+                                um:SetMatrix("$basetexturetransform", m2)
+                            end
                         end
                         local color = Color(255, 255, 255, 200)
                         local tintText = m:GetString("$color")
@@ -442,8 +462,7 @@ if CLIENT then
                             local tint = m:GetVector("$color")
                             if tint then color = Color(tint.x * 255, tint.y * 255, tint.z * 255, 200) end
                         end
-                        entry = { mat = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", params),
-                            color = color, vcol = true }
+                        entry = { mat = um, color = color, vcol = true, animate = animate }
                     else
                         entry = { mat = fallback, color = Color(40, 120, 220, 90), vcol = false }
                     end
@@ -512,6 +531,9 @@ if CLIENT then
     local function drawVolume(bx)
         local top = mat(bx.surface ~= "" and bx.surface or DEFAULT_MATERIAL)
         local body = mat(bx.body ~= "" and bx.body or DEFAULT_MATERIAL)
+        local now = CurTime()
+        if top.animate then top.animate(now) end
+        if body.animate and body ~= top then body.animate(now) end
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
         -- Refract materials sample a copy of the frame, which is only updated when
         -- asked to: a stale copy is what made their faces flicker.
