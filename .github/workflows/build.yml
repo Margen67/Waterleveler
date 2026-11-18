@@ -15,6 +15,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@main
 
+      - name: Use Rust nightly
+        run: |-
+          rustup toolchain install nightly --profile minimal --component clippy
+          rustup default nightly
+          rustc --version
+
       - name: Lint
         run: cargo clippy --release --locked --all-targets
 
