@@ -193,6 +193,7 @@ if SERVER then
             net.WriteVector(b.maxs)
             net.WriteString(b.surface or "") -- "" = the default material
             net.WriteString(b.body or "")
+            net.WriteString(b.liquid or "water")
         end
         if IsValid(ply) then net.Send(ply) else net.Broadcast() end
     end
@@ -209,7 +210,7 @@ if SERVER then
         local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid)
         if not id then return nil, err end
 
-        boxes[id] = { mins = mins, maxs = maxs, surface = opts.surface, body = opts.body }
+        boxes[id] = { mins = mins, maxs = maxs, surface = opts.surface, body = opts.body, liquid = opts.liquid }
         local fluid
         if opts.fluid ~= false then
             local e = ents.Create("wl_fluid")
@@ -317,7 +318,16 @@ if CLIENT then
     net.Receive("wl_volumes", function()
         boxes = {}
         for i = 1, net.ReadUInt(16) do
-            boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector(), surface = net.ReadString(), body = net.ReadString() }
+            boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector(), surface = net.ReadString(),
+                body = net.ReadString(), liquid = net.ReadString() }
+        end
+        -- The client module (gmcl_waterlevelercore) makes the client's own water queries see the
+        -- volumes: ripples and splashes, the underwater sound filter, particles, prediction.
+        if waterlevelercore then
+            waterlevelercore.ClearVolumes()
+            for _, b in ipairs(boxes) do
+                waterlevelercore.AddVolume(b.mins.x, b.mins.y, b.mins.z, b.maxs.x, b.maxs.y, b.maxs.z, b.liquid)
+            end
         end
         syncVolumeEntities()
     end)
@@ -401,14 +411,39 @@ if CLIENT then
                     local tex = m:GetTexture("$basetexture")
                     if tex and not tex:IsError() then
                         unlitCount = unlitCount + 1
-                        local um = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", {
+                        -- The animation does not come along with the texture: re-create the
+                        -- proxies water materials use. The frame advances like the original
+                        -- (about 20 per second); the DX7 water also scrolls and scales its
+                        -- texture ($texscale is how it is recognised) and has a $color.
+                        local params = {
                             ["$basetexture"] = tex:GetName(),
+                            ["$frame"] = 0,
                             ["$vertexcolor"] = 1,
                             ["$vertexalpha"] = 1,
                             ["$translucent"] = 1,
                             ["$nocull"] = 1,
-                        })
-                        entry = { mat = um, color = Color(255, 255, 255, 200), vcol = true }
+                            Proxies = { AnimatedTexture = {
+                                animatedtexturevar = "$basetexture",
+                                animatedtextureframenumvar = "$frame",
+                                animatedtextureframerate = 20 } },
+                        }
+                        local scale = m:GetString("$texscale")
+                        if scale and scale ~= "" then
+                            params["$texoffset"] = "[0 0]"
+                            params["$texscale"] = scale
+                            params.Proxies.TextureScroll = {
+                                texturescrollvar = "$texoffset", texturescrollrate = 0.025, texturescrollangle = 45 }
+                            params.Proxies.TextureTransform = {
+                                translatevar = "$texoffset", scalevar = "$texscale", resultvar = "$basetexturetransform" }
+                        end
+                        local color = Color(255, 255, 255, 200)
+                        local tintText = m:GetString("$color")
+                        if tintText and tintText ~= "" then
+                            local tint = m:GetVector("$color")
+                            if tint then color = Color(tint.x * 255, tint.y * 255, tint.z * 255, 200) end
+                        end
+                        entry = { mat = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", params),
+                            color = color, vcol = true }
                     else
                         entry = { mat = fallback, color = Color(40, 120, 220, 90), vcol = false }
                     end
@@ -456,16 +491,19 @@ if CLIENT then
         render.CullMode(entry.cull and MATERIAL_CULLMODE_CCW or MATERIAL_CULLMODE_NONE)
         if not entry.cull then outward = nil end
         local col = entry.color
+        local r, g, b2, a2 = 255, 255, 255, 255
         if entry.vcol then
             -- Colour and alpha travel in the vertices.
             render.SetColorModulation(1, 1, 1)
             render.SetBlend(1)
-            quad(a, b, c, d, uLen, vLen, col.r, col.g, col.b, col.a, outward)
+            r, g, b2, a2 = col.r, col.g, col.b, col.a
         else
             render.SetColorModulation(col.r / 255, col.g / 255, col.b / 255)
             render.SetBlend(col.a / 255)
-            quad(a, b, c, d, uLen, vLen, 255, 255, 255, 255, outward)
         end
+        quad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward)
+        -- Culled materials are one-sided, so the inside is a second quad facing the other way.
+        if outward then quad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward) end
     end
 
     -- Each volume is drawn by a client-side entity in the engine's translucent

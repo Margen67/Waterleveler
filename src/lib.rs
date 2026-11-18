@@ -419,6 +419,23 @@ mod engine_hook {
         E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 54 24 20 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
     pub const TRACE_GLOBAL_DISP_OFFSET: usize = 91;
 
+    /// client.dll: `C_BaseEntity::UpdateWaterState` loads the client's `enginetrace`
+    /// the same way (`mov rcx,[rip+disp32]`, GetPointContents, test MASK_WATER). The
+    /// pattern is only the load and the test, so it does not depend on the function's
+    /// frame; disp32 is at byte 3 of the match.
+    pub const CLIENT_TRACE_SIG: &str =
+        "48 8B 0D ?? ?? ?? ?? 48 8D 54 24 ?? 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
+
+    /// The `enginetrace` pointer variable loaded by the instruction at `at`.
+    pub unsafe fn trace_global_from_load(at: *const u8) -> *const *mut c_void {
+        let disp = (at.add(3) as *const i32).read_unaligned() as isize;
+        at.offset(7 + disp) as *const *mut c_void
+    }
+
+    /// IClientEntityList (client realm). Its vtable slot 3 is GetClientEntity(int).
+    pub static CLIENT_ENTITY_LIST: AtomicUsize = AtomicUsize::new(0);
+    pub const CLIENT_GET_ENTITY_SLOT: usize = 3;
+
     /// Address of the `enginetrace` pointer variable referenced by
     /// `UpdateWaterState` (`func` = start of that function).
     pub unsafe fn trace_global_from(func: *const u8) -> *const *mut c_void {
@@ -795,6 +812,14 @@ mod engine_hook {
 
     /// The world entity (entry 0 of the entity array), or 0 if unknown.
     pub unsafe fn world_entity() -> usize {
+        let list = CLIENT_ENTITY_LIST.load(Ordering::Relaxed);
+        if list != 0 {
+            // Client realm: entity 0 of the client's entity list.
+            let vtable = (list as *const *const usize).read();
+            let get: unsafe extern "win64" fn(usize, c_int) -> usize =
+                std::mem::transmute(vtable.add(CLIENT_GET_ENTITY_SLOT).read());
+            return get(list, 0);
+        }
         let g = ENTITY_ARRAY_GLOBAL.load(Ordering::Relaxed);
         if g == 0 {
             return 0;
@@ -1590,6 +1615,24 @@ mod engine_hook {
         pub unsafe fn client_base() -> *const u8 {
             GetModuleHandleA(c"client.dll".as_ptr()) as *const u8
         }
+
+        /// An interface of client.dll (`CreateInterface("VClientEntityList003")`).
+        pub unsafe fn client_interface(name: &CStr) -> usize {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
+            }
+            let module = client_base() as *mut c_void;
+            if module.is_null() {
+                return 0;
+            }
+            let create = GetProcAddress(module, c"CreateInterface".as_ptr());
+            if create.is_null() {
+                return 0;
+            }
+            let create: unsafe extern "win64" fn(*const c_char, *mut c_int) -> usize = std::mem::transmute(create);
+            create(name.as_ptr(), std::ptr::null_mut())
+        }
     }
 }
 
@@ -2052,6 +2095,54 @@ mod hook_state {
 
     pub fn contents_active() -> bool {
         !CONTENTS.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    }
+
+    /// Client realm: the same two hooks on the client's own IEngineTrace, so what the
+    /// client does with water (ripples and splashes, the underwater sound filter,
+    /// prediction) sees the volumes the Lua side gave it.
+    pub unsafe fn install_client_contents() -> Result<String, &'static str> {
+        let base = engine_hook::win::client_base();
+        if base.is_null() {
+            return Err("client.dll is not loaded");
+        }
+        let at = engine_hook::scan_sig(base, engine_hook::CLIENT_TRACE_SIG)?;
+        let trace = engine_hook::trace_global_from_load(at).read();
+        let (slot, original) =
+            engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
+        let mut hooks = vec![(
+            slot,
+            original,
+            engine_hook::hook_get_point_contents as *const () as usize,
+        )];
+        // TraceRay needs the Ray_t layout and a world entity to name in the result;
+        // without either only the point contents are hooked.
+        let entities = engine_hook::win::client_interface(c"VClientEntityList003");
+        let ray = engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG);
+        let note = match (ray, entities) {
+            (Ok(f), e) if e != 0 => {
+                let off = engine_hook::ray_swept_offset_from(f);
+                engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
+                engine_hook::CLIENT_ENTITY_LIST.store(e, std::sync::atomic::Ordering::SeqCst);
+                let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
+                match engine_hook::install_slot_hook(
+                    trace,
+                    engine_hook::TRACE_RAY_SLOT,
+                    trace_hook,
+                    &engine_hook::ORIGINAL_TRACE_RAY,
+                    &engine_hook::win::PLATFORM,
+                ) {
+                    Ok((entry, orig)) => {
+                        hooks.push((entry, orig, trace_hook));
+                        format!("GetPointContents + TraceRay (Ray_t m_IsSwept at +{off:#x})")
+                    }
+                    Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
+                }
+            }
+            (Err(why), _) => format!("GetPointContents only (Ray_t helper: {why})"),
+            _ => "GetPointContents only (no VClientEntityList003)".to_string(),
+        };
+        *CONTENTS.lock().unwrap_or_else(|e| e.into_inner()) = hooks;
+        Ok(note)
     }
 }
 
@@ -2610,19 +2701,42 @@ unsafe fn push_entity_meta(l: LuaState) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
-    // Loaded as gmcl_waterlevelercore: only patches the client's water explosion.
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    if client_hook::is_client_module() {
-        let _ = l;
-        let _ = client_hook::install();
-        return 0;
-    }
     let Some(loaded) = load_api() else {
         return 0;
     };
     let _ = API.set(loaded);
     let a = api();
     let base = (a.gettop)(l);
+
+    // Loaded as gmcl_waterlevelercore: the client's water. The Lua side gives it the
+    // volumes (AddVolume etc.); its engine trace and the water explosion sound are
+    // patched so the client sees and hears them like the server does.
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    if client_hook::is_client_module() {
+        let explosion = match client_hook::install() {
+            Ok(()) => "explosion sound".to_string(),
+            Err(why) => format!("explosion sound failed: {why}"),
+        };
+        let trace = match hook_state::install_client_contents() {
+            Ok(note) => note,
+            Err(why) => format!("trace hook failed: {why}"),
+        };
+        *HOOK_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = format!("client: {trace}; {explosion}");
+        (a.createtable)(l, 0, 8);
+        let t = base + 1;
+        set_fn(l, t, c"AddVolume", l_add_volume);
+        set_fn(l, t, c"RemoveVolume", l_remove_volume);
+        set_fn(l, t, c"ClearVolumes", l_clear_volumes);
+        set_fn(l, t, c"VolumeCount", l_volume_count);
+        set_fn(l, t, c"PointInVolume", l_point_in_volume);
+        set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
+        set_fn(l, t, c"ContentsHits", l_contents_hits);
+        set_fn(l, t, c"TraceHits", l_trace_hits);
+        set_fn(l, t, c"HookStatus", l_hook_status);
+        (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
+        (a.settop)(l, base);
+        return 0;
+    }
 
     // Global `waterleveler` table.
     (a.createtable)(l, 0, 16);
@@ -2695,13 +2809,23 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    client_hook::uninstall();
     if API.get().is_none() {
         return 0;
     }
     let a = api();
     let base = (a.gettop)(l);
+
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    if client_hook::is_client_module() {
+        client_hook::uninstall();
+        hook_state::uninstall_contents();
+        engine_hook::CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
+        volumes().clear();
+        (a.pushnil)(l);
+        (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
+        (a.settop)(l, base);
+        return 0;
+    }
 
     // Fluid controllers hold engine objects; free them while the module is still loaded.
     hook_state::fluid_detach_all();
@@ -2758,6 +2882,35 @@ mod tests {
     fn server_dll() -> Option<Vec<u8>> {
         let path = std::env::var("SERVER_DLL_X64").ok()?;
         std::fs::read(path).ok()
+    }
+
+    fn client_dll() -> Option<Vec<u8>> {
+        let path = std::env::var("CLIENT_DLL_X64").ok()?;
+        std::fs::read(path).ok()
+    }
+
+    #[test]
+    fn client_trace_global_is_read_from_the_load_instruction() {
+        // mov rcx,[rip+0x100]; the variable is at (instruction + 7 + 0x100).
+        let mut code = vec![0x48u8, 0x8B, 0x0D, 0x00, 0x01, 0x00, 0x00, 0x90];
+        code.extend_from_slice(&[0; 16]);
+        let at = code.as_ptr();
+        let g = unsafe { trace_global_from_load(at) };
+        assert_eq!(g as usize, at as usize + 7 + 0x100);
+    }
+
+    #[test]
+    fn client_trace_signature_and_ray_helper_match_once_in_client_dll() {
+        let Some(d) = client_dll() else {
+            eprintln!("CLIENT_DLL_X64 not set; skipping");
+            return;
+        };
+        let pe = parse_pe(&d);
+        let (_, _, _, text_raw, text_size, _) = pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
+        let text = &d[text_raw..text_raw + text_size];
+        for sig in [CLIENT_TRACE_SIG, RAY_HELPER_SIG] {
+            assert_eq!(find_all(text, &parse_sig(sig)).len(), 1, "{sig}");
+        }
     }
 
     struct Pe {

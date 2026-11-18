@@ -15,7 +15,7 @@ GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 | Linux 64 | `gmsv_waterlevelercore_linux64.dll`   |
 | Win 64   | `gmsv_waterlevelercore_win64.dll`     |
 
-The same DLL, copied as `gmcl_waterlevelercore_win64.dll` (Win 64 only), is the optional *client* module. A client that has it hears the water explosion of a volume at the blast point instead of on the surface, so the sound is muffled by the water around it however deep the volume is. The server puts the blast point in the effect's unused start vector and keeps the effect on the surface; clients without the module just hear it at the surface. It patches two entries of the effect's vtable in `client.dll`, found by signature.
+The same DLL, copied as `gmcl_waterlevelercore_win64.dll` (Win 64 only), is the optional *client* module. The client has its own engine trace object, so what the client does with water (ripples and splashes, the underwater sound filter and particles, prediction) did not see volumes. With the module the client gets the volumes (the script sends them; `waterlevelercore.AddVolume` and the rest of the volume functions exist on the client) and its `IEngineTrace` is hooked the same way as the server's: `GetPointContents` and `TraceRay`, found from the client's `UpdateWaterState` pattern and the `Ray_t` helper, with the world entity named in water hits taken from `VClientEntityList003`. It also makes the water explosion play its sound at the blast point: the server puts the blast point in the effect's unused start vector and keeps the effect on the surface, and two entries of the effect's vtable in `client.dll` (found by signature) use it. Clients without the module get none of this. `waterlevelercore.HookStatus()` on the client says what was hooked.
 
 (The Linux file really is named `.dll`; GMod's module loader expects that.)
 
@@ -106,10 +106,7 @@ Limits (read these):
 - **No real water surface.** Rendering water needs map data compiled into the
   BSP; this cannot create it. `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` draws a translucent
   box client-side as a placeholder.
-- **Player prediction.** The client predicts swimming with its own trace
-  object, which does not know about volumes, so a player inside one may see
-  prediction corrections (stutter). Fixing it needs a matching client module
-  and the 64-bit `client.dll`.
+- **Player prediction.** The client predicts swimming with its own trace object. With the client module it knows the volumes too (see below); without it a player inside one may see prediction corrections (stutter).
 - **Buoyancy.** Props float only if a vphysics
   fluid controller exists; point contents alone do nothing. A map's water brush
   is a static physics object with the `water` material plus

@@ -112,6 +112,7 @@ if CLIENT then
     local PRESETS = {
         "nature/water_movingplane",
         "nature/water_movingplane_dx70",
+        "gm_construct/water_13",
         "models/shadertest/predator",
         "models/shadertest/shader3",
     }
