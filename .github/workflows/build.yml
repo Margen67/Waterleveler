@@ -17,9 +17,12 @@ jobs:
 
       - name: Use Rust nightly
         run: |-
-          rustup toolchain install nightly --profile minimal --component clippy
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
           rustup default nightly
           rustc --version
+
+      - name: Check formatting
+        run: cargo fmt --check
 
       - name: Lint
         run: cargo clippy --release --locked --all-targets

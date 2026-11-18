@@ -103,91 +103,97 @@ fn api() -> &'static Api {
 }
 
 #[cfg(target_os = "linux")]
-unsafe fn find_symbol(name: &CStr) -> *mut c_void { unsafe {
-    #[link(name = "dl")]
-    extern "C" {
-        fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
-        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    }
-    const RTLD_LAZY: c_int = 0x1;
-    const RTLD_NOLOAD: c_int = 0x4;
+unsafe fn find_symbol(name: &CStr) -> *mut c_void {
+    unsafe {
+        #[link(name = "dl")]
+        extern "C" {
+            fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+            fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+        }
+        const RTLD_LAZY: c_int = 0x1;
+        const RTLD_NOLOAD: c_int = 0x4;
 
-    // lua_shared is already loaded by the game; RTLD_NOLOAD never loads anything new.
-    const CANDIDATES: &[&CStr] = &[
-        c"lua_shared.so",
-        c"lua_shared_srv.so",
-        c"bin/linux64/lua_shared.so",
-        c"bin/linux64/lua_shared_srv.so",
-        c"garrysmod/bin/linux64/lua_shared.so",
-        c"garrysmod/bin/lua_shared_srv.so",
-        c"garrysmod/bin/lua_shared.so",
-        c"bin/linux32/lua_shared.so",
-    ];
-    for lib in CANDIDATES {
-        let handle = dlopen(lib.as_ptr(), RTLD_LAZY | RTLD_NOLOAD);
-        if !handle.is_null() {
-            let sym = dlsym(handle, name.as_ptr());
-            if !sym.is_null() {
-                return sym;
+        // lua_shared is already loaded by the game; RTLD_NOLOAD never loads anything new.
+        const CANDIDATES: &[&CStr] = &[
+            c"lua_shared.so",
+            c"lua_shared_srv.so",
+            c"bin/linux64/lua_shared.so",
+            c"bin/linux64/lua_shared_srv.so",
+            c"garrysmod/bin/linux64/lua_shared.so",
+            c"garrysmod/bin/lua_shared_srv.so",
+            c"garrysmod/bin/lua_shared.so",
+            c"bin/linux32/lua_shared.so",
+        ];
+        for lib in CANDIDATES {
+            let handle = dlopen(lib.as_ptr(), RTLD_LAZY | RTLD_NOLOAD);
+            if !handle.is_null() {
+                let sym = dlsym(handle, name.as_ptr());
+                if !sym.is_null() {
+                    return sym;
+                }
             }
         }
+        // Fall back to the global scope (RTLD_DEFAULT == NULL on Linux).
+        dlsym(std::ptr::null_mut(), name.as_ptr())
     }
-    // Fall back to the global scope (RTLD_DEFAULT == NULL on Linux).
-    dlsym(std::ptr::null_mut(), name.as_ptr())
-}}
+}
 
 #[cfg(windows)]
-unsafe fn find_symbol(name: &CStr) -> *mut c_void { unsafe {
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetModuleHandleA(module_name: *const c_char) -> *mut c_void;
-        fn GetProcAddress(module: *mut c_void, proc_name: *const c_char) -> *mut c_void;
+unsafe fn find_symbol(name: &CStr) -> *mut c_void {
+    unsafe {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetModuleHandleA(module_name: *const c_char) -> *mut c_void;
+            fn GetProcAddress(module: *mut c_void, proc_name: *const c_char) -> *mut c_void;
+        }
+        let module = GetModuleHandleA(c"lua_shared.dll".as_ptr());
+        if module.is_null() {
+            return std::ptr::null_mut();
+        }
+        GetProcAddress(module, name.as_ptr())
     }
-    let module = GetModuleHandleA(c"lua_shared.dll".as_ptr());
-    if module.is_null() {
-        return std::ptr::null_mut();
-    }
-    GetProcAddress(module, name.as_ptr())
-}}
+}
 
 #[cfg(not(any(target_os = "linux", windows)))]
 compile_error!("gmsv_waterlevel supports Linux and Windows only");
 
 // The target of each transmute is the function pointer type of the `Api` field it fills.
 #[allow(clippy::missing_transmute_annotations)]
-unsafe fn load_api() -> Option<Api> { unsafe {
-    macro_rules! load {
-        ($name:literal) => {{
-            let sym = find_symbol(CStr::from_bytes_with_nul_unchecked(
-                concat!($name, "\0").as_bytes(),
-            ));
-            if sym.is_null() {
-                return None;
-            }
-            std::mem::transmute::<*mut c_void, _>(sym)
-        }};
+unsafe fn load_api() -> Option<Api> {
+    unsafe {
+        macro_rules! load {
+            ($name:literal) => {{
+                let sym = find_symbol(CStr::from_bytes_with_nul_unchecked(
+                    concat!($name, "\0").as_bytes(),
+                ));
+                if sym.is_null() {
+                    return None;
+                }
+                std::mem::transmute::<*mut c_void, _>(sym)
+            }};
+        }
+        Some(Api {
+            gettop: load!("lua_gettop"),
+            settop: load!("lua_settop"),
+            pushvalue: load!("lua_pushvalue"),
+            pushnil: load!("lua_pushnil"),
+            pushnumber: load!("lua_pushnumber"),
+            pushboolean: load!("lua_pushboolean"),
+            pushstring: load!("lua_pushstring"),
+            pushcclosure: load!("lua_pushcclosure"),
+            createtable: load!("lua_createtable"),
+            getfield: load!("lua_getfield"),
+            setfield: load!("lua_setfield"),
+            call: load!("lua_call"),
+            pcall: load!("lua_pcall"),
+            tonumber: load!("lua_tonumber"),
+            toboolean: load!("lua_toboolean"),
+            tolstring: load!("lua_tolstring"),
+            type_: load!("lua_type"),
+            touserdata: load!("lua_touserdata"),
+        })
     }
-    Some(Api {
-        gettop: load!("lua_gettop"),
-        settop: load!("lua_settop"),
-        pushvalue: load!("lua_pushvalue"),
-        pushnil: load!("lua_pushnil"),
-        pushnumber: load!("lua_pushnumber"),
-        pushboolean: load!("lua_pushboolean"),
-        pushstring: load!("lua_pushstring"),
-        pushcclosure: load!("lua_pushcclosure"),
-        createtable: load!("lua_createtable"),
-        getfield: load!("lua_getfield"),
-        setfield: load!("lua_setfield"),
-        call: load!("lua_call"),
-        pcall: load!("lua_pcall"),
-        tonumber: load!("lua_tonumber"),
-        toboolean: load!("lua_toboolean"),
-        tolstring: load!("lua_tolstring"),
-        type_: load!("lua_type"),
-        touserdata: load!("lua_touserdata"),
-    })
-}}
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -199,6 +205,7 @@ static OVERRIDES: Mutex<BTreeMap<i32, u8>> = Mutex::new(BTreeMap::new());
 static SAVE_KEY: Mutex<Option<String>> = Mutex::new(None);
 
 /// The settings of a fluid controller (`fluidparams_t`) besides its surface plane.
+///
 /// A map's water brush has torque, viscosity and aerodynamics at 0 (its fluid
 /// data only carries the plane, current, damping and contents), so those are the
 /// defaults; damping is 0.01.
@@ -215,12 +222,21 @@ pub struct FluidSettings {
 
 impl Default for FluidSettings {
     fn default() -> Self {
-        FluidSettings { damping: 0.01, current: [0.0; 3], torque: 0.0, viscosity: 0.0, aerodynamics: false, contents: CONTENTS_WATER }
+        Self {
+            damping: 0.01,
+            current: [0.0; 3],
+            torque: 0.0,
+            viscosity: 0.0,
+            aerodynamics: false,
+            contents: CONTENTS_WATER,
+        }
     }
 }
 
 fn overrides() -> std::sync::MutexGuard<'static, BTreeMap<i32, u8>> {
-    OVERRIDES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    OVERRIDES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn save_key() -> Option<CString> {
@@ -261,14 +277,18 @@ static NEXT_VOLUME_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU
 static VOLUME_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn volumes() -> std::sync::MutexGuard<'static, Vec<Volume>> {
-    VOLUMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    VOLUMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Top (surface height) of the highest water volume containing `p` (slime is
 /// not water: the engine's water explosion needs `CONTENTS_WATER`).
 fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
     vols.iter()
-        .filter(|v| v.contents & CONTENTS_WATER != 0 && (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
+        .filter(|v| {
+            v.contents & CONTENTS_WATER != 0 && (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i])
+        })
         .map(|v| v.max[2])
         .fold(None, |a, z| Some(a.map_or(z, |a: f32| a.max(z))))
 }
@@ -382,25 +402,27 @@ mod engine_hook {
 
     /// The replacement for `CBaseEntity::SetWaterLevel`. Windows x64 calling
     /// convention on every OS, because the original is a Windows function.
-    pub(crate) unsafe extern "win64" fn hook_set_water_level(this: *mut c_void, level: c_int) { unsafe {
-        let original: unsafe extern "win64" fn(*mut c_void, c_int) =
-            std::mem::transmute(TRAMPOLINE.load(Ordering::Relaxed));
-        let mut level = level;
-        if !this.is_null() {
-            let pev = *(this as *const u8).add(OFF_PEV).cast::<*const u8>();
-            if !pev.is_null() {
-                let idx = i32::from(*pev.add(OFF_EDICT_INDEX).cast::<i16>());
-                // Never block inside an engine callback.
-                if let Ok(map) = OVERRIDES.try_lock() {
-                    if let Some(&o) = map.get(&idx) {
-                        level = c_int::from(o);
-                        HITS.fetch_add(1, Ordering::Relaxed);
+    pub(crate) unsafe extern "win64" fn hook_set_water_level(this: *mut c_void, level: c_int) {
+        unsafe {
+            let original: unsafe extern "win64" fn(*mut c_void, c_int) =
+                std::mem::transmute(TRAMPOLINE.load(Ordering::Relaxed));
+            let mut level = level;
+            if !this.is_null() {
+                let pev = *(this as *const u8).add(OFF_PEV).cast::<*const u8>();
+                if !pev.is_null() {
+                    let idx = i32::from(*pev.add(OFF_EDICT_INDEX).cast::<i16>());
+                    // Never block inside an engine callback.
+                    if let Ok(map) = OVERRIDES.try_lock() {
+                        if let Some(&o) = map.get(&idx) {
+                            level = c_int::from(o);
+                            HITS.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
+            original(this, level);
         }
-        original(this, level);
-    }}
+    }
 
     /// The handful of OS services needed to patch code.
     pub(crate) struct Platform {
@@ -431,10 +453,12 @@ mod engine_hook {
         "48 8B 0D ?? ?? ?? ?? 48 8D 54 24 ?? 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
 
     /// The `enginetrace` pointer variable loaded by the instruction at `at`.
-    pub(crate) unsafe fn trace_global_from_load(at: *const u8) -> *const *mut c_void { unsafe {
-        let disp = at.add(3).cast::<i32>().read_unaligned() as isize;
-        at.offset(7 + disp).cast::<*mut c_void>()
-    }}
+    pub(crate) const unsafe fn trace_global_from_load(at: *const u8) -> *const *mut c_void {
+        unsafe {
+            let disp = at.add(3).cast::<i32>().read_unaligned() as isize;
+            at.offset(7 + disp).cast::<*mut c_void>()
+        }
+    }
 
     /// `IClientEntityList` (client realm). Its vtable slot 3 is GetClientEntity(int).
     pub(crate) static CLIENT_ENTITY_LIST: AtomicUsize = AtomicUsize::new(0);
@@ -442,10 +466,16 @@ mod engine_hook {
 
     /// Address of the `enginetrace` pointer variable referenced by
     /// `UpdateWaterState` (`func` = start of that function).
-    pub(crate) unsafe fn trace_global_from(func: *const u8) -> *const *mut c_void { unsafe {
-        let disp = func.add(TRACE_GLOBAL_DISP_OFFSET).cast::<i32>().read_unaligned() as isize;
-        func.offset(TRACE_GLOBAL_DISP_OFFSET as isize + 4 + disp).cast::<*mut c_void>()
-    }}
+    pub(crate) const unsafe fn trace_global_from(func: *const u8) -> *const *mut c_void {
+        unsafe {
+            let disp = func
+                .add(TRACE_GLOBAL_DISP_OFFSET)
+                .cast::<i32>()
+                .read_unaligned() as isize;
+            func.offset(TRACE_GLOBAL_DISP_OFFSET as isize + 4 + disp)
+                .cast::<*mut c_void>()
+        }
+    }
 
     pub(crate) static ORIGINAL_GPC: AtomicUsize = AtomicUsize::new(0);
 
@@ -457,64 +487,70 @@ mod engine_hook {
         pos: *const f32,
         a3: usize,
         a4: usize,
-    ) -> c_int { unsafe {
-        let original: unsafe extern "win64" fn(*mut c_void, *const f32, usize, usize) -> c_int =
-            std::mem::transmute(ORIGINAL_GPC.load(Ordering::Relaxed));
-        let mut contents = original(this, pos, a3, a4);
-        if !pos.is_null() {
-            // Never block inside an engine callback.
-            if let Ok(vols) = VOLUMES.try_lock() {
-                if !vols.is_empty() {
-                    let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-                    let inside = contents_at(&vols, p);
-                    if inside != 0 {
-                        contents |= inside;
-                        VOLUME_HITS.fetch_add(1, Ordering::Relaxed);
+    ) -> c_int {
+        unsafe {
+            let original: unsafe extern "win64" fn(*mut c_void, *const f32, usize, usize) -> c_int =
+                std::mem::transmute(ORIGINAL_GPC.load(Ordering::Relaxed));
+            let mut contents = original(this, pos, a3, a4);
+            if !pos.is_null() {
+                // Never block inside an engine callback.
+                if let Ok(vols) = VOLUMES.try_lock() {
+                    if !vols.is_empty() {
+                        let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
+                        let inside = contents_at(&vols, p);
+                        if inside != 0 {
+                            contents |= inside;
+                            VOLUME_HITS.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
+            contents
         }
-        contents
-    }}
+    }
 
     /// Swaps vtable slot 0 of the `IEngineTrace` object. No machine code is
     /// patched. Returns (slot address, original function pointer).
     pub(crate) unsafe fn install_contents_hook(
         trace: *mut c_void,
         p: &Platform,
-    ) -> Result<(usize, usize), &'static str> { unsafe {
-        if trace.is_null() {
-            return Err("enginetrace pointer is null");
+    ) -> Result<(usize, usize), &'static str> {
+        unsafe {
+            if trace.is_null() {
+                return Err("enginetrace pointer is null");
+            }
+            let vtable = (trace as *const *mut usize).read();
+            if vtable.is_null() {
+                return Err("enginetrace has no vtable");
+            }
+            let original = vtable.read();
+            let hook = hook_get_point_contents as *const () as usize;
+            if original == 0 || original == hook {
+                return Err("GetPointContents slot is empty or already hooked");
+            }
+            ORIGINAL_GPC.store(original, Ordering::SeqCst);
+            let Some(old) = (p.make_writable)(vtable.cast::<u8>(), 8) else {
+                return Err("could not make the vtable writable");
+            };
+            vtable.write(hook);
+            (p.restore_protect)(vtable.cast::<u8>(), 8, old);
+            Ok((vtable as usize, original))
         }
-        let vtable = (trace as *const *mut usize).read();
-        if vtable.is_null() {
-            return Err("enginetrace has no vtable");
-        }
-        let original = vtable.read();
-        let hook = hook_get_point_contents as *const () as usize;
-        if original == 0 || original == hook {
-            return Err("GetPointContents slot is empty or already hooked");
-        }
-        ORIGINAL_GPC.store(original, Ordering::SeqCst);
-        let Some(old) = (p.make_writable)(vtable.cast::<u8>(), 8) else {
-            return Err("could not make the vtable writable");
-        };
-        vtable.write(hook);
-        (p.restore_protect)(vtable.cast::<u8>(), 8, old);
-        Ok((vtable as usize, original))
-    }}
+    }
 
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-    pub(crate) unsafe fn uninstall_contents_hook(slot: usize, original: usize, p: &Platform) { unsafe {
-        let slot = slot as *mut usize;
-        if slot.read() != hook_get_point_contents as *const () as usize {
-            return; // somebody else replaced it after us; leave it alone
+    pub(crate) unsafe fn uninstall_contents_hook(slot: usize, original: usize, p: &Platform) {
+        unsafe {
+            let slot = slot as *mut usize;
+            if slot.read() != hook_get_point_contents as *const () as usize {
+                return; // somebody else replaced it after us; leave it alone
+            }
+            if let Some(old) = (p.make_writable)(slot.cast::<u8>(), 8) {
+                slot.write(original);
+                (p.restore_protect)(slot.cast::<u8>(), 8, old);
+            }
         }
-        if let Some(old) = (p.make_writable)(slot.cast::<u8>(), 8) {
-            slot.write(original);
-            (p.restore_protect)(slot.cast::<u8>(), 8, old);
-        }
-    }}
+    }
 
     // ---- Water volumes vs. traces: IEngineTrace::TraceRay (vtable slot 4) --
     //
@@ -548,10 +584,12 @@ mod engine_hook {
         C6 40 ?? 01";
     pub(crate) const RAY_HELPER_DISP_BYTE: usize = 53;
 
-    pub(crate) unsafe fn ray_swept_offset_from(func: *const u8) -> usize { unsafe {
-        let disp = func.add(RAY_HELPER_DISP_BYTE).cast::<i8>().read() as isize;
-        (disp + 0x98 - 0x40) as usize
-    }}
+    pub(crate) const unsafe fn ray_swept_offset_from(func: *const u8) -> usize {
+        unsafe {
+            let disp = func.add(RAY_HELPER_DISP_BYTE).cast::<i8>().read() as isize;
+            (disp + 0x98 - 0x40) as usize
+        }
+    }
 
     /// Traces seen with a water bit in the mask (diagnostics).
     static WATER_SURFACE_NAME: &[u8] = b"water\0";
@@ -578,7 +616,11 @@ mod engine_hook {
             }
             let t1 = (lo[i] - s[i]) / d[i];
             let t2 = (hi[i] - s[i]) / d[i];
-            let (near, far, through_min) = if t1 < t2 { (t1, t2, true) } else { (t2, t1, false) };
+            let (near, far, through_min) = if t1 < t2 {
+                (t1, t2, true)
+            } else {
+                (t2, t1, false)
+            };
             if near > tmin {
                 tmin = near;
                 axis = i;
@@ -598,124 +640,151 @@ mod engine_hook {
 
     /// If the ray enters a water volume before `trace` currently ends, rewrites
     /// `trace` as a water-surface hit. Returns true if it did.
-    pub(crate) unsafe fn apply_water_to_trace(vols: &[Volume], ray: *const u8, trace: *mut u8, world: usize) -> bool { unsafe {
-        apply_water_to_trace_at(vols, ray, trace, world, RAY_SWEPT_OFFSET.load(Ordering::Relaxed))
-    }}
+    pub(crate) unsafe fn apply_water_to_trace(
+        vols: &[Volume],
+        ray: *const u8,
+        trace: *mut u8,
+        world: usize,
+    ) -> bool {
+        unsafe {
+            apply_water_to_trace_at(
+                vols,
+                ray,
+                trace,
+                world,
+                RAY_SWEPT_OFFSET.load(Ordering::Relaxed),
+            )
+        }
+    }
 
     /// Same, with the offset of `Ray_t::m_IsSwept` given explicitly.
+    #[allow(clippy::too_many_lines)] // one pass over the trace fields; splitting it would hide the layout
     pub(crate) unsafe fn apply_water_to_trace_at(
         vols: &[Volume],
         ray: *const u8,
         trace: *mut u8,
         world: usize,
         swept_offset: usize,
-    ) -> bool { unsafe {
-        // A trace that reports a hit must name the entity it hit: callers
-        // (the SLAM's beam, impact effects) call a virtual on `m_pEnt`. A real
-        // water brush belongs to the world, so the world entity is used. If it
-        // is unknown and the engine found no entity, leave the trace alone.
-        let ent_slot = trace.add(0x58).cast::<usize>();
-        let ent = if world != 0 { world } else { ent_slot.read_unaligned() };
-        if ent == 0 {
-            return false;
-        }
-        let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
-        if ray.add(swept_offset).read() == 0 {
-            return false; // not swept: nothing travels
-        }
-        let s = [rf(0x00), rf(0x04), rf(0x08)];
-        let d = [rf(0x10), rf(0x14), rf(0x18)];
-        let off = [rf(0x20), rf(0x24), rf(0x28)];
-        let ext = [rf(0x30), rf(0x34), rf(0x38)];
-        let current = (trace.add(0x2c) as *const f32).read_unaligned();
-
-        // Rays that START inside a volume. A real water brush reports these as
-        // startsolid, and when the whole ray stays inside it as allsolid with
-        // fraction 0 and the end point at the start. The engine's water-height
-        // probe (a downward MASK_WATER ray from above the entity)
-        // depends on that: without it a probe starting inside a volume looks
-        // like "no water here" and the computed surface height collapses to
-        // the entity's own height.
-        let mut started_inside = false;
-        for v in vols {
-            let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
-            let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
-            let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
-            if !inside(s) {
-                continue;
+    ) -> bool {
+        unsafe {
+            // A trace that reports a hit must name the entity it hit: callers
+            // (the SLAM's beam, impact effects) call a virtual on `m_pEnt`. A real
+            // water brush belongs to the world, so the world entity is used. If it
+            // is unknown and the engine found no entity, leave the trace alone.
+            let ent_slot = trace.add(0x58).cast::<usize>();
+            let ent = if world != 0 {
+                world
+            } else {
+                ent_slot.read_unaligned()
+            };
+            if ent == 0 {
+                return false;
             }
-            started_inside = true;
-            let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
-            if inside(e) {
-                let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
-                let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
-                for (i, &component) in origin.iter().enumerate() {
-                    wf(i * 4, component);
-                    wf(0x0c + i * 4, component);
-                    wf(0x18 + i * 4, 0.0);
+            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+            if ray.add(swept_offset).read() == 0 {
+                return false; // not swept: nothing travels
+            }
+            let s = [rf(0x00), rf(0x04), rf(0x08)];
+            let d = [rf(0x10), rf(0x14), rf(0x18)];
+            let off = [rf(0x20), rf(0x24), rf(0x28)];
+            let ext = [rf(0x30), rf(0x34), rf(0x38)];
+            let current = (trace.add(0x2c) as *const f32).read_unaligned();
+
+            // Rays that START inside a volume. A real water brush reports these as
+            // startsolid, and when the whole ray stays inside it as allsolid with
+            // fraction 0 and the end point at the start. The engine's water-height
+            // probe (a downward MASK_WATER ray from above the entity)
+            // depends on that: without it a probe starting inside a volume looks
+            // like "no water here" and the computed surface height collapses to
+            // the entity's own height.
+            let mut started_inside = false;
+            for v in vols {
+                let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
+                let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
+                let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
+                if !inside(s) {
+                    continue;
                 }
-                wf(0x24, 0.0);
-                trace.add(0x28).write(0);
-                trace.add(0x29).write(0);
-                wf(0x2c, 0.0); // fraction
-                trace.add(0x30).cast::<i32>().write_unaligned(v.contents);
-                trace.add(0x34).cast::<u16>().write_unaligned(0);
-                trace.add(0x36).write(1); // allsolid
-                trace.add(0x37).write(1); // startsolid
-                wf(0x38, 0.0);
-                trace.add(0x40).cast::<usize>()
-                    .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
-                ent_slot.write_unaligned(ent);
+                started_inside = true;
+                let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
+                if inside(e) {
+                    let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
+                    let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
+                    for (i, &component) in origin.iter().enumerate() {
+                        wf(i * 4, component);
+                        wf(0x0c + i * 4, component);
+                        wf(0x18 + i * 4, 0.0);
+                    }
+                    wf(0x24, 0.0);
+                    trace.add(0x28).write(0);
+                    trace.add(0x29).write(0);
+                    wf(0x2c, 0.0); // fraction
+                    trace.add(0x30).cast::<i32>().write_unaligned(v.contents);
+                    trace.add(0x34).cast::<u16>().write_unaligned(0);
+                    trace.add(0x36).write(1); // allsolid
+                    trace.add(0x37).write(1); // startsolid
+                    wf(0x38, 0.0);
+                    trace
+                        .add(0x40)
+                        .cast::<usize>()
+                        .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
+                    ent_slot.write_unaligned(ent);
+                    return true;
+                }
+            }
+            if started_inside {
+                // Leaves the volume again: startsolid, nothing else changes.
+                trace.add(0x37).write(1);
                 return true;
             }
-        }
-        if started_inside {
-            // Leaves the volume again: startsolid, nothing else changes.
-            trace.add(0x37).write(1);
-            return true;
-        }
 
-        let mut best: Option<(f32, usize, bool, usize)> = None;
-        for (i, v) in vols.iter().enumerate() {
-            let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
-            let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
-            if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
-                if t < current && best.map_or(true, |b| t < b.0) {
-                    best = Some((t, axis, min_face, i));
+            let mut best: Option<(f32, usize, bool, usize)> = None;
+            for (i, v) in vols.iter().enumerate() {
+                let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
+                let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
+                if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
+                    if t < current && best.map_or(true, |b| t < b.0) {
+                        best = Some((t, axis, min_face, i));
+                    }
                 }
             }
-        }
-        let Some((t, axis, min_face, vi)) = best else {
-            return false;
-        };
-        let v = &vols[vi];
+            let Some((t, axis, min_face, vi)) = best else {
+                return false;
+            };
+            let v = &vols[vi];
 
-        let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
-        let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
-        for i in 0..3 {
-            wf(i * 4, origin[i]); // startpos
-            wf(0x0c + i * 4, origin[i] + d[i] * t); // endpos
-            wf(0x18 + i * 4, 0.0); // plane.normal
+            let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
+            let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
+            for i in 0..3 {
+                wf(i * 4, origin[i]); // startpos
+                wf(0x0c + i * 4, d[i].mul_add(t, origin[i])); // endpos
+                wf(0x18 + i * 4, 0.0); // plane.normal
+            }
+            wf(0x18 + axis * 4, if min_face { -1.0 } else { 1.0 });
+            wf(0x24, if min_face { -v.min[axis] } else { v.max[axis] }); // plane.dist
+            trace.add(0x28).write(axis as u8); // plane.type: axial
+            trace
+                .add(0x29)
+                .write(if min_face { 1u8 << axis } else { 0 }); // signbits
+            wf(0x2c, t); // fraction
+            trace.add(0x30).cast::<i32>().write_unaligned(v.contents);
+            trace.add(0x34).cast::<u16>().write_unaligned(0); // dispFlags
+            trace.add(0x36).write(0); // allsolid
+            trace.add(0x37).write(0); // startsolid
+            wf(0x38, 0.0); // fractionleftsolid
+            trace
+                .add(0x40)
+                .cast::<usize>()
+                .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
+            trace.add(0x48).cast::<i16>().write_unaligned(0); // surface.surfaceProps
+            trace.add(0x4a).cast::<u16>().write_unaligned(0); // surface.flags
+            trace.add(0x50).cast::<i32>().write_unaligned(0); // hitgroup
+            trace.add(0x54).cast::<i16>().write_unaligned(0); // physicsbone
+            trace.add(0x60).cast::<i32>().write_unaligned(0); // hitbox
+            ent_slot.write_unaligned(ent); // m_pEnt
+            true
         }
-        wf(0x18 + axis * 4, if min_face { -1.0 } else { 1.0 });
-        wf(0x24, if min_face { -v.min[axis] } else { v.max[axis] }); // plane.dist
-        trace.add(0x28).write(axis as u8); // plane.type: axial
-        trace.add(0x29).write(if min_face { 1u8 << axis } else { 0 }); // signbits
-        wf(0x2c, t); // fraction
-        trace.add(0x30).cast::<i32>().write_unaligned(v.contents);
-        trace.add(0x34).cast::<u16>().write_unaligned(0); // dispFlags
-        trace.add(0x36).write(0); // allsolid
-        trace.add(0x37).write(0); // startsolid
-        wf(0x38, 0.0); // fractionleftsolid
-        trace.add(0x40).cast::<usize>().write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
-        trace.add(0x48).cast::<i16>().write_unaligned(0); // surface.surfaceProps
-        trace.add(0x4a).cast::<u16>().write_unaligned(0); // surface.flags
-        trace.add(0x50).cast::<i32>().write_unaligned(0); // hitgroup
-        trace.add(0x54).cast::<i16>().write_unaligned(0); // physicsbone
-        trace.add(0x60).cast::<i32>().write_unaligned(0); // hitbox
-        ent_slot.write_unaligned(ent); // m_pEnt
-        true
-    }}
+    }
 
     /// Replacement for `IEngineTrace::TraceRay`.
     pub(crate) unsafe extern "win64" fn hook_trace_ray(
@@ -724,22 +793,36 @@ mod engine_hook {
         mask: u32,
         filter: *mut c_void,
         trace: *mut u8,
-    ) { unsafe {
-        let original: unsafe extern "win64" fn(*mut c_void, *const u8, u32, *mut c_void, *mut u8) =
-            std::mem::transmute(ORIGINAL_TRACE_RAY.load(Ordering::Relaxed));
-        original(this, ray, mask, filter, trace);
-        if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0 || ray.is_null() || trace.is_null() {
-            return;
-        }
-        // Never block inside an engine callback.
-        if let Ok(vols) = VOLUMES.try_lock() {
-            // Only the volumes whose contents the trace's mask asks for.
-            let wanted: Vec<Volume> = vols.iter().copied().filter(|v| v.contents as u32 & mask != 0).collect();
-            if !wanted.is_empty() && apply_water_to_trace(&wanted, ray, trace, world_entity()) {
-                TRACE_HITS.fetch_add(1, Ordering::Relaxed);
+    ) {
+        unsafe {
+            let original: unsafe extern "win64" fn(
+                *mut c_void,
+                *const u8,
+                u32,
+                *mut c_void,
+                *mut u8,
+            ) = std::mem::transmute(ORIGINAL_TRACE_RAY.load(Ordering::Relaxed));
+            original(this, ray, mask, filter, trace);
+            if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0
+                || ray.is_null()
+                || trace.is_null()
+            {
+                return;
+            }
+            // Never block inside an engine callback.
+            if let Ok(vols) = VOLUMES.try_lock() {
+                // Only the volumes whose contents the trace's mask asks for.
+                let wanted: Vec<Volume> = vols
+                    .iter()
+                    .copied()
+                    .filter(|v| v.contents as u32 & mask != 0)
+                    .collect();
+                if !wanted.is_empty() && apply_water_to_trace(&wanted, ray, trace, world_entity()) {
+                    TRACE_HITS.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
-    }}
+    }
 
     /// Swaps vtable slot `slot` of the `IEngineTrace` object for `hook`.
     /// Returns (address of the slot, original function pointer).
@@ -749,209 +832,237 @@ mod engine_hook {
         hook: usize,
         original_store: &AtomicUsize,
         p: &Platform,
-    ) -> Result<(usize, usize), &'static str> { unsafe {
-        if trace.is_null() {
-            return Err("enginetrace pointer is null");
-        }
-        let vtable = (trace as *const *mut usize).read();
-        if vtable.is_null() {
-            return Err("enginetrace has no vtable");
-        }
-        let entry = vtable.add(slot);
-        let original = entry.read();
-        if original == 0 || original == hook {
-            return Err("vtable slot is empty or already hooked");
-        }
-        original_store.store(original, Ordering::SeqCst);
-        let Some(old) = (p.make_writable)(entry.cast::<u8>(), 8) else {
-            return Err("could not make the vtable writable");
-        };
-        entry.write(hook);
-        (p.restore_protect)(entry.cast::<u8>(), 8, old);
-        Ok((entry as usize, original))
-    }}
-
-    pub(crate) unsafe fn uninstall_slot_hook(entry: usize, hook: usize, original: usize, p: &Platform) { unsafe {
-        let entry = entry as *mut usize;
-        if entry.read() != hook {
-            return; // somebody else replaced it after us; leave it alone
-        }
-        if let Some(old) = (p.make_writable)(entry.cast::<u8>(), 8) {
-            entry.write(original);
+    ) -> Result<(usize, usize), &'static str> {
+        unsafe {
+            if trace.is_null() {
+                return Err("enginetrace pointer is null");
+            }
+            let vtable = (trace as *const *mut usize).read();
+            if vtable.is_null() {
+                return Err("enginetrace has no vtable");
+            }
+            let entry = vtable.add(slot);
+            let original = entry.read();
+            if original == 0 || original == hook {
+                return Err("vtable slot is empty or already hooked");
+            }
+            original_store.store(original, Ordering::SeqCst);
+            let Some(old) = (p.make_writable)(entry.cast::<u8>(), 8) else {
+                return Err("could not make the vtable writable");
+            };
+            entry.write(hook);
             (p.restore_protect)(entry.cast::<u8>(), 8, old);
+            Ok((entry as usize, original))
         }
-    }}
+    }
+
+    pub(crate) unsafe fn uninstall_slot_hook(
+        entry: usize,
+        hook: usize,
+        original: usize,
+        p: &Platform,
+    ) {
+        unsafe {
+            let entry = entry as *mut usize;
+            if entry.read() != hook {
+                return; // somebody else replaced it after us; leave it alone
+            }
+            if let Some(old) = (p.make_writable)(entry.cast::<u8>(), 8) {
+                entry.write(original);
+                (p.restore_protect)(entry.cast::<u8>(), 8, old);
+            }
+        }
+    }
 
     /// Walks the executable sections of a loaded PE image (`base` = module
     /// base) and returns the single match of [`SIG`].
-    pub(crate) unsafe fn scan_image(base: *const u8) -> Result<*mut u8, &'static str> { unsafe {
-        scan_sig(base, SIG)
-    }}
+    pub(crate) unsafe fn scan_image(base: *const u8) -> Result<*mut u8, &'static str> {
+        unsafe { scan_sig(base, SIG) }
+    }
 
     /// `83 F9 FF  74 ??  48 8B 35 <entity array>  8B C1  25 FF 3F 00 00
     /// C1 E9 0E  48 C1 E0 05  39 4C 30 10`: the engine's "entity from handle"
     /// idiom (entries are 32 bytes: pointer at +8, serial at +0x10). It occurs
     /// many times, always with the same array global.
-    pub(crate) const ENTITY_ARRAY_SIG: &str = "83 F9 FF 74 ?? 48 8B 35 ?? ?? ?? ?? 8B C1 25 FF 3F 00 00 \
+    pub(crate) const ENTITY_ARRAY_SIG: &str =
+        "83 F9 FF 74 ?? 48 8B 35 ?? ?? ?? ?? 8B C1 25 FF 3F 00 00 \
                                         C1 E9 0E 48 C1 E0 05 39 4C 30 10";
     pub(crate) static ENTITY_ARRAY_GLOBAL: AtomicUsize = AtomicUsize::new(0);
 
     /// Address of the global holding the entity array, if every match of the
     /// idiom agrees on it.
-    pub(crate) unsafe fn entity_array_global(base: *const u8) -> Result<usize, &'static str> { unsafe {
-        let all = scan_sig_all(base, ENTITY_ARRAY_SIG)?;
-        let mut global = 0usize;
-        for at in all {
-            let disp = (at.add(8) as *const i32).read_unaligned() as isize;
-            let g = at.offset(12 + disp) as usize;
-            if global != 0 && global != g {
-                return Err("entity array idiom resolves to different globals");
+    pub(crate) unsafe fn entity_array_global(base: *const u8) -> Result<usize, &'static str> {
+        unsafe {
+            let all = scan_sig_all(base, ENTITY_ARRAY_SIG)?;
+            let mut global = 0usize;
+            for at in all {
+                let disp = (at.add(8) as *const i32).read_unaligned() as isize;
+                let g = at.offset(12 + disp) as usize;
+                if global != 0 && global != g {
+                    return Err("entity array idiom resolves to different globals");
+                }
+                global = g;
             }
-            global = g;
+            if global == 0 {
+                return Err("entity array idiom not found");
+            }
+            Ok(global)
         }
-        if global == 0 {
-            return Err("entity array idiom not found");
-        }
-        Ok(global)
-    }}
+    }
 
     /// The world entity (entry 0 of the entity array), or 0 if unknown.
-    pub(crate) unsafe fn world_entity() -> usize { unsafe {
-        let list = CLIENT_ENTITY_LIST.load(Ordering::Relaxed);
-        if list != 0 {
-            // Client realm: entity 0 of the client's entity list.
-            let vtable = (list as *const *const usize).read();
-            let get: unsafe extern "win64" fn(usize, c_int) -> usize =
-                std::mem::transmute(vtable.add(CLIENT_GET_ENTITY_SLOT).read());
-            return get(list, 0);
+    pub(crate) unsafe fn world_entity() -> usize {
+        unsafe {
+            let list = CLIENT_ENTITY_LIST.load(Ordering::Relaxed);
+            if list != 0 {
+                // Client realm: entity 0 of the client's entity list.
+                let vtable = (list as *const *const usize).read();
+                let get: unsafe extern "win64" fn(usize, c_int) -> usize =
+                    std::mem::transmute(vtable.add(CLIENT_GET_ENTITY_SLOT).read());
+                return get(list, 0);
+            }
+            let g = ENTITY_ARRAY_GLOBAL.load(Ordering::Relaxed);
+            if g == 0 {
+                return 0;
+            }
+            let array = (g as *const usize).read_unaligned();
+            if array == 0 {
+                return 0;
+            }
+            ((array + 8) as *const usize).read_unaligned()
         }
-        let g = ENTITY_ARRAY_GLOBAL.load(Ordering::Relaxed);
-        if g == 0 {
-            return 0;
-        }
-        let array = (g as *const usize).read_unaligned();
-        if array == 0 {
-            return 0;
-        }
-        ((array + 8) as *const usize).read_unaligned()
-    }}
+    }
 
     /// Every match of a signature in the executable sections.
-    pub(crate) unsafe fn scan_sig_all(base: *const u8, sig: &str) -> Result<Vec<*mut u8>, &'static str> { unsafe {
-        let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-        let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-        if rd16(0) != 0x5A4D {
-            return Err("module has no MZ header");
-        }
-        let nt = rd32(0x3C) as usize;
-        if rd32(nt) != 0x0000_4550 {
-            return Err("module has no PE header");
-        }
-        if rd16(nt + 24) != 0x20B {
-            return Err("module is not a 64-bit PE image");
-        }
-        let nsec = rd16(nt + 6) as usize;
-        let optsz = rd16(nt + 20) as usize;
-        let sections = nt + 24 + optsz;
-        let pat = parse_sig(sig);
-        let mut found: Vec<*mut u8> = Vec::new();
-        for i in 0..nsec {
-            let s = sections + i * 40;
-            let vsize = rd32(s + 8) as usize;
-            let va = rd32(s + 12) as usize;
-            let chars = rd32(s + 36);
-            if chars & 0x2000_0000 == 0 {
-                continue;
+    pub(crate) unsafe fn scan_sig_all(
+        base: *const u8,
+        sig: &str,
+    ) -> Result<Vec<*mut u8>, &'static str> {
+        unsafe {
+            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
+            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
+            if rd16(0) != 0x5A4D {
+                return Err("module has no MZ header");
             }
-            let region = std::slice::from_raw_parts(base.add(va), vsize);
-            for off in find_all(region, &pat) {
-                found.push(base.add(va + off).cast_mut());
+            let nt = rd32(0x3C) as usize;
+            if rd32(nt) != 0x0000_4550 {
+                return Err("module has no PE header");
             }
-        }
-        if found.is_empty() {
-            return Err("signature not found (different server.dll build?)");
-        }
-        Ok(found)
-    }}
-
-    /// Same, for any signature.
-    pub(crate) unsafe fn scan_sig(base: *const u8, sig: &str) -> Result<*mut u8, &'static str> { unsafe {
-        let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-        let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-        if rd16(0) != 0x5A4D {
-            return Err("module has no MZ header");
-        }
-        let nt = rd32(0x3C) as usize;
-        if rd32(nt) != 0x0000_4550 {
-            return Err("module has no PE header");
-        }
-        if rd16(nt + 24) != 0x20B {
-            return Err("module is not a 64-bit PE image");
-        }
-        let nsec = rd16(nt + 6) as usize;
-        let optsz = rd16(nt + 20) as usize;
-        let sections = nt + 24 + optsz;
-        let pat = parse_sig(sig);
-        let mut found: Vec<*mut u8> = Vec::new();
-        for i in 0..nsec {
-            let s = sections + i * 40;
-            let vsize = rd32(s + 8) as usize;
-            let va = rd32(s + 12) as usize;
-            let chars = rd32(s + 36);
-            if chars & 0x2000_0000 == 0 {
-                continue; // not executable
+            if rd16(nt + 24) != 0x20B {
+                return Err("module is not a 64-bit PE image");
             }
-            let region = std::slice::from_raw_parts(base.add(va), vsize);
-            for off in find_all(region, &pat) {
-                found.push(base.add(va + off).cast_mut());
-            }
-        }
-        match found.len() {
-            1 => Ok(found[0]),
-            0 => Err("signature not found (different server.dll build?)"),
-            _ => Err("signature is ambiguous"),
-        }
-    }}
-
-    /// Detours `target`. Returns the original bytes for [`uninstall`].
-    pub(crate) unsafe fn install(target: *mut u8, p: &Platform) -> Result<[u8; STOLEN], &'static str> { unsafe {
-        let pat = parse_sig(SIG);
-        let mut original = [0u8; STOLEN];
-        original.copy_from_slice(std::slice::from_raw_parts(target, STOLEN));
-        for (i, want) in pat.iter().take(STOLEN).enumerate() {
-            if let Some(w) = want {
-                if original[i] != *w {
-                    return Err("function prologue does not match");
+            let nsec = rd16(nt + 6) as usize;
+            let optsz = rd16(nt + 20) as usize;
+            let sections = nt + 24 + optsz;
+            let pat = parse_sig(sig);
+            let mut found: Vec<*mut u8> = Vec::new();
+            for i in 0..nsec {
+                let s = sections + i * 40;
+                let vsize = rd32(s + 8) as usize;
+                let va = rd32(s + 12) as usize;
+                let chars = rd32(s + 36);
+                if chars & 0x2000_0000 == 0 {
+                    continue;
+                }
+                let region = std::slice::from_raw_parts(base.add(va), vsize);
+                for off in find_all(region, &pat) {
+                    found.push(base.add(va + off).cast_mut());
                 }
             }
+            if found.is_empty() {
+                return Err("signature not found (different server.dll build?)");
+            }
+            Ok(found)
         }
+    }
 
-        let tramp = (p.alloc_exec)(64);
-        if tramp.is_null() {
-            return Err("could not allocate executable memory");
+    /// Same, for any signature.
+    pub(crate) unsafe fn scan_sig(base: *const u8, sig: &str) -> Result<*mut u8, &'static str> {
+        unsafe {
+            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
+            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
+            if rd16(0) != 0x5A4D {
+                return Err("module has no MZ header");
+            }
+            let nt = rd32(0x3C) as usize;
+            if rd32(nt) != 0x0000_4550 {
+                return Err("module has no PE header");
+            }
+            if rd16(nt + 24) != 0x20B {
+                return Err("module is not a 64-bit PE image");
+            }
+            let nsec = rd16(nt + 6) as usize;
+            let optsz = rd16(nt + 20) as usize;
+            let sections = nt + 24 + optsz;
+            let pat = parse_sig(sig);
+            let mut found: Vec<*mut u8> = Vec::new();
+            for i in 0..nsec {
+                let s = sections + i * 40;
+                let vsize = rd32(s + 8) as usize;
+                let va = rd32(s + 12) as usize;
+                let chars = rd32(s + 36);
+                if chars & 0x2000_0000 == 0 {
+                    continue; // not executable
+                }
+                let region = std::slice::from_raw_parts(base.add(va), vsize);
+                for off in find_all(region, &pat) {
+                    found.push(base.add(va + off).cast_mut());
+                }
+            }
+            match found.len() {
+                1 => Ok(found[0]),
+                0 => Err("signature not found (different server.dll build?)"),
+                _ => Err("signature is ambiguous"),
+            }
         }
-        let tb = build_trampoline(&original, target as u64 + STOLEN as u64);
-        std::ptr::copy_nonoverlapping(tb.as_ptr(), tramp, tb.len());
-        (p.flush)(tramp, tb.len());
-        TRAMPOLINE.store(tramp as usize, Ordering::SeqCst);
+    }
 
-        let Some(old) = (p.make_writable)(target, STOLEN) else {
-            return Err("could not make the function writable");
-        };
-        let detour = build_detour(hook_set_water_level as *const () as usize as u64);
-        std::ptr::copy_nonoverlapping(detour.as_ptr(), target, STOLEN);
-        (p.restore_protect)(target, STOLEN, old);
-        (p.flush)(target, STOLEN);
-        Ok(original)
-    }}
+    /// Detours `target`. Returns the original bytes for [`uninstall`].
+    pub(crate) unsafe fn install(
+        target: *mut u8,
+        p: &Platform,
+    ) -> Result<[u8; STOLEN], &'static str> {
+        unsafe {
+            let pat = parse_sig(SIG);
+            let mut original = [0u8; STOLEN];
+            original.copy_from_slice(std::slice::from_raw_parts(target, STOLEN));
+            for (i, want) in pat.iter().take(STOLEN).enumerate() {
+                if let Some(w) = want {
+                    if original[i] != *w {
+                        return Err("function prologue does not match");
+                    }
+                }
+            }
 
-    pub(crate) unsafe fn uninstall(target: *mut u8, original: &[u8; STOLEN], p: &Platform) { unsafe {
-        if let Some(old) = (p.make_writable)(target, STOLEN) {
-            std::ptr::copy_nonoverlapping(original.as_ptr(), target, STOLEN);
+            let tramp = (p.alloc_exec)(64);
+            if tramp.is_null() {
+                return Err("could not allocate executable memory");
+            }
+            let tb = build_trampoline(&original, target as u64 + STOLEN as u64);
+            std::ptr::copy_nonoverlapping(tb.as_ptr(), tramp, tb.len());
+            (p.flush)(tramp, tb.len());
+            TRAMPOLINE.store(tramp as usize, Ordering::SeqCst);
+
+            let Some(old) = (p.make_writable)(target, STOLEN) else {
+                return Err("could not make the function writable");
+            };
+            let detour = build_detour(hook_set_water_level as *const () as usize as u64);
+            std::ptr::copy_nonoverlapping(detour.as_ptr(), target, STOLEN);
             (p.restore_protect)(target, STOLEN, old);
             (p.flush)(target, STOLEN);
+            Ok(original)
         }
-    }}
+    }
+
+    pub(crate) unsafe fn uninstall(target: *mut u8, original: &[u8; STOLEN], p: &Platform) {
+        unsafe {
+            if let Some(old) = (p.make_writable)(target, STOLEN) {
+                std::ptr::copy_nonoverlapping(original.as_ptr(), target, STOLEN);
+                (p.restore_protect)(target, STOLEN, old);
+                (p.flush)(target, STOLEN);
+            }
+        }
+    }
 
     // ---- Fluid controllers (buoyancy) --------------------------------------
     //
@@ -976,10 +1087,12 @@ mod engine_hook {
     pub(crate) const DESTROY_FLUID_SLOT: usize = 12;
 
     /// Address of the engine's `physenv` variable.
-    pub(crate) unsafe fn physenv_global_from(func: *const u8) -> *const *mut c_void { unsafe {
-        let disp = func.add(3).cast::<i32>().read_unaligned() as isize;
-        func.offset(7 + disp).cast::<*mut c_void>()
-    }}
+    pub(crate) const unsafe fn physenv_global_from(func: *const u8) -> *const *mut c_void {
+        unsafe {
+            let disp = func.add(3).cast::<i32>().read_unaligned() as isize;
+            func.offset(7 + disp).cast::<*mut c_void>()
+        }
+    }
 
     /// `fluidparams_t` (x64 layout).
     #[repr(C)]
@@ -994,18 +1107,21 @@ mod engine_hook {
         pub contents: i32,
     }
 
-    type CreateFluidFn = unsafe extern "win64" fn(*mut c_void, *mut c_void, *const FluidParams) -> *mut c_void;
+    type CreateFluidFn =
+        unsafe extern "win64" fn(*mut c_void, *mut c_void, *const FluidParams) -> *mut c_void;
     type DestroyFluidFn = unsafe extern "win64" fn(*mut c_void, *mut c_void);
 
     pub(crate) unsafe fn create_fluid(
         env: *mut c_void,
         object: *mut c_void,
         params: &FluidParams,
-    ) -> *mut c_void { unsafe {
-        let vtable = (env as *const *const usize).read();
-        let f: CreateFluidFn = std::mem::transmute(vtable.add(CREATE_FLUID_SLOT).read());
-        f(env, object, params)
-    }}
+    ) -> *mut c_void {
+        unsafe {
+            let vtable = (env as *const *const usize).read();
+            let f: CreateFluidFn = std::mem::transmute(vtable.add(CREATE_FLUID_SLOT).read());
+            f(env, object, params)
+        }
+    }
 
     /// `IPhysicsObject` vtable slots (confirmed in the world water setup:
     /// `call [rbx+0xb8]`, `or ax,0x200`, `call [rbx+0xb0]`).
@@ -1019,20 +1135,26 @@ mod engine_hook {
     type SetFlagsFn = unsafe extern "win64" fn(*mut c_void, u16);
 
     /// Mirrors the engine's setup of a water object. Returns the old flags.
-    pub(crate) unsafe fn add_fluid_callback_flag(object: *mut c_void) -> u16 { unsafe {
-        let vtable = (object as *const *const usize).read();
-        let get: GetFlagsFn = std::mem::transmute(vtable.add(OBJ_GET_CALLBACK_FLAGS_SLOT).read());
-        let set: SetFlagsFn = std::mem::transmute(vtable.add(OBJ_SET_CALLBACK_FLAGS_SLOT).read());
-        let old = get(object);
-        set(object, old | FLUID_OBJECT_CALLBACK_FLAG);
-        old
-    }}
+    pub(crate) unsafe fn add_fluid_callback_flag(object: *mut c_void) -> u16 {
+        unsafe {
+            let vtable = (object as *const *const usize).read();
+            let get: GetFlagsFn =
+                std::mem::transmute(vtable.add(OBJ_GET_CALLBACK_FLAGS_SLOT).read());
+            let set: SetFlagsFn =
+                std::mem::transmute(vtable.add(OBJ_SET_CALLBACK_FLAGS_SLOT).read());
+            let old = get(object);
+            set(object, old | FLUID_OBJECT_CALLBACK_FLAG);
+            old
+        }
+    }
 
-    pub(crate) unsafe fn destroy_fluid(env: *mut c_void, fluid: *mut c_void) { unsafe {
-        let vtable = (env as *const *const usize).read();
-        let f: DestroyFluidFn = std::mem::transmute(vtable.add(DESTROY_FLUID_SLOT).read());
-        f(env, fluid);
-    }}
+    pub(crate) unsafe fn destroy_fluid(env: *mut c_void, fluid: *mut c_void) {
+        unsafe {
+            let vtable = (env as *const *const usize).read();
+            let f: DestroyFluidFn = std::mem::transmute(vtable.add(DESTROY_FLUID_SLOT).read());
+            f(env, fluid);
+        }
+    }
 
     // ---- CCollisionEvent::FluidEndTouch(IPhysicsObject *, IPhysicsFluidController *) --
     //
@@ -1070,7 +1192,9 @@ mod engine_hook {
     const DEAD_FLUIDS_MAX: usize = 256;
 
     pub(crate) fn fluid_died(controller: usize, contents: c_int) {
-        let mut dead = DEAD_FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut dead = DEAD_FLUIDS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         dead.retain(|d| d.0 != controller);
         if dead.len() >= DEAD_FLUIDS_MAX {
             dead.remove(0);
@@ -1080,40 +1204,58 @@ mod engine_hook {
 
     /// A new controller may reuse a dead one's address.
     pub(crate) fn fluid_born(controller: usize) {
-        DEAD_FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|d| d.0 != controller);
+        DEAD_FLUIDS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|d| d.0 != controller);
     }
 
     pub(crate) fn forget_dead_fluids() {
-        DEAD_FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        DEAD_FLUIDS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
-    pub(crate) unsafe extern "win64" fn hook_fluid_end_touch(this: *mut c_void, object: *mut c_void, fluid: *mut c_void) { unsafe {
-        // Never block inside an engine callback.
-        let dead = DEAD_FLUIDS
-            .try_lock()
-            .ok()
-            .and_then(|d| d.iter().find(|e| e.0 == fluid as usize).map(|e| e.1));
-        let Some(contents) = dead else {
-            let original: unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut c_void) =
-                std::mem::transmute(FLUID_END_TOUCH_TRAMPOLINE.load(Ordering::Relaxed));
-            original(this, object, fluid);
-            return;
-        };
-        if object.is_null() {
-            return;
+    pub(crate) unsafe extern "win64" fn hook_fluid_end_touch(
+        this: *mut c_void,
+        object: *mut c_void,
+        fluid: *mut c_void,
+    ) {
+        unsafe {
+            // Never block inside an engine callback.
+            let dead = DEAD_FLUIDS
+                .try_lock()
+                .ok()
+                .and_then(|d| d.iter().find(|e| e.0 == fluid as usize).map(|e| e.1));
+            let Some(contents) = dead else {
+                let original: unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut c_void) =
+                    std::mem::transmute(FLUID_END_TOUCH_TRAMPOLINE.load(Ordering::Relaxed));
+                original(this, object, fluid);
+                return;
+            };
+            if object.is_null() {
+                return;
+            }
+            let get_game_data: unsafe extern "win64" fn(*mut c_void) -> *mut u8 =
+                std::mem::transmute(
+                    *(*(object as *const *const usize)).add(OBJ_GET_GAME_DATA_SLOT),
+                );
+            let entity = get_game_data(object);
+            if entity.is_null() {
+                return;
+            }
+            let flags = entity.add(ENTITY_EFLAGS_OFFSET).cast::<u32>();
+            flags.write_unaligned(flags.read_unaligned() & !EFL_TOUCHING_FLUID);
+            let on_event: unsafe extern "win64" fn(*mut u8, c_int, *mut c_void) =
+                std::mem::transmute(*(*(entity as *const *const usize)).add(ENTITY_EVENT_SLOT));
+            on_event(
+                entity,
+                ENTITY_EVENT_WATER_UNTOUCH,
+                contents as isize as *mut c_void,
+            );
         }
-        let get_game_data: unsafe extern "win64" fn(*mut c_void) -> *mut u8 =
-            std::mem::transmute(*(*(object as *const *const usize)).add(OBJ_GET_GAME_DATA_SLOT));
-        let entity = get_game_data(object);
-        if entity.is_null() {
-            return;
-        }
-        let flags = entity.add(ENTITY_EFLAGS_OFFSET).cast::<u32>();
-        flags.write_unaligned(flags.read_unaligned() & !EFL_TOUCHING_FLUID);
-        let on_event: unsafe extern "win64" fn(*mut u8, c_int, *mut c_void) =
-            std::mem::transmute(*(*(entity as *const *const usize)).add(ENTITY_EVENT_SLOT));
-        on_event(entity, ENTITY_EVENT_WATER_UNTOUCH, contents as isize as *mut c_void);
-    }}
+    }
 
     // ---- UTIL_BubbleTrail(const Vector &from, const Vector &to, int count) --
     //
@@ -1129,7 +1271,8 @@ mod engine_hook {
     // The hook clips the segment to the volume it is in (or enters) first and
     // scales `count` by the kept fraction; everything else is left alone.
 
-    pub(crate) const BUBBLE_TRAIL_SIG: &str = "48 8B C4 48 89 58 08 48 89 70 10 57 48 81 EC E0 00 00 00 \
+    pub(crate) const BUBBLE_TRAIL_SIG: &str =
+        "48 8B C4 48 89 58 08 48 89 70 10 57 48 81 EC E0 00 00 00 \
                                         F3 0F 10 49 08 41 8B F0 0F 29 70 E8 0F 28 D1 \
                                         F3 0F 58 15 ?? ?? ?? ?? 0F 29 78 D8 48 8B FA \
                                         44 0F 29 48 B8 48 8B D9 E8";
@@ -1154,49 +1297,61 @@ mod engine_hook {
         stolen: usize,
         hook: usize,
         p: &Platform,
-    ) -> Result<Patch, &'static str> { unsafe {
-        assert!(stolen >= 14);
-        let pat = parse_sig(sig);
-        let original = std::slice::from_raw_parts(target, stolen).to_vec();
-        for (i, want) in pat.iter().take(stolen).enumerate() {
-            if let Some(w) = want {
-                if original[i] != *w {
-                    return Err("function prologue does not match");
+    ) -> Result<Patch, &'static str> {
+        unsafe {
+            assert!(stolen >= 14);
+            let pat = parse_sig(sig);
+            let original = std::slice::from_raw_parts(target, stolen).to_vec();
+            for (i, want) in pat.iter().take(stolen).enumerate() {
+                if let Some(w) = want {
+                    if original[i] != *w {
+                        return Err("function prologue does not match");
+                    }
                 }
             }
-        }
-        let tramp = (p.alloc_exec)(64);
-        if tramp.is_null() {
-            return Err("could not allocate executable memory");
-        }
-        let mut tb = original.clone();
-        tb.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
-        tb.extend_from_slice(&(target as u64 + stolen as u64).to_le_bytes());
-        std::ptr::copy_nonoverlapping(tb.as_ptr(), tramp, tb.len());
-        (p.flush)(tramp, tb.len());
+            let tramp = (p.alloc_exec)(64);
+            if tramp.is_null() {
+                return Err("could not allocate executable memory");
+            }
+            let mut tb = original.clone();
+            tb.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
+            tb.extend_from_slice(&(target as u64 + stolen as u64).to_le_bytes());
+            std::ptr::copy_nonoverlapping(tb.as_ptr(), tramp, tb.len());
+            (p.flush)(tramp, tb.len());
 
-        let mut detour = vec![0x90u8; stolen];
-        detour[0] = 0xFF;
-        detour[1] = 0x25;
-        detour[2..6].copy_from_slice(&0u32.to_le_bytes()); // jmp [rip+0]
-        detour[6..14].copy_from_slice(&(hook as u64).to_le_bytes());
-        let Some(old) = (p.make_writable)(target, stolen) else {
-            return Err("could not make the function writable");
-        };
-        std::ptr::copy_nonoverlapping(detour.as_ptr(), target, stolen);
-        (p.restore_protect)(target, stolen, old);
-        (p.flush)(target, stolen);
-        Ok(Patch { target: target as usize, original, trampoline: tramp as usize })
-    }}
-
-    pub(crate) unsafe fn uninstall_patch(patch: &Patch, p: &Platform) { unsafe {
-        let target = patch.target as *mut u8;
-        if let Some(old) = (p.make_writable)(target, patch.original.len()) {
-            std::ptr::copy_nonoverlapping(patch.original.as_ptr(), target, patch.original.len());
-            (p.restore_protect)(target, patch.original.len(), old);
-            (p.flush)(target, patch.original.len());
+            let mut detour = vec![0x90u8; stolen];
+            detour[0] = 0xFF;
+            detour[1] = 0x25;
+            detour[2..6].copy_from_slice(&0u32.to_le_bytes()); // jmp [rip+0]
+            detour[6..14].copy_from_slice(&(hook as u64).to_le_bytes());
+            let Some(old) = (p.make_writable)(target, stolen) else {
+                return Err("could not make the function writable");
+            };
+            std::ptr::copy_nonoverlapping(detour.as_ptr(), target, stolen);
+            (p.restore_protect)(target, stolen, old);
+            (p.flush)(target, stolen);
+            Ok(Patch {
+                target: target as usize,
+                original,
+                trampoline: tramp as usize,
+            })
         }
-    }}
+    }
+
+    pub(crate) unsafe fn uninstall_patch(patch: &Patch, p: &Platform) {
+        unsafe {
+            let target = patch.target as *mut u8;
+            if let Some(old) = (p.make_writable)(target, patch.original.len()) {
+                std::ptr::copy_nonoverlapping(
+                    patch.original.as_ptr(),
+                    target,
+                    patch.original.len(),
+                );
+                (p.restore_protect)(target, patch.original.len(), old);
+                (p.flush)(target, patch.original.len());
+            }
+        }
+    }
 
     /// Parameter interval `[t0, t1]` (clamped to 0..1) in which the segment
     /// `s + t*d` lies inside the box. `None` if it never does.
@@ -1239,7 +1394,7 @@ mod engine_hook {
 
     pub(crate) fn clip_bubble_trail(vols: &[Volume], from: [f32; 3], to: [f32; 3]) -> BubbleClip {
         let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
-        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let len = d[2].mul_add(d[2], d[1].mul_add(d[1], d[0] * d[0])).sqrt();
         if len.is_nan() || len <= 1e-3 {
             return BubbleClip::Keep;
         }
@@ -1277,42 +1432,62 @@ mod engine_hook {
         if b <= a {
             return BubbleClip::Skip;
         }
-        let at = |t: f32| [from[0] + d[0] * t, from[1] + d[1] * t, from[2] + d[2] * t];
+        let at = |t: f32| {
+            [
+                d[0].mul_add(t, from[0]),
+                d[1].mul_add(t, from[1]),
+                d[2].mul_add(t, from[2]),
+            ]
+        };
         BubbleClip::Clipped(at(a), at(b), b - a)
     }
 
     /// Replacement for `UTIL_BubbleTrail` (Windows x64 convention).
-    pub(crate) unsafe extern "win64" fn hook_bubble_trail(from: *const f32, to: *const f32, count: c_int) { unsafe {
-        let original: unsafe extern "win64" fn(*const f32, *const f32, c_int) =
-            std::mem::transmute(BUBBLE_TRAMPOLINE.load(Ordering::Relaxed));
-        let mut action = BubbleClip::Keep;
-        if !from.is_null() && !to.is_null() {
-            let f = [
-                from.read_unaligned(),
-                from.add(1).read_unaligned(),
-                from.add(2).read_unaligned(),
-            ];
-            let t = [to.read_unaligned(), to.add(1).read_unaligned(), to.add(2).read_unaligned()];
-            // The lock must be gone before calling the original: it calls back
-            // into the point-contents hook, which uses try_lock.
-            if let Ok(vols) = VOLUMES.try_lock() {
-                if !vols.is_empty() {
-                    action = clip_bubble_trail(&vols, f, t);
+    pub(crate) unsafe extern "win64" fn hook_bubble_trail(
+        from: *const f32,
+        to: *const f32,
+        count: c_int,
+    ) {
+        unsafe {
+            let original: unsafe extern "win64" fn(*const f32, *const f32, c_int) =
+                std::mem::transmute(BUBBLE_TRAMPOLINE.load(Ordering::Relaxed));
+            let mut action = BubbleClip::Keep;
+            if !from.is_null() && !to.is_null() {
+                let f = [
+                    from.read_unaligned(),
+                    from.add(1).read_unaligned(),
+                    from.add(2).read_unaligned(),
+                ];
+                let t = [
+                    to.read_unaligned(),
+                    to.add(1).read_unaligned(),
+                    to.add(2).read_unaligned(),
+                ];
+                // The lock must be gone before calling the original: it calls back
+                // into the point-contents hook, which uses try_lock.
+                if let Ok(vols) = VOLUMES.try_lock() {
+                    if !vols.is_empty() {
+                        action = clip_bubble_trail(&vols, f, t);
+                    }
+                }
+            }
+            match action {
+                BubbleClip::Keep => original(from, to, count),
+                BubbleClip::Skip => {
+                    BUBBLE_CLIPS.fetch_add(1, Ordering::Relaxed);
+                }
+                BubbleClip::Clipped(a, b, frac) => {
+                    BUBBLE_CLIPS.fetch_add(1, Ordering::Relaxed);
+                    let n = if count > 0 {
+                        ((count as f32 * frac).ceil() as c_int).max(1)
+                    } else {
+                        count
+                    };
+                    original(a.as_ptr(), b.as_ptr(), n);
                 }
             }
         }
-        match action {
-            BubbleClip::Keep => original(from, to, count),
-            BubbleClip::Skip => {
-                BUBBLE_CLIPS.fetch_add(1, Ordering::Relaxed);
-            }
-            BubbleClip::Clipped(a, b, frac) => {
-                BUBBLE_CLIPS.fetch_add(1, Ordering::Relaxed);
-                let n = if count > 0 { ((count as f32 * frac).ceil() as c_int).max(1) } else { count };
-                original(a.as_ptr(), b.as_ptr(), n);
-            }
-        }
-    }}
+    }
 
     // ---- Explosions ------------------------------------------------------
     //
@@ -1347,60 +1522,89 @@ mod engine_hook {
     pub(crate) unsafe fn find_explosion_target(
         base: *const u8,
         i: usize,
-    ) -> Result<(*mut u8, &'static str, usize), &'static str> { unsafe {
-        let mut last = "signature not found (different server.dll build?)";
-        for (sig, stolen) in EXPLOSION_TARGETS[i] {
-            match scan_sig(base, sig) {
-                Ok(at) => return Ok((at, *sig, *stolen)),
-                Err(e) => last = e,
+    ) -> Result<(*mut u8, &'static str, usize), &'static str> {
+        unsafe {
+            let mut last = "signature not found (different server.dll build?)";
+            for (sig, stolen) in EXPLOSION_TARGETS[i] {
+                match scan_sig(base, sig) {
+                    Ok(at) => return Ok((at, *sig, *stolen)),
+                    Err(e) => last = e,
+                }
             }
+            Err(last)
         }
-        Err(last)
-    }}
-    pub(crate) static EXPLOSION_TRAMPOLINES: [AtomicUsize; 3] =
-        [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
+    }
+    pub(crate) static EXPLOSION_TRAMPOLINES: [AtomicUsize; 3] = [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ];
     pub(crate) static EXPLOSION_FIXES: AtomicU64 = AtomicU64::new(0);
     pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2ab;
     pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x33c;
 
     /// Raises `this`'s water level to 2 if its origin is in a volume.
-    pub(crate) unsafe fn raise_water_level_in_volume(this: *mut u8) { unsafe {
-        if this.is_null() {
-            return;
-        }
-        let o = this.add(ENTITY_ORIGIN_OFFSET) as *const f32;
-        let p = [o.read_unaligned(), o.add(1).read_unaligned(), o.add(2).read_unaligned()];
-        // try_lock: never wait (the original calls back into the contents hook).
-        let inside = match VOLUMES.try_lock() {
-            Ok(v) => !v.is_empty() && point_in_volumes(&v, p),
-            Err(_) => false,
-        };
-        if inside {
-            let level = this.add(ENTITY_WATER_LEVEL_OFFSET);
-            if level.read() < 2 {
-                level.write(2);
-                EXPLOSION_FIXES.fetch_add(1, Ordering::Relaxed);
+    pub(crate) unsafe fn raise_water_level_in_volume(this: *mut u8) {
+        unsafe {
+            if this.is_null() {
+                return;
+            }
+            let o = this.add(ENTITY_ORIGIN_OFFSET) as *const f32;
+            let p = [
+                o.read_unaligned(),
+                o.add(1).read_unaligned(),
+                o.add(2).read_unaligned(),
+            ];
+            // try_lock: never wait (the original calls back into the contents hook).
+            let inside = VOLUMES
+                .try_lock()
+                .is_ok_and(|v| !v.is_empty() && point_in_volumes(&v, p));
+            if inside {
+                let level = this.add(ENTITY_WATER_LEVEL_OFFSET);
+                if level.read() < 2 {
+                    level.write(2);
+                    EXPLOSION_FIXES.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
-    }}
+    }
 
     type ExplosionFn = unsafe extern "win64" fn(*mut u8, usize, usize, usize) -> usize;
 
-    unsafe fn explosion_hook(i: usize, this: *mut u8, a: usize, b: usize, c: usize) -> usize { unsafe {
-        raise_water_level_in_volume(this);
-        let original: ExplosionFn = std::mem::transmute(EXPLOSION_TRAMPOLINES[i].load(Ordering::Relaxed));
-        original(this, a, b, c)
-    }}
-    pub(crate) unsafe extern "win64" fn hook_explosion0(t: *mut u8, a: usize, b: usize, c: usize) -> usize { unsafe {
-        explosion_hook(0, t, a, b, c)
-    }}
-    pub(crate) unsafe extern "win64" fn hook_explosion1(t: *mut u8, a: usize, b: usize, c: usize) -> usize { unsafe {
-        explosion_hook(1, t, a, b, c)
-    }}
-    pub(crate) unsafe extern "win64" fn hook_explosion2(t: *mut u8, a: usize, b: usize, c: usize) -> usize { unsafe {
-        explosion_hook(2, t, a, b, c)
-    }}
-    pub(crate) const EXPLOSION_HOOKS: [ExplosionFn; 3] = [hook_explosion0, hook_explosion1, hook_explosion2];
+    unsafe fn explosion_hook(i: usize, this: *mut u8, a: usize, b: usize, c: usize) -> usize {
+        unsafe {
+            raise_water_level_in_volume(this);
+            let original: ExplosionFn =
+                std::mem::transmute(EXPLOSION_TRAMPOLINES[i].load(Ordering::Relaxed));
+            original(this, a, b, c)
+        }
+    }
+    pub(crate) unsafe extern "win64" fn hook_explosion0(
+        t: *mut u8,
+        a: usize,
+        b: usize,
+        c: usize,
+    ) -> usize {
+        unsafe { explosion_hook(0, t, a, b, c) }
+    }
+    pub(crate) unsafe extern "win64" fn hook_explosion1(
+        t: *mut u8,
+        a: usize,
+        b: usize,
+        c: usize,
+    ) -> usize {
+        unsafe { explosion_hook(1, t, a, b, c) }
+    }
+    pub(crate) unsafe extern "win64" fn hook_explosion2(
+        t: *mut u8,
+        a: usize,
+        b: usize,
+        c: usize,
+    ) -> usize {
+        unsafe { explosion_hook(2, t, a, b, c) }
+    }
+    pub(crate) const EXPLOSION_HOOKS: [ExplosionFn; 3] =
+        [hook_explosion0, hook_explosion1, hook_explosion2];
 
     /// DispatchEffect(const char *name, const `CEffectData` &data).
     /// Only its address is used (to send the water explosion effect), nothing is patched.
@@ -1431,65 +1635,67 @@ mod engine_hook {
     /// pointer to that locator just before the vtable. No code bytes are
     /// involved, so it does not depend on how the compiler laid out any
     /// function.
-    pub(crate) unsafe fn te_explosion_vtable(base: *const u8) -> Result<usize, &'static str> { unsafe {
-        rtti_vtable(base, b".?AVCTEExplosion@@\0")
-    }}
+    pub(crate) unsafe fn te_explosion_vtable(base: *const u8) -> Result<usize, &'static str> {
+        unsafe { rtti_vtable(base, b".?AVCTEExplosion@@\0") }
+    }
 
-    pub(crate) unsafe fn rtti_vtable(base: *const u8, name: &[u8]) -> Result<usize, &'static str> { unsafe {
-        let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-        let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-        if rd16(0) != 0x5A4D {
-            return Err("module has no MZ header");
-        }
-        let nt = rd32(0x3C) as usize;
-        let preferred = base.add(nt + 24 + 24).cast::<u64>().read_unaligned() as usize;
-        let nsec = rd16(nt + 6) as usize;
-        let sections = nt + 24 + rd16(nt + 20) as usize;
-        let mut data: Vec<(usize, &[u8])> = Vec::new(); // (rva, bytes) of non-code sections
-        for i in 0..nsec {
-            let sh = sections + i * 40;
-            let vsize = rd32(sh + 8) as usize;
-            let va = rd32(sh + 12) as usize;
-            if rd32(sh + 36) & 0x2000_0000 == 0 && rd32(sh + 36) & 0x4000_0000 != 0 {
-                data.push((va, std::slice::from_raw_parts(base.add(va), vsize)));
+    pub(crate) unsafe fn rtti_vtable(base: *const u8, name: &[u8]) -> Result<usize, &'static str> {
+        unsafe {
+            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
+            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
+            if rd16(0) != 0x5A4D {
+                return Err("module has no MZ header");
             }
-        }
-        let find = |needle: &[u8], align: usize| -> Vec<usize> {
-            let mut out = Vec::new();
-            for (va, bytes) in &data {
-                let mut i = 0;
-                while i + needle.len() <= bytes.len() {
-                    if &bytes[i..i + needle.len()] == needle && (va + i) % align == 0 {
-                        out.push(va + i);
+            let nt = rd32(0x3C) as usize;
+            let preferred = base.add(nt + 24 + 24).cast::<u64>().read_unaligned() as usize;
+            let nsec = rd16(nt + 6) as usize;
+            let sections = nt + 24 + rd16(nt + 20) as usize;
+            let mut data: Vec<(usize, &[u8])> = Vec::new(); // (rva, bytes) of non-code sections
+            for i in 0..nsec {
+                let sh = sections + i * 40;
+                let vsize = rd32(sh + 8) as usize;
+                let va = rd32(sh + 12) as usize;
+                if rd32(sh + 36) & 0x2000_0000 == 0 && rd32(sh + 36) & 0x4000_0000 != 0 {
+                    data.push((va, std::slice::from_raw_parts(base.add(va), vsize)));
+                }
+            }
+            let find = |needle: &[u8], align: usize| -> Vec<usize> {
+                let mut out = Vec::new();
+                for (va, bytes) in &data {
+                    let mut i = 0;
+                    while i + needle.len() <= bytes.len() {
+                        if &bytes[i..i + needle.len()] == needle && (va + i) % align == 0 {
+                            out.push(va + i);
+                        }
+                        i += 1;
                     }
-                    i += 1;
+                }
+                out
+            };
+            let names = find(name, 1);
+            let Some(&name_rva) = names.first() else {
+                return Err("RTTI type name not found");
+            };
+            let td_rva = (name_rva - 16) as u32;
+            for at in find(&td_rva.to_le_bytes(), 4) {
+                if at < 12 {
+                    continue;
+                }
+                let col = at - 12;
+                // complete object locator: signature 1 (x64), offset 0
+                if rd32(col) != 1 || rd32(col + 4) != 0 {
+                    continue;
+                }
+                // `vtable[-1]` holds its address: relocated, or preferred-base when only mapped.
+                for target in [base as usize + col, preferred + col] {
+                    if let Some(p) = find(&target.to_le_bytes(), 8).into_iter().next() {
+                        return Ok(base as usize + p + 8);
+                    }
                 }
             }
-            out
-        };
-        let names = find(name, 1);
-        let Some(&name_rva) = names.first() else {
-            return Err("RTTI type name not found");
-        };
-        let td_rva = (name_rva - 16) as u32;
-        for at in find(&td_rva.to_le_bytes(), 4) {
-            if at < 12 {
-                continue;
-            }
-            let col = at - 12;
-            // complete object locator: signature 1 (x64), offset 0
-            if rd32(col) != 1 || rd32(col + 4) != 0 {
-                continue;
-            }
-            // `vtable[-1]` holds its address: relocated, or preferred-base when only mapped.
-            for target in [base as usize + col, preferred + col] {
-                if let Some(p) = find(&target.to_le_bytes(), 8).into_iter().next() {
-                    return Ok(base as usize + p + 8);
-                }
-            }
+            Err("CTEExplosion vtable not found")
         }
-        Err("CTEExplosion vtable not found")
-    }}
+    }
 
     /// Fills a `CEffectData` the way the engine does for the water explosion
     /// (flags 0x428, scale 128, magnitude 50; byte at +0x88 set).
@@ -1501,7 +1707,12 @@ mod engine_hook {
     /// Same layout the client's own in-water path hands to the water explosion
     /// (flags, scale and magnitude are the temp entity's). The client plays
     /// WaterExplosionEffect.Sound only when scale > 128, else the base sound.
-    pub(crate) fn water_explosion_effect_data_with(origin: [f32; 3], flags: u32, scale: f32, magnitude: f32) -> [u8; 0xa0] {
+    pub(crate) fn water_explosion_effect_data_with(
+        origin: [f32; 3],
+        flags: u32,
+        scale: f32,
+        magnitude: f32,
+    ) -> [u8; 0xa0] {
         let mut d = [0u8; 0xa0];
         for (i, v) in origin.iter().enumerate() {
             d[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
@@ -1520,58 +1731,82 @@ mod engine_hook {
     pub(crate) const EFFECT_START_OFFSET: usize = 0x0c;
 
     /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
-    pub(crate) unsafe fn redirect_explosion(this: *const u8) -> bool { unsafe {
-        let dispatch = DISPATCH_EFFECT_ADDR.load(Ordering::Relaxed);
-        if this.is_null() || dispatch == 0 {
-            return false;
+    pub(crate) unsafe fn redirect_explosion(this: *const u8) -> bool {
+        unsafe {
+            let dispatch = DISPATCH_EFFECT_ADDR.load(Ordering::Relaxed);
+            if this.is_null() || dispatch == 0 {
+                return false;
+            }
+            let o = this.add(TE_ORIGIN_OFFSET).cast::<f32>();
+            let origin = [
+                o.read_unaligned(),
+                o.add(1).read_unaligned(),
+                o.add(2).read_unaligned(),
+            ];
+            let surface = VOLUMES
+                .try_lock()
+                .ok()
+                .and_then(|v| surface_z_at(&v, origin));
+            let Some(surface) = surface else {
+                return false;
+            };
+            // The engine's water explosion is centred on the water surface.
+            // CTEExplosion fields: scale f32 @0x28, flags u32 @0x2c, magnitude i32 @0x34.
+            let scale = this.add(0x28).cast::<f32>().read_unaligned();
+            let flags = this.add(0x2c).cast::<u32>().read_unaligned();
+            let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
+            let mut data = water_explosion_effect_data_with(
+                [origin[0], origin[1], surface],
+                flags,
+                scale,
+                magnitude,
+            );
+            for (i, v) in origin.iter().enumerate() {
+                data[EFFECT_START_OFFSET + i * 4..EFFECT_START_OFFSET + i * 4 + 4]
+                    .copy_from_slice(&v.to_le_bytes());
+            }
+            let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
+            f(c"WaterSurfaceExplosion".as_ptr().cast(), data.as_ptr());
+            EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
+            true
         }
-        let o = this.add(TE_ORIGIN_OFFSET).cast::<f32>();
-        let origin = [o.read_unaligned(), o.add(1).read_unaligned(), o.add(2).read_unaligned()];
-        let surface = match VOLUMES.try_lock() {
-            Ok(v) => surface_z_at(&v, origin),
-            Err(_) => None,
-        };
-        let Some(surface) = surface else {
-            return false;
-        };
-        // The engine's water explosion is centred on the water surface.
-        // CTEExplosion fields: scale f32 @0x28, flags u32 @0x2c, magnitude i32 @0x34.
-        let scale = this.add(0x28).cast::<f32>().read_unaligned();
-        let flags = this.add(0x2c).cast::<u32>().read_unaligned();
-        let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
-        let mut data = water_explosion_effect_data_with([origin[0], origin[1], surface], flags, scale, magnitude);
-        for (i, v) in origin.iter().enumerate() {
-            data[EFFECT_START_OFFSET + i * 4..EFFECT_START_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
-        }
-        let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
-        f(c"WaterSurfaceExplosion".as_ptr().cast(), data.as_ptr());
-        EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
-        true
-    }}
+    }
 
     /// `CBaseTempEntity::Create(this`, filter, delay): every temp entity goes
     /// through it (`CTempEnts::Explosion` jumps straight to it, so the vtable
     /// slot is never used). Only `CTEExplosion` objects are looked at.
-    pub(crate) const TE_CREATE_SIG: &str = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 \
+    pub(crate) const TE_CREATE_SIG: &str =
+        "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 \
                                      48 8B 05 ?? ?? ?? ?? 48 8B EA 0F 29 74 24 30";
     pub(crate) const TE_CREATE_STOLEN: usize = 20;
     pub(crate) static TE_EXPLOSION_VTABLE: AtomicUsize = AtomicUsize::new(0);
 
-    pub(crate) unsafe extern "win64" fn hook_te_create(this: *mut u8, filter: *mut c_void, delay: f32) { unsafe {
-        let vtable = TE_EXPLOSION_VTABLE.load(Ordering::Relaxed);
-        if vtable != 0 && !this.is_null() && (this as *const usize).read() == vtable && redirect_explosion(this) {
-            return;
+    pub(crate) unsafe extern "win64" fn hook_te_create(
+        this: *mut u8,
+        filter: *mut c_void,
+        delay: f32,
+    ) {
+        unsafe {
+            let vtable = TE_EXPLOSION_VTABLE.load(Ordering::Relaxed);
+            if vtable != 0
+                && !this.is_null()
+                && (this as *const usize).read() == vtable
+                && redirect_explosion(this)
+            {
+                return;
+            }
+            let original: unsafe extern "win64" fn(*mut u8, *mut c_void, f32) =
+                std::mem::transmute(ORIGINAL_TE_CREATE.load(Ordering::Relaxed));
+            original(this, filter, delay);
         }
-        let original: unsafe extern "win64" fn(*mut u8, *mut c_void, f32) =
-            std::mem::transmute(ORIGINAL_TE_CREATE.load(Ordering::Relaxed));
-        original(this, filter, delay);
-    }}
+    }
 
     // ---- Windows glue (thin on purpose) ----------------------------------
 
     #[cfg(windows)]
     pub(crate) mod win {
-        #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
+        #[allow(clippy::wildcard_imports)]
+        // the Windows-only code needs more names than the Linux build uses
         use super::*;
 
         #[link(name = "kernel32")]
@@ -1579,30 +1814,45 @@ mod engine_hook {
             fn GetModuleHandleA(name: *const c_char) -> *mut c_void;
             fn VirtualAlloc(addr: *mut c_void, size: usize, ty: u32, prot: u32) -> *mut c_void;
             fn VirtualProtect(addr: *mut c_void, size: usize, new: u32, old: *mut u32) -> i32;
-            fn FlushInstructionCache(process: *mut c_void, addr: *const c_void, size: usize) -> i32;
+            fn FlushInstructionCache(process: *mut c_void, addr: *const c_void, size: usize)
+                -> i32;
             fn GetCurrentProcess() -> *mut c_void;
         }
         const MEM_COMMIT_RESERVE: u32 = 0x3000;
         const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
-        unsafe fn alloc_exec(size: usize) -> *mut u8 { unsafe {
-            VirtualAlloc(std::ptr::null_mut(), size, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE).cast::<u8>()
-        }}
-        unsafe fn make_writable(p: *mut u8, n: usize) -> Option<u32> { unsafe {
-            let mut old = 0u32;
-            if VirtualProtect(p.cast::<c_void>(), n, PAGE_EXECUTE_READWRITE, &mut old) != 0 {
-                Some(old)
-            } else {
-                None
+        unsafe fn alloc_exec(size: usize) -> *mut u8 {
+            unsafe {
+                VirtualAlloc(
+                    std::ptr::null_mut(),
+                    size,
+                    MEM_COMMIT_RESERVE,
+                    PAGE_EXECUTE_READWRITE,
+                )
+                .cast::<u8>()
             }
-        }}
-        unsafe fn restore_protect(p: *mut u8, n: usize, old: u32) { unsafe {
-            let mut tmp = 0u32;
-            VirtualProtect(p.cast::<c_void>(), n, old, &mut tmp);
-        }}
-        unsafe fn flush(p: *mut u8, n: usize) { unsafe {
-            FlushInstructionCache(GetCurrentProcess(), p as *const c_void, n);
-        }}
+        }
+        unsafe fn make_writable(p: *mut u8, n: usize) -> Option<u32> {
+            unsafe {
+                let mut old = 0u32;
+                if VirtualProtect(p.cast::<c_void>(), n, PAGE_EXECUTE_READWRITE, &mut old) != 0 {
+                    Some(old)
+                } else {
+                    None
+                }
+            }
+        }
+        unsafe fn restore_protect(p: *mut u8, n: usize, old: u32) {
+            unsafe {
+                let mut tmp = 0u32;
+                VirtualProtect(p.cast::<c_void>(), n, old, &mut tmp);
+            }
+        }
+        unsafe fn flush(p: *mut u8, n: usize) {
+            unsafe {
+                FlushInstructionCache(GetCurrentProcess(), p as *const c_void, n);
+            }
+        }
 
         pub(crate) const PLATFORM: Platform = Platform {
             alloc_exec,
@@ -1611,31 +1861,34 @@ mod engine_hook {
             flush,
         };
 
-        pub(crate) unsafe fn server_base() -> *const u8 { unsafe {
-            GetModuleHandleA(c"server.dll".as_ptr()) as *const u8
-        }}
+        pub(crate) unsafe fn server_base() -> *const u8 {
+            unsafe { GetModuleHandleA(c"server.dll".as_ptr()) as *const u8 }
+        }
 
-        pub(crate) unsafe fn client_base() -> *const u8 { unsafe {
-            GetModuleHandleA(c"client.dll".as_ptr()) as *const u8
-        }}
+        pub(crate) unsafe fn client_base() -> *const u8 {
+            unsafe { GetModuleHandleA(c"client.dll".as_ptr()) as *const u8 }
+        }
 
         /// An interface of client.dll (`CreateInterface("VClientEntityList003")`).
-        pub(crate) unsafe fn client_interface(name: &CStr) -> usize { unsafe {
-            #[link(name = "kernel32")]
-            extern "system" {
-                fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
+        pub(crate) unsafe fn client_interface(name: &CStr) -> usize {
+            unsafe {
+                #[link(name = "kernel32")]
+                extern "system" {
+                    fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
+                }
+                let module = client_base() as *mut c_void;
+                if module.is_null() {
+                    return 0;
+                }
+                let create = GetProcAddress(module, c"CreateInterface".as_ptr());
+                if create.is_null() {
+                    return 0;
+                }
+                let create: unsafe extern "win64" fn(*const c_char, *mut c_int) -> usize =
+                    std::mem::transmute(create);
+                create(name.as_ptr(), std::ptr::null_mut())
             }
-            let module = client_base() as *mut c_void;
-            if module.is_null() {
-                return 0;
-            }
-            let create = GetProcAddress(module, c"CreateInterface".as_ptr());
-            if create.is_null() {
-                return 0;
-            }
-            let create: unsafe extern "win64" fn(*const c_char, *mut c_int) -> usize = std::mem::transmute(create);
-            create(name.as_ptr(), std::ptr::null_mut())
-        }}
+        }
     }
 }
 
@@ -1658,15 +1911,18 @@ mod engine_hook {
 mod client_hook {
     use super::engine_hook::{self, Platform};
     #[cfg(windows)]
-    #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
+    #[allow(clippy::wildcard_imports)]
+    // the Windows-only code needs more names than the Linux build uses
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
     /// Slot 0: `void Create(this, const CEffectData &, float magnitude, float scale, int flags)`.
-    pub(crate) const CREATE_SIG: &str = "40 53 48 83 EC 40 8B 02 4C 8D 49 14 89 41 08 48 8B D9 8B 42 04 \
+    pub(crate) const CREATE_SIG: &str =
+        "40 53 48 83 EC 40 8B 02 4C 8D 49 14 89 41 08 48 8B D9 8B 42 04 \
         89 41 0C 8B 42 08 48 8D 51 08 89 41 10 8B 44 24 70 89 41 24";
     /// Slot 1: the explosion sound (`test [this+0x24], TE_EXPLFLAG_NOSOUND` first).
-    pub(crate) const SOUND_SIG: &str = "40 53 48 83 EC 70 F6 41 24 04 48 8B D9 75 3D 48 8D 4C 24 30 E8 ?? ?? ?? ?? \
+    pub(crate) const SOUND_SIG: &str =
+        "40 53 48 83 EC 70 F6 41 24 04 48 8B D9 75 3D 48 8D 4C 24 30 E8 ?? ?? ?? ?? \
         0F 57 C0 48 C7 44 24 28 00 00 00 00 4C 8D 4B 08";
     /// Position of the effect's origin inside the effect object.
     pub(crate) const ORIGIN_OFFSET: usize = 8;
@@ -1675,8 +1931,10 @@ mod client_hook {
     pub(crate) static ORIG_CREATE: AtomicUsize = AtomicUsize::new(0);
     pub(crate) static ORIG_SOUND: AtomicUsize = AtomicUsize::new(0);
     pub(crate) static ACTIVE: AtomicBool = AtomicBool::new(false);
-    pub(crate) static START: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
-    pub(crate) static SOUNDS_MOVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    pub(crate) static START: [AtomicU32; 3] =
+        [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+    pub(crate) static SOUNDS_MOVED: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
 
     /// Is `start` a blast point sent by the server for an effect at `origin`? It is
     /// directly below the origin (same column, lower) - the server puts the effect
@@ -1693,160 +1951,211 @@ mod client_hook {
     type CreateFn = unsafe extern "win64" fn(*mut u8, *const f32, f32, f32, u32);
     type SoundFn = unsafe extern "win64" fn(*mut u8);
 
-    pub(crate) unsafe extern "win64" fn hook_create(this: *mut u8, data: *const f32, magnitude: f32, scale: f32, flags: u32) { unsafe {
-        let original: CreateFn = std::mem::transmute(ORIG_CREATE.load(Ordering::Relaxed));
-        if !data.is_null() {
-            let rd = |i: usize| data.add(i).read_unaligned();
-            if is_blast_point([rd(0), rd(1), rd(2)], [rd(3), rd(4), rd(5)]) {
-                for (i, start) in START.iter().enumerate() {
-                    start.store(rd(3 + i).to_bits(), Ordering::Relaxed);
+    pub(crate) unsafe extern "win64" fn hook_create(
+        this: *mut u8,
+        data: *const f32,
+        magnitude: f32,
+        scale: f32,
+        flags: u32,
+    ) {
+        unsafe {
+            let original: CreateFn = std::mem::transmute(ORIG_CREATE.load(Ordering::Relaxed));
+            if !data.is_null() {
+                let rd = |i: usize| data.add(i).read_unaligned();
+                if is_blast_point([rd(0), rd(1), rd(2)], [rd(3), rd(4), rd(5)]) {
+                    for (i, start) in START.iter().enumerate() {
+                        start.store(rd(3 + i).to_bits(), Ordering::Relaxed);
+                    }
+                    ACTIVE.store(true, Ordering::Relaxed);
                 }
-                ACTIVE.store(true, Ordering::Relaxed);
             }
+            original(this, data, magnitude, scale, flags);
+            ACTIVE.store(false, Ordering::Relaxed);
         }
-        original(this, data, magnitude, scale, flags);
-        ACTIVE.store(false, Ordering::Relaxed);
-    }}
+    }
 
-    pub(crate) unsafe extern "win64" fn hook_sound(this: *mut u8) { unsafe {
-        let original: SoundFn = std::mem::transmute(ORIG_SOUND.load(Ordering::Relaxed));
-        if !ACTIVE.load(Ordering::Relaxed) || this.is_null() {
-            return original(this);
+    pub(crate) unsafe extern "win64" fn hook_sound(this: *mut u8) {
+        unsafe {
+            let original: SoundFn = std::mem::transmute(ORIG_SOUND.load(Ordering::Relaxed));
+            if !ACTIVE.load(Ordering::Relaxed) || this.is_null() {
+                return original(this);
+            }
+            let o = this.add(ORIGIN_OFFSET).cast::<u32>();
+            let saved = [
+                o.read_unaligned(),
+                o.add(1).read_unaligned(),
+                o.add(2).read_unaligned(),
+            ];
+            for (i, start) in START.iter().enumerate() {
+                o.add(i).write_unaligned(start.load(Ordering::Relaxed));
+            }
+            original(this);
+            for (i, &value) in saved.iter().enumerate() {
+                o.add(i).write_unaligned(value);
+            }
+            SOUNDS_MOVED.fetch_add(1, Ordering::Relaxed);
         }
-        let o = this.add(ORIGIN_OFFSET).cast::<u32>();
-        let saved = [o.read_unaligned(), o.add(1).read_unaligned(), o.add(2).read_unaligned()];
-        for (i, start) in START.iter().enumerate() {
-            o.add(i).write_unaligned(start.load(Ordering::Relaxed));
-        }
-        original(this);
-        for (i, &value) in saved.iter().enumerate() {
-            o.add(i).write_unaligned(value);
-        }
-        SOUNDS_MOVED.fetch_add(1, Ordering::Relaxed);
-    }}
+    }
 
     /// The vtable slot (address of slot 0) whose slot 0 is `create` and slot 1 is `sound`.
-    pub(crate) unsafe fn find_vtable_slot(base: *const u8, create: usize, sound: usize) -> Result<*mut usize, &'static str> { unsafe {
-        let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-        let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-        let nt = rd32(0x3C) as usize;
-        let nsec = rd16(nt + 6) as usize;
-        let sections = nt + 24 + rd16(nt + 20) as usize;
-        let mut found = Vec::new();
-        for i in 0..nsec {
-            let s = sections + i * 40;
-            if rd32(s + 36) & 0x2000_0000 != 0 {
-                continue; // code
-            }
-            let va = rd32(s + 12) as usize;
-            let size = rd32(s + 8) as usize;
-            let mut off = 0;
-            while off + 16 <= size {
-                let p = base.add(va + off).cast::<usize>();
-                if p.read() == create && p.add(1).read() == sound {
-                    found.push(p.cast_mut());
+    pub(crate) unsafe fn find_vtable_slot(
+        base: *const u8,
+        create: usize,
+        sound: usize,
+    ) -> Result<*mut usize, &'static str> {
+        unsafe {
+            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
+            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
+            let nt = rd32(0x3C) as usize;
+            let nsec = rd16(nt + 6) as usize;
+            let sections = nt + 24 + rd16(nt + 20) as usize;
+            let mut found = Vec::new();
+            for i in 0..nsec {
+                let s = sections + i * 40;
+                if rd32(s + 36) & 0x2000_0000 != 0 {
+                    continue; // code
                 }
-                off += 8;
+                let va = rd32(s + 12) as usize;
+                let size = rd32(s + 8) as usize;
+                let mut off = 0;
+                while off + 16 <= size {
+                    let p = base.add(va + off).cast::<usize>();
+                    if p.read() == create && p.add(1).read() == sound {
+                        found.push(p.cast_mut());
+                    }
+                    off += 8;
+                }
+            }
+            match found.len() {
+                1 => Ok(found[0]),
+                0 => Err("effect vtable not found"),
+                _ => Err("effect vtable is ambiguous"),
             }
         }
-        match found.len() {
-            1 => Ok(found[0]),
-            0 => Err("effect vtable not found"),
-            _ => Err("effect vtable is ambiguous"),
-        }
-    }}
+    }
 
-    pub(crate) unsafe fn install_at(base: *const u8, p: &Platform) -> Result<(), &'static str> { unsafe {
-        if SLOT.load(Ordering::Relaxed) != 0 {
-            return Ok(());
-        }
-        let create = engine_hook::scan_sig(base, CREATE_SIG)? as usize;
-        let sound = engine_hook::scan_sig(base, SOUND_SIG)? as usize;
-        let slot = find_vtable_slot(base, create, sound)?;
-        let Some(old) = (p.make_writable)(slot.cast::<u8>(), 16) else {
-            return Err("could not make the vtable writable");
-        };
-        ORIG_CREATE.store(create, Ordering::SeqCst);
-        ORIG_SOUND.store(sound, Ordering::SeqCst);
-        slot.write(hook_create as *const () as usize);
-        slot.add(1).write(hook_sound as *const () as usize);
-        (p.restore_protect)(slot.cast::<u8>(), 16, old);
-        SLOT.store(slot as usize, Ordering::SeqCst);
-        Ok(())
-    }}
-
-    #[cfg(windows)]
-    pub(crate) unsafe fn install() -> Result<(), &'static str> { unsafe {
-        let base = engine_hook::win::client_base();
-        if base.is_null() {
-            return Err("client.dll is not loaded");
-        }
-        install_at(base, &engine_hook::win::PLATFORM)
-    }}
-
-    #[cfg(windows)]
-    pub(crate) unsafe fn uninstall() { unsafe {
-        let slot = SLOT.swap(0, Ordering::SeqCst) as *mut usize;
-        if slot.is_null() {
-            return;
-        }
-        let p = &engine_hook::win::PLATFORM;
-        if let Some(old) = (p.make_writable)(slot.cast::<u8>(), 16) {
-            slot.write(ORIG_CREATE.load(Ordering::SeqCst));
-            slot.add(1).write(ORIG_SOUND.load(Ordering::SeqCst));
+    pub(crate) unsafe fn install_at(base: *const u8, p: &Platform) -> Result<(), &'static str> {
+        unsafe {
+            if SLOT.load(Ordering::Relaxed) != 0 {
+                return Ok(());
+            }
+            let create = engine_hook::scan_sig(base, CREATE_SIG)? as usize;
+            let sound = engine_hook::scan_sig(base, SOUND_SIG)? as usize;
+            let slot = find_vtable_slot(base, create, sound)?;
+            let Some(old) = (p.make_writable)(slot.cast::<u8>(), 16) else {
+                return Err("could not make the vtable writable");
+            };
+            ORIG_CREATE.store(create, Ordering::SeqCst);
+            ORIG_SOUND.store(sound, Ordering::SeqCst);
+            slot.write(hook_create as *const () as usize);
+            slot.add(1).write(hook_sound as *const () as usize);
             (p.restore_protect)(slot.cast::<u8>(), 16, old);
+            SLOT.store(slot as usize, Ordering::SeqCst);
+            Ok(())
         }
-    }}
+    }
+
+    #[cfg(windows)]
+    pub(crate) unsafe fn install() -> Result<(), &'static str> {
+        unsafe {
+            let base = engine_hook::win::client_base();
+            if base.is_null() {
+                return Err("client.dll is not loaded");
+            }
+            install_at(base, &engine_hook::win::PLATFORM)
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) unsafe fn uninstall() {
+        unsafe {
+            let slot = SLOT.swap(0, Ordering::SeqCst) as *mut usize;
+            if slot.is_null() {
+                return;
+            }
+            let p = &engine_hook::win::PLATFORM;
+            if let Some(old) = (p.make_writable)(slot.cast::<u8>(), 16) {
+                slot.write(ORIG_CREATE.load(Ordering::SeqCst));
+                slot.add(1).write(ORIG_SOUND.load(Ordering::SeqCst));
+                (p.restore_protect)(slot.cast::<u8>(), 16, old);
+            }
+        }
+    }
 
     #[cfg(windows)]
     /// True when this DLL was loaded as the client module (file name gmcl_*).
-    pub(crate) unsafe fn is_client_module() -> bool { unsafe {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GetModuleHandleExA(flags: u32, addr: *const c_void, out: *mut *mut c_void) -> i32;
-            fn GetModuleFileNameA(module: *mut c_void, buf: *mut u8, size: u32) -> u32;
+    pub(crate) unsafe fn is_client_module() -> bool {
+        unsafe {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetModuleHandleExA(
+                    flags: u32,
+                    addr: *const c_void,
+                    out: *mut *mut c_void,
+                ) -> i32;
+                fn GetModuleFileNameA(module: *mut c_void, buf: *mut u8, size: u32) -> u32;
+            }
+            const FROM_ADDRESS_UNCHANGED: u32 = 0x4 | 0x2;
+            let mut module: *mut c_void = std::ptr::null_mut();
+            if GetModuleHandleExA(
+                FROM_ADDRESS_UNCHANGED,
+                is_client_module as *const c_void,
+                &mut module,
+            ) == 0
+            {
+                return false;
+            }
+            let mut buf = [0u8; 520];
+            let n = GetModuleFileNameA(module, buf.as_mut_ptr(), buf.len() as u32) as usize;
+            let path = String::from_utf8_lossy(&buf[..n.min(buf.len())]).to_lowercase();
+            let name = path.rsplit(['\\', '/']).next().unwrap_or("");
+            name.starts_with("gmcl_")
         }
-        const FROM_ADDRESS_UNCHANGED: u32 = 0x4 | 0x2;
-        let mut module: *mut c_void = std::ptr::null_mut();
-        if GetModuleHandleExA(FROM_ADDRESS_UNCHANGED, is_client_module as *const c_void, &mut module) == 0 {
-            return false;
-        }
-        let mut buf = [0u8; 520];
-        let n = GetModuleFileNameA(module, buf.as_mut_ptr(), buf.len() as u32) as usize;
-        let path = String::from_utf8_lossy(&buf[..n.min(buf.len())]).to_lowercase();
-        let name = path.rsplit(['\\', '/']).next().unwrap_or("");
-        name.starts_with("gmcl_")
-    }}
+    }
 }
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod hook_state {
     use super::engine_hook::{self, STOLEN};
-    #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
+    #[allow(clippy::wildcard_imports)]
+    // the Windows-only code needs more names than the Linux build uses
     use super::*;
 
     pub(crate) static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);
 
-    pub(crate) unsafe fn install() -> Result<usize, &'static str> { unsafe {
-        let base = engine_hook::win::server_base();
-        if base.is_null() {
-            return Err("server.dll is not loaded");
+    pub(crate) unsafe fn install() -> Result<usize, &'static str> {
+        unsafe {
+            let base = engine_hook::win::server_base();
+            if base.is_null() {
+                return Err("server.dll is not loaded");
+            }
+            let target = engine_hook::scan_image(base)?;
+            let original = engine_hook::install(target, &engine_hook::win::PLATFORM)?;
+            *TARGET
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some((target as usize, original));
+            Ok(target as usize - base as usize)
         }
-        let target = engine_hook::scan_image(base)?;
-        let original = engine_hook::install(target, &engine_hook::win::PLATFORM)?;
-        *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((target as usize, original));
-        Ok(target as usize - base as usize)
-    }}
+    }
 
-    pub(crate) unsafe fn uninstall() { unsafe {
-        let taken = TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        if let Some((target, original)) = taken {
-            engine_hook::uninstall(target as *mut u8, &original, &engine_hook::win::PLATFORM);
+    pub(crate) unsafe fn uninstall() {
+        unsafe {
+            let taken = TARGET
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some((target, original)) = taken {
+                engine_hook::uninstall(target as *mut u8, &original, &engine_hook::win::PLATFORM);
+            }
         }
-    }}
+    }
 
     pub(crate) fn active() -> bool {
-        TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
+        TARGET
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
     }
 
     /// (vtable slot address, original function pointer)
@@ -1855,147 +2164,174 @@ mod hook_state {
     /// Hooks `IEngineTrace::GetPointContents` via the engine object that
     /// `server.dll` itself uses (found through `UpdateWaterState`).
     #[allow(clippy::too_many_lines)]
-    pub(crate) unsafe fn install_contents() -> Result<String, &'static str> { unsafe {
-        let base = engine_hook::win::server_base();
-        if base.is_null() {
-            return Err("server.dll is not loaded");
-        }
-        let func = engine_hook::scan_sig(base, engine_hook::UPDATE_WATER_STATE_SIG)?;
-        let trace = engine_hook::trace_global_from(func).read();
-        let (slot, original) =
-            engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
-        let mut hooks = vec![(
-            slot,
-            original,
-            engine_hook::hook_get_point_contents as *const () as usize,
-        )];
-
-        // Ray_t layout: where this build keeps m_IsSwept.
-        let ray_note = match engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG) {
-            Ok(f) => {
-                let off = engine_hook::ray_swept_offset_from(f);
-                engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
-                format!(" (Ray_t m_IsSwept at +{off:#x})")
+    pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
+        unsafe {
+            let base = engine_hook::win::server_base();
+            if base.is_null() {
+                return Err("server.dll is not loaded");
             }
-            Err(why) => {
-                engine_hook::RAY_SWEPT_OFFSET
-                    .store(engine_hook::RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
-                format!(" (Ray_t layout assumed old: {why})")
-            }
-        };
+            let func = engine_hook::scan_sig(base, engine_hook::UPDATE_WATER_STATE_SIG)?;
+            let trace = engine_hook::trace_global_from(func).read();
+            let (slot, original) =
+                engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
+            let mut hooks = vec![(
+                slot,
+                original,
+                engine_hook::hook_get_point_contents as *const () as usize,
+            )];
 
-        // Second hook: traces. If it fails the point-contents hook stays.
-        let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
-        let summary = match engine_hook::install_slot_hook(
-            trace,
-            engine_hook::TRACE_RAY_SLOT,
-            trace_hook,
-            &engine_hook::ORIGINAL_TRACE_RAY,
-            &engine_hook::win::PLATFORM,
-        ) {
-            Ok((entry, orig)) => {
-                hooks.push((entry, orig, trace_hook));
-                format!("GetPointContents + TraceRay{ray_note}")
-            }
-            Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
-        };
-        *CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
+            // Ray_t layout: where this build keeps m_IsSwept.
+            let ray_note = match engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG) {
+                Ok(f) => {
+                    let off = engine_hook::ray_swept_offset_from(f);
+                    engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
+                    format!(" (Ray_t m_IsSwept at +{off:#x})")
+                }
+                Err(why) => {
+                    engine_hook::RAY_SWEPT_OFFSET.store(
+                        engine_hook::RAY_SWEPT_OFFSET_OLD,
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    format!(" (Ray_t layout assumed old: {why})")
+                }
+            };
 
-        // Third hook: bubble trails are clipped to the volume they are in.
-        let bubble = match engine_hook::scan_sig(base, engine_hook::BUBBLE_TRAIL_SIG).and_then(|t| {
-            engine_hook::install_patch(
-                t,
-                engine_hook::BUBBLE_TRAIL_SIG,
-                engine_hook::BUBBLE_TRAIL_STOLEN,
-                engine_hook::hook_bubble_trail as *const () as usize,
+            // Second hook: traces. If it fails the point-contents hook stays.
+            let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
+            let summary = match engine_hook::install_slot_hook(
+                trace,
+                engine_hook::TRACE_RAY_SLOT,
+                trace_hook,
+                &engine_hook::ORIGINAL_TRACE_RAY,
                 &engine_hook::win::PLATFORM,
-            )
-        }) {
-            Ok(patch) => {
-                engine_hook::BUBBLE_TRAMPOLINE
-                    .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-                *BUBBLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
-                " + UTIL_BubbleTrail".to_string()
-            }
-            Err(why) => format!(" (bubble-trail clipping inactive: {why})"),
-        };
-        // Fluids destroyed while props are in them must not crash FluidEndTouch.
-        let end_touch = match engine_hook::scan_sig(base, engine_hook::FLUID_END_TOUCH_SIG).and_then(|t| {
-            engine_hook::install_patch(
-                t,
-                engine_hook::FLUID_END_TOUCH_SIG,
-                engine_hook::FLUID_END_TOUCH_STOLEN,
-                engine_hook::hook_fluid_end_touch as *const () as usize,
-                &engine_hook::win::PLATFORM,
-            )
-        }) {
-            Ok(patch) => {
-                engine_hook::FLUID_END_TOUCH_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-                *FLUID_END_TOUCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
-                " + FluidEndTouch".to_string()
-            }
-            Err(why) => format!(" (removing a volume with props in it may crash: {why})"),
-        };
-        if let Ok(t) = engine_hook::scan_sig(base, engine_hook::DISPATCH_EFFECT_SIG) {
-            engine_hook::DISPATCH_EFFECT_ADDR.store(t as usize, std::sync::atomic::Ordering::SeqCst);
-        }
+            ) {
+                Ok((entry, orig)) => {
+                    hooks.push((entry, orig, trace_hook));
+                    format!("GetPointContents + TraceRay{ray_note}")
+                }
+                Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
+            };
+            *CONTENTS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
 
-        // Explosion events in a volume become the water explosion effect.
-        let te_note = (|| -> Result<(), &'static str> {
-            if engine_hook::DISPATCH_EFFECT_ADDR.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-                return Err("DispatchEffect not found");
+            // Third hook: bubble trails are clipped to the volume they are in.
+            let bubble =
+                match engine_hook::scan_sig(base, engine_hook::BUBBLE_TRAIL_SIG).and_then(|t| {
+                    engine_hook::install_patch(
+                        t,
+                        engine_hook::BUBBLE_TRAIL_SIG,
+                        engine_hook::BUBBLE_TRAIL_STOLEN,
+                        engine_hook::hook_bubble_trail as *const () as usize,
+                        &engine_hook::win::PLATFORM,
+                    )
+                }) {
+                    Ok(patch) => {
+                        engine_hook::BUBBLE_TRAMPOLINE
+                            .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+                        *BUBBLE
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
+                        " + UTIL_BubbleTrail".to_string()
+                    }
+                    Err(why) => format!(" (bubble-trail clipping inactive: {why})"),
+                };
+            // Fluids destroyed while props are in them must not crash FluidEndTouch.
+            let end_touch = match engine_hook::scan_sig(base, engine_hook::FLUID_END_TOUCH_SIG)
+                .and_then(|t| {
+                    engine_hook::install_patch(
+                        t,
+                        engine_hook::FLUID_END_TOUCH_SIG,
+                        engine_hook::FLUID_END_TOUCH_STOLEN,
+                        engine_hook::hook_fluid_end_touch as *const () as usize,
+                        &engine_hook::win::PLATFORM,
+                    )
+                }) {
+                Ok(patch) => {
+                    engine_hook::FLUID_END_TOUCH_TRAMPOLINE
+                        .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+                    *FLUID_END_TOUCH
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
+                    " + FluidEndTouch".to_string()
+                }
+                Err(why) => format!(" (removing a volume with props in it may crash: {why})"),
+            };
+            if let Ok(t) = engine_hook::scan_sig(base, engine_hook::DISPATCH_EFFECT_SIG) {
+                engine_hook::DISPATCH_EFFECT_ADDR
+                    .store(t as usize, std::sync::atomic::Ordering::SeqCst);
             }
-            let vtable = engine_hook::te_explosion_vtable(base)?;
-            engine_hook::TE_EXPLOSION_VTABLE.store(vtable, std::sync::atomic::Ordering::SeqCst);
-            let create = engine_hook::scan_sig(base, engine_hook::TE_CREATE_SIG)?;
-            let patch = engine_hook::install_patch(
-                create,
-                engine_hook::TE_CREATE_SIG,
-                engine_hook::TE_CREATE_STOLEN,
-                engine_hook::hook_te_create as *const () as usize,
-                &engine_hook::win::PLATFORM,
-            )?;
-            engine_hook::ORIGINAL_TE_CREATE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-            *TE_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
-            Ok(())
-        })();
-        let te_note = match te_note {
-            Ok(()) => " + explosion events".to_string(),
-            Err(why) => format!(" (explosion events not hooked: {why})"),
-        };
 
-        // The world entity, named as the hit entity of every water hit. If it
-        // cannot be found, water hits that the engine gave no entity are
-        // skipped rather than reported without one.
-        let world_note = match engine_hook::entity_array_global(base) {
-            Ok(g) => {
-                engine_hook::ENTITY_ARRAY_GLOBAL.store(g, std::sync::atomic::Ordering::SeqCst);
-                String::new()
-            }
-            Err(why) => format!(" (world entity unknown: {why})"),
-        };
-
-        // Fourth: explosives in a volume take the water explosion.
-        let mut patches = Vec::new();
-        for i in 0..engine_hook::EXPLOSION_TARGETS.len() {
-            let r = engine_hook::find_explosion_target(base, i).and_then(|(t, sig, stolen)| {
-                engine_hook::install_patch(
-                    t,
-                    sig,
-                    stolen,
-                    engine_hook::EXPLOSION_HOOKS[i] as usize,
+            // Explosion events in a volume become the water explosion effect.
+            let te_note = (|| -> Result<(), &'static str> {
+                if engine_hook::DISPATCH_EFFECT_ADDR.load(std::sync::atomic::Ordering::SeqCst) == 0
+                {
+                    return Err("DispatchEffect not found");
+                }
+                let vtable = engine_hook::te_explosion_vtable(base)?;
+                engine_hook::TE_EXPLOSION_VTABLE.store(vtable, std::sync::atomic::Ordering::SeqCst);
+                let create = engine_hook::scan_sig(base, engine_hook::TE_CREATE_SIG)?;
+                let patch = engine_hook::install_patch(
+                    create,
+                    engine_hook::TE_CREATE_SIG,
+                    engine_hook::TE_CREATE_STOLEN,
+                    engine_hook::hook_te_create as *const () as usize,
                     &engine_hook::win::PLATFORM,
-                )
-            });
-            if let Ok(patch) = r {
-                engine_hook::EXPLOSION_TRAMPOLINES[i].store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-                patches.push(patch);
+                )?;
+                engine_hook::ORIGINAL_TE_CREATE
+                    .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+                *TE_HOOK
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
+                Ok(())
+            })();
+            let te_note = match te_note {
+                Ok(()) => " + explosion events".to_string(),
+                Err(why) => format!(" (explosion events not hooked: {why})"),
+            };
+
+            // The world entity, named as the hit entity of every water hit. If it
+            // cannot be found, water hits that the engine gave no entity are
+            // skipped rather than reported without one.
+            let world_note = match engine_hook::entity_array_global(base) {
+                Ok(g) => {
+                    engine_hook::ENTITY_ARRAY_GLOBAL.store(g, std::sync::atomic::Ordering::SeqCst);
+                    String::new()
+                }
+                Err(why) => format!(" (world entity unknown: {why})"),
+            };
+
+            // Fourth: explosives in a volume take the water explosion.
+            let mut patches = Vec::new();
+            for i in 0..engine_hook::EXPLOSION_TARGETS.len() {
+                let r = engine_hook::find_explosion_target(base, i).and_then(|(t, sig, stolen)| {
+                    engine_hook::install_patch(
+                        t,
+                        sig,
+                        stolen,
+                        engine_hook::EXPLOSION_HOOKS[i] as usize,
+                        &engine_hook::win::PLATFORM,
+                    )
+                });
+                if let Ok(patch) = r {
+                    engine_hook::EXPLOSION_TRAMPOLINES[i]
+                        .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+                    patches.push(patch);
+                }
             }
+            let explosion = format!(
+                " + {}/{} explosion checks",
+                patches.len(),
+                engine_hook::EXPLOSION_TARGETS.len()
+            );
+            *EXPLOSIONS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = patches;
+            Ok(format!(
+                "{summary}{bubble}{end_touch}{explosion}{te_note}{world_note}"
+            ))
         }
-        let explosion = format!(" + {}/{} explosion checks", patches.len(), engine_hook::EXPLOSION_TARGETS.len());
-        *EXPLOSIONS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = patches;
-        Ok(format!("{summary}{bubble}{end_touch}{explosion}{te_note}{world_note}"))
-    }}
+    }
 
     pub(crate) static EXPLOSIONS: Mutex<Vec<engine_hook::Patch>> = Mutex::new(Vec::new());
     pub(crate) static TE_HOOK: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
@@ -2007,177 +2343,244 @@ mod hook_state {
     pub(crate) static FLUIDS: Mutex<Vec<(u32, usize, c_int)>> = Mutex::new(Vec::new());
     static NEXT_FLUID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-    unsafe fn physenv() -> Result<*mut c_void, &'static str> { unsafe {
-        let base = engine_hook::win::server_base();
-        if base.is_null() {
-            return Err("server.dll is not loaded");
-        }
-        let at = engine_hook::scan_sig(base, engine_hook::PHYSENV_SIG)
-            .map_err(|_| "physics environment pointer not found in server.dll")?;
-        let env = engine_hook::physenv_global_from(at).read();
-        if env.is_null() {
-            return Err("the physics environment has not been created yet");
-        }
-        Ok(env)
-    }}
-
-    pub(crate) unsafe fn fluid_attach(object: usize, plane: [f32; 4], fluid: &FluidSettings) -> Result<u32, &'static str> { unsafe {
-        let env = physenv()?;
-        let params = engine_hook::FluidParams {
-            surface_plane: plane,
-            current_velocity: fluid.current,
-            damping: fluid.damping,
-            torque_factor: fluid.torque,
-            viscosity_factor: fluid.viscosity,
-            game_data: std::ptr::null_mut(),
-            use_aerodynamics: u8::from(fluid.aerodynamics),
-            contents: fluid.contents,
-        };
-        if object == 0 {
-            return Err("null physics object");
-        }
-        engine_hook::add_fluid_callback_flag(object as *mut _);
-        let controller = engine_hook::create_fluid(env, object as *mut _, &params);
-        if controller.is_null() {
-            return Err("the engine refused to create a fluid controller (object has no physics?)");
-        }
-        let id = NEXT_FLUID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((id, controller as usize, fluid.contents));
-        engine_hook::fluid_born(controller as usize);
-        Ok(id)
-    }}
-
-    pub(crate) unsafe fn fluid_detach(id: u32) -> bool { unsafe {
-        let taken = {
-            let mut list = FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            list.iter().position(|f| f.0 == id).map(|i| list.remove(i))
-        };
-        let Some((_, fluid, contents)) = taken else { return false };
-        match physenv() {
-            Ok(env) => {
-                engine_hook::destroy_fluid(env, fluid as *mut _);
-                engine_hook::fluid_died(fluid, contents);
-                true
+    unsafe fn physenv() -> Result<*mut c_void, &'static str> {
+        unsafe {
+            let base = engine_hook::win::server_base();
+            if base.is_null() {
+                return Err("server.dll is not loaded");
             }
-            Err(_) => false,
+            let at = engine_hook::scan_sig(base, engine_hook::PHYSENV_SIG)
+                .map_err(|_| "physics environment pointer not found in server.dll")?;
+            let env = engine_hook::physenv_global_from(at).read();
+            if env.is_null() {
+                return Err("the physics environment has not been created yet");
+            }
+            Ok(env)
         }
-    }}
-
-    pub(crate) unsafe fn fluid_detach_all() { unsafe {
-        let ids: Vec<u32> = FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|f| f.0).collect();
-        for id in ids {
-            fluid_detach(id);
-        }
-    }}
-
-    pub(crate) fn fluid_count() -> usize {
-        FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
     }
 
-    pub(crate) unsafe fn uninstall_contents() { unsafe {
-        engine_hook::RAY_SWEPT_OFFSET
-            .store(engine_hook::RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
-        engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
-        if let Some(patch) = TE_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
-            engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+    pub(crate) unsafe fn fluid_attach(
+        object: usize,
+        plane: [f32; 4],
+        fluid: &FluidSettings,
+    ) -> Result<u32, &'static str> {
+        unsafe {
+            let env = physenv()?;
+            let params = engine_hook::FluidParams {
+                surface_plane: plane,
+                current_velocity: fluid.current,
+                damping: fluid.damping,
+                torque_factor: fluid.torque,
+                viscosity_factor: fluid.viscosity,
+                game_data: std::ptr::null_mut(),
+                use_aerodynamics: u8::from(fluid.aerodynamics),
+                contents: fluid.contents,
+            };
+            if object == 0 {
+                return Err("null physics object");
+            }
+            engine_hook::add_fluid_callback_flag(object as *mut _);
+            let controller = engine_hook::create_fluid(env, object as *mut _, &params);
+            if controller.is_null() {
+                return Err(
+                    "the engine refused to create a fluid controller (object has no physics?)",
+                );
+            }
+            let id = NEXT_FLUID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            FLUIDS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((id, controller as usize, fluid.contents));
+            engine_hook::fluid_born(controller as usize);
+            Ok(id)
         }
-        engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
-        for patch in std::mem::take(&mut *EXPLOSIONS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
-            engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+    }
+
+    pub(crate) unsafe fn fluid_detach(id: u32) -> bool {
+        unsafe {
+            let taken = {
+                let mut list = FLUIDS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                list.iter().position(|f| f.0 == id).map(|i| list.remove(i))
+            };
+            let Some((_, fluid, contents)) = taken else {
+                return false;
+            };
+            match physenv() {
+                Ok(env) => {
+                    engine_hook::destroy_fluid(env, fluid as *mut _);
+                    engine_hook::fluid_died(fluid, contents);
+                    true
+                }
+                Err(_) => false,
+            }
         }
-        let patch = FLUID_END_TOUCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        if let Some(patch) = patch {
-            engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+    }
+
+    pub(crate) unsafe fn fluid_detach_all() {
+        unsafe {
+            let ids: Vec<u32> = FLUIDS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .map(|f| f.0)
+                .collect();
+            for id in ids {
+                fluid_detach(id);
+            }
         }
-        engine_hook::forget_dead_fluids();
-        // Bubble detour first: it calls through the trampoline, not the slots.
-        let patch = BUBBLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-        if let Some(patch) = patch {
-            engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+    }
+
+    pub(crate) fn fluid_count() -> usize {
+        FLUIDS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    pub(crate) unsafe fn uninstall_contents() {
+        unsafe {
+            engine_hook::RAY_SWEPT_OFFSET.store(
+                engine_hook::RAY_SWEPT_OFFSET_OLD,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
+            if let Some(patch) = TE_HOOK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+            }
+            engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
+            for patch in std::mem::take(
+                &mut *EXPLOSIONS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            ) {
+                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+            }
+            let patch = FLUID_END_TOUCH
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(patch) = patch {
+                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+            }
+            engine_hook::forget_dead_fluids();
+            // Bubble detour first: it calls through the trampoline, not the slots.
+            let patch = BUBBLE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(patch) = patch {
+                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+            }
+            let taken = std::mem::take(
+                &mut *CONTENTS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            for (entry, original, hook) in taken.into_iter().rev() {
+                engine_hook::uninstall_slot_hook(
+                    entry,
+                    hook,
+                    original,
+                    &engine_hook::win::PLATFORM,
+                );
+            }
         }
-        let taken = std::mem::take(&mut *CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        for (entry, original, hook) in taken.into_iter().rev() {
-            engine_hook::uninstall_slot_hook(entry, hook, original, &engine_hook::win::PLATFORM);
-        }
-    }}
+    }
 
     pub(crate) fn contents_active() -> bool {
-        !CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+        !CONTENTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
     }
 
     /// Client realm: the same two hooks on the client's own `IEngineTrace`, so what the
     /// client does with water (ripples and splashes, the underwater sound filter,
     /// prediction) sees the volumes the Lua side gave it.
-    pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> { unsafe {
-        let base = engine_hook::win::client_base();
-        if base.is_null() {
-            return Err("client.dll is not loaded");
-        }
-        let at = engine_hook::scan_sig(base, engine_hook::CLIENT_TRACE_SIG)?;
-        let trace = engine_hook::trace_global_from_load(at).read();
-        let (slot, original) =
-            engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
-        let mut hooks = vec![(
-            slot,
-            original,
-            engine_hook::hook_get_point_contents as *const () as usize,
-        )];
-        // TraceRay needs the Ray_t layout and a world entity to name in the result;
-        // without either only the point contents are hooked.
-        let entities = engine_hook::win::client_interface(c"VClientEntityList003");
-        let ray = engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG);
-        let note = match (ray, entities) {
-            (Ok(f), e) if e != 0 => {
-                let off = engine_hook::ray_swept_offset_from(f);
-                engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
-                engine_hook::CLIENT_ENTITY_LIST.store(e, std::sync::atomic::Ordering::SeqCst);
-                let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
-                match engine_hook::install_slot_hook(
-                    trace,
-                    engine_hook::TRACE_RAY_SLOT,
-                    trace_hook,
-                    &engine_hook::ORIGINAL_TRACE_RAY,
-                    &engine_hook::win::PLATFORM,
-                ) {
-                    Ok((entry, orig)) => {
-                        hooks.push((entry, orig, trace_hook));
-                        format!("GetPointContents + TraceRay (Ray_t m_IsSwept at +{off:#x})")
-                    }
-                    Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
-                }
+    pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
+        unsafe {
+            let base = engine_hook::win::client_base();
+            if base.is_null() {
+                return Err("client.dll is not loaded");
             }
-            (Err(why), _) => format!("GetPointContents only (Ray_t helper: {why})"),
-            _ => "GetPointContents only (no VClientEntityList003)".to_string(),
-        };
-        *CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
-        Ok(note)
-    }}
+            let at = engine_hook::scan_sig(base, engine_hook::CLIENT_TRACE_SIG)?;
+            let trace = engine_hook::trace_global_from_load(at).read();
+            let (slot, original) =
+                engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
+            let mut hooks = vec![(
+                slot,
+                original,
+                engine_hook::hook_get_point_contents as *const () as usize,
+            )];
+            // TraceRay needs the Ray_t layout and a world entity to name in the result;
+            // without either only the point contents are hooked.
+            let entities = engine_hook::win::client_interface(c"VClientEntityList003");
+            let ray = engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG);
+            let note = match (ray, entities) {
+                (Ok(f), e) if e != 0 => {
+                    let off = engine_hook::ray_swept_offset_from(f);
+                    engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
+                    engine_hook::CLIENT_ENTITY_LIST.store(e, std::sync::atomic::Ordering::SeqCst);
+                    let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
+                    match engine_hook::install_slot_hook(
+                        trace,
+                        engine_hook::TRACE_RAY_SLOT,
+                        trace_hook,
+                        &engine_hook::ORIGINAL_TRACE_RAY,
+                        &engine_hook::win::PLATFORM,
+                    ) {
+                        Ok((entry, orig)) => {
+                            hooks.push((entry, orig, trace_hook));
+                            format!("GetPointContents + TraceRay (Ray_t m_IsSwept at +{off:#x})")
+                        }
+                        Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
+                    }
+                }
+                (Err(why), _) => format!("GetPointContents only (Ray_t helper: {why})"),
+                _ => "GetPointContents only (no VClientEntityList003)".to_string(),
+            };
+            *CONTENTS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
+            Ok(note)
+        }
+    }
 }
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 mod hook_state {
-    pub(crate) unsafe fn install() -> Result<usize, &'static str> { 
+    pub(crate) const unsafe fn install() -> Result<usize, &'static str> {
         Err("engine hook is only available for the Windows x64 server.dll")
     }
-    pub(crate) unsafe fn uninstall() {}
-    pub(crate) fn active() -> bool {
+    pub(crate) const unsafe fn uninstall() {}
+    pub(crate) const fn active() -> bool {
         false
     }
-    pub(crate) unsafe fn install_contents() -> Result<String, &'static str> { 
+    pub(crate) const unsafe fn install_contents() -> Result<String, &'static str> {
         Err("engine hook is only available for the Windows x64 server.dll")
     }
-    pub(crate) unsafe fn uninstall_contents() {}
-    pub(crate) fn contents_active() -> bool {
+    pub(crate) const unsafe fn uninstall_contents() {}
+    pub(crate) const fn contents_active() -> bool {
         false
     }
-    pub(crate) unsafe fn fluid_attach(_: usize, _: [f32; 4], _: &super::FluidSettings) -> Result<u32, &'static str> { 
+    pub(crate) const unsafe fn fluid_attach(
+        _: usize,
+        _: [f32; 4],
+        _: &super::FluidSettings,
+    ) -> Result<u32, &'static str> {
         Err("fluids are only available for the Windows x64 server.dll")
     }
-    pub(crate) unsafe fn fluid_detach(_: u32) -> bool { 
+    pub(crate) const unsafe fn fluid_detach(_: u32) -> bool {
         false
     }
-    pub(crate) unsafe fn fluid_detach_all() {}
-    pub(crate) fn fluid_count() -> usize {
+    pub(crate) const unsafe fn fluid_detach_all() {}
+    pub(crate) const fn fluid_count() -> usize {
         0
     }
 }
@@ -2201,281 +2604,338 @@ fn hook_hits() -> u64 {
 
 /// Returns the entity index of the Entity userdata at absolute stack index `idx`.
 /// Rejects non-userdata, NULL entities and the world.
-unsafe fn ent_index(l: LuaState, idx: c_int) -> Option<i32> { unsafe {
-    let a = api();
-    if (a.type_)(l, idx) != LUA_TUSERDATA {
-        return None;
+unsafe fn ent_index(l: LuaState, idx: c_int) -> Option<i32> {
+    unsafe {
+        let a = api();
+        if (a.type_)(l, idx) != LUA_TUSERDATA {
+            return None;
+        }
+        let top = (a.gettop)(l);
+        (a.getfield)(l, idx, c"EntIndex".as_ptr());
+        (a.pushvalue)(l, idx);
+        let ok = (a.pcall)(l, 1, 1, 0) == 0;
+        let n = if ok && (a.type_)(l, -1) == LUA_TNUMBER {
+            Some((a.tonumber)(l, -1) as i32)
+        } else {
+            None
+        };
+        (a.settop)(l, top);
+        n.filter(|&i| i > 0)
     }
-    let top = (a.gettop)(l);
-    (a.getfield)(l, idx, c"EntIndex".as_ptr());
-    (a.pushvalue)(l, idx);
-    let ok = (a.pcall)(l, 1, 1, 0) == 0;
-    let n = if ok && (a.type_)(l, -1) == LUA_TNUMBER {
-        Some((a.tonumber)(l, -1) as i32)
-    } else {
-        None
-    };
-    (a.settop)(l, top);
-    n.filter(|&i| i > 0)
-}}
+}
 
-unsafe fn fail(l: LuaState, msg: &CStr) -> c_int { unsafe {
-    let a = api();
-    (a.pushnil)(l);
-    (a.pushstring)(l, msg.as_ptr());
-    2
-}}
+unsafe fn fail(l: LuaState, msg: &CStr) -> c_int {
+    unsafe {
+        let a = api();
+        (a.pushnil)(l);
+        (a.pushstring)(l, msg.as_ptr());
+        2
+    }
+}
 
-unsafe fn lua_print(l: LuaState, msg: &str) { unsafe {
-    let a = api();
-    let Ok(text) = CString::new(msg) else { return };
-    let base = (a.gettop)(l);
-    (a.getfield)(l, LUA_GLOBALSINDEX, c"print".as_ptr());
-    (a.pushstring)(l, text.as_ptr());
-    let _ = (a.pcall)(l, 1, 0, 0);
-    (a.settop)(l, base);
-}}
+unsafe fn lua_print(l: LuaState, msg: &str) {
+    unsafe {
+        let a = api();
+        let Ok(text) = CString::new(msg) else { return };
+        let base = (a.gettop)(l);
+        (a.getfield)(l, LUA_GLOBALSINDEX, c"print".as_ptr());
+        (a.pushstring)(l, text.as_ptr());
+        let _ = (a.pcall)(l, 1, 0, 0);
+        (a.settop)(l, base);
+    }
+}
 
 /// Looks the entity up by index and, if still valid, writes the level into its
 /// datamap (when `key` is set). Returns false if the entity no longer exists.
-unsafe fn apply_level(l: LuaState, idx: i32, level: u8, key: Option<&CStr>) -> bool { unsafe {
-    let a = api();
-    let base = (a.gettop)(l);
+unsafe fn apply_level(l: LuaState, idx: i32, level: u8, key: Option<&CStr>) -> bool {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
 
-    (a.getfield)(l, LUA_GLOBALSINDEX, c"Entity".as_ptr());
-    (a.pushnumber)(l, f64::from(idx));
-    if (a.pcall)(l, 1, 1, 0) != 0 {
-        (a.settop)(l, base);
-        return false;
-    }
-    let ent = base + 1;
+        (a.getfield)(l, LUA_GLOBALSINDEX, c"Entity".as_ptr());
+        (a.pushnumber)(l, f64::from(idx));
+        if (a.pcall)(l, 1, 1, 0) != 0 {
+            (a.settop)(l, base);
+            return false;
+        }
+        let ent = base + 1;
 
-    (a.getfield)(l, ent, c"IsValid".as_ptr());
-    (a.pushvalue)(l, ent);
-    let valid = (a.pcall)(l, 1, 1, 0) == 0 && (a.toboolean)(l, -1) != 0;
-    (a.settop)(l, ent);
-    if !valid {
-        (a.settop)(l, base);
-        return false;
-    }
-
-    if let Some(key) = key {
-        (a.getfield)(l, ent, c"SetSaveValue".as_ptr());
+        (a.getfield)(l, ent, c"IsValid".as_ptr());
         (a.pushvalue)(l, ent);
-        (a.pushstring)(l, key.as_ptr());
-        (a.pushnumber)(l, f64::from(level));
-        let _ = (a.pcall)(l, 3, 0, 0); // best effort
+        let valid = (a.pcall)(l, 1, 1, 0) == 0 && (a.toboolean)(l, -1) != 0;
+        (a.settop)(l, ent);
+        if !valid {
+            (a.settop)(l, base);
+            return false;
+        }
+
+        if let Some(key) = key {
+            (a.getfield)(l, ent, c"SetSaveValue".as_ptr());
+            (a.pushvalue)(l, ent);
+            (a.pushstring)(l, key.as_ptr());
+            (a.pushnumber)(l, f64::from(level));
+            let _ = (a.pcall)(l, 3, 0, 0); // best effort
+        }
+        (a.settop)(l, base);
+        true
     }
-    (a.settop)(l, base);
-    true
-}}
+}
 
 // ---------------------------------------------------------------------------
 // Lua-callable functions
 // ---------------------------------------------------------------------------
 
 /// waterlevel.Set(ent, level) / ent:SetWaterLevelOverride(level)
-unsafe extern "C-unwind" fn l_set(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let Some(idx) = ent_index(l, 1) else {
-        return fail(l, c"invalid entity");
-    };
-    if (a.type_)(l, 2) != LUA_TNUMBER {
-        return fail(l, c"level must be a number");
+unsafe extern "C-unwind" fn l_set(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let Some(idx) = ent_index(l, 1) else {
+            return fail(l, c"invalid entity");
+        };
+        if (a.type_)(l, 2) != LUA_TNUMBER {
+            return fail(l, c"level must be a number");
+        }
+        let level = (a.tonumber)(l, 2);
+        if !level.is_finite() || level.fract() != 0.0 || !(0.0..=3.0).contains(&level) {
+            return fail(l, c"level must be an integer from 0 to 3");
+        }
+        let level = level as u8;
+        overrides().insert(idx, level);
+        apply_level(l, idx, level, save_key().as_deref());
+        (a.pushboolean)(l, 1);
+        1
     }
-    let level = (a.tonumber)(l, 2);
-    if !level.is_finite() || level.fract() != 0.0 || !(0.0..=3.0).contains(&level) {
-        return fail(l, c"level must be an integer from 0 to 3");
-    }
-    let level = level as u8;
-    overrides().insert(idx, level);
-    apply_level(l, idx, level, save_key().as_deref());
-    (a.pushboolean)(l, 1);
-    1
-}}
+}
 
 /// waterlevel.Get(ent) / `ent:GetWaterLevelOverride()`
-unsafe extern "C-unwind" fn l_get(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let level = ent_index(l, 1).and_then(|idx| overrides().get(&idx).copied());
-    match level {
-        Some(v) => (a.pushnumber)(l, f64::from(v)),
-        None => (a.pushnil)(l),
+unsafe extern "C-unwind" fn l_get(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let level = ent_index(l, 1).and_then(|idx| overrides().get(&idx).copied());
+        match level {
+            Some(v) => (a.pushnumber)(l, f64::from(v)),
+            None => (a.pushnil)(l),
+        }
+        1
     }
-    1
-}}
+}
 
 /// waterlevel.Clear(ent) / `ent:ClearWaterLevelOverride()`
-unsafe extern "C-unwind" fn l_clear(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let removed = ent_index(l, 1)
-        .is_some_and(|idx| overrides().remove(&idx).is_some());
-    (a.pushboolean)(l, c_int::from(removed));
-    1
-}}
+unsafe extern "C-unwind" fn l_clear(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let removed = ent_index(l, 1).is_some_and(|idx| overrides().remove(&idx).is_some());
+        (a.pushboolean)(l, c_int::from(removed));
+        1
+    }
+}
 
 /// `waterlevel.ClearAll()`
-unsafe extern "C-unwind" fn l_clear_all(_l: LuaState) -> c_int { 
+unsafe extern "C-unwind" fn l_clear_all(_l: LuaState) -> c_int {
     overrides().clear();
     0
 }
 
 /// waterlevel.SetSaveKey(key) - "" disables the per-tick datamap write.
-unsafe extern "C-unwind" fn l_set_save_key(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let p = (a.tolstring)(l, 1, std::ptr::null_mut());
-    if p.is_null() {
-        return fail(l, c"key must be a string");
+unsafe extern "C-unwind" fn l_set_save_key(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let p = (a.tolstring)(l, 1, std::ptr::null_mut());
+        if p.is_null() {
+            return fail(l, c"key must be a string");
+        }
+        let key = CStr::from_ptr(p).to_string_lossy().into_owned();
+        *SAVE_KEY
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key);
+        (a.pushboolean)(l, 1);
+        1
     }
-    let key = CStr::from_ptr(p).to_string_lossy().into_owned();
-    *SAVE_KEY.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key);
-    (a.pushboolean)(l, 1);
-    1
-}}
+}
 
 /// `waterlevel.IsHooked()`
-unsafe extern "C-unwind" fn l_is_hooked(l: LuaState) -> c_int { unsafe {
-    (api().pushboolean)(l, c_int::from(hook_state::active()));
-    1
-}}
+unsafe extern "C-unwind" fn l_is_hooked(l: LuaState) -> c_int {
+    unsafe {
+        (api().pushboolean)(l, c_int::from(hook_state::active()));
+        1
+    }
+}
 
 /// `waterlevel.HookStatus()`
-unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int { unsafe {
-    let status = HOOK_STATUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    // Seconds since 1970 at compile time: shows which build is really loaded.
-    let status = format!("{status} [build {}]", env!("WL_BUILD_TIME"));
-    let text = CString::new(status).unwrap_or_default();
-    (api().pushstring)(l, text.as_ptr());
-    1
-}}
+unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int {
+    unsafe {
+        let status = HOOK_STATUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        // Seconds since 1970 at compile time: shows which build is really loaded.
+        let status = format!("{status} [build {}]", env!("WL_BUILD_TIME"));
+        let text = CString::new(status).unwrap_or_default();
+        (api().pushstring)(l, text.as_ptr());
+        1
+    }
+}
 
 /// `waterlevel.HookHits()`
-unsafe extern "C-unwind" fn l_hook_hits(l: LuaState) -> c_int { unsafe {
-    (api().pushnumber)(l, hook_hits() as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_hook_hits(l: LuaState) -> c_int {
+    unsafe {
+        (api().pushnumber)(l, hook_hits() as f64);
+        1
+    }
+}
 
 /// The optional liquid argument at stack index `idx`: "water" (default, also nil or
 /// none) or "slime".
-unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'static CStr> { unsafe {
-    let a = api();
-    match (a.type_)(l, idx) {
-        LUA_TNONE | LUA_TNIL => Ok(CONTENTS_WATER),
-        LUA_TSTRING => {
-            let p = (a.tolstring)(l, idx, std::ptr::null_mut());
-            match CStr::from_ptr(p).to_bytes().to_ascii_lowercase().as_slice() {
-                b"water" => Ok(CONTENTS_WATER),
-                b"slime" => Ok(CONTENTS_SLIME),
-                _ => Err(c"liquid must be \"water\" or \"slime\""),
+unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'static CStr> {
+    unsafe {
+        let a = api();
+        match (a.type_)(l, idx) {
+            LUA_TNONE | LUA_TNIL => Ok(CONTENTS_WATER),
+            LUA_TSTRING => {
+                let p = (a.tolstring)(l, idx, std::ptr::null_mut());
+                match CStr::from_ptr(p).to_bytes().to_ascii_lowercase().as_slice() {
+                    b"water" => Ok(CONTENTS_WATER),
+                    b"slime" => Ok(CONTENTS_SLIME),
+                    _ => Err(c"liquid must be \"water\" or \"slime\""),
+                }
             }
+            _ => Err(c"liquid must be \"water\" or \"slime\""),
         }
-        _ => Err(c"liquid must be \"water\" or \"slime\""),
     }
-}}
+}
 
 /// waterlevel.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid]) -> id | nil, err
 /// Adds a world-space box in which the engine sees water, or slime when `liquid` is
 /// "slime" ("water" is the default).
-unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let mut v = [0f64; 6];
-    for (i, slot) in v.iter_mut().enumerate() {
-        let idx = i as c_int + 1;
-        if (a.type_)(l, idx) != LUA_TNUMBER {
-            return fail(l, c"AddVolume needs 6 numbers: x1, y1, z1, x2, y2, z2");
+unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let mut v = [0f64; 6];
+        for (i, slot) in v.iter_mut().enumerate() {
+            let idx = i as c_int + 1;
+            if (a.type_)(l, idx) != LUA_TNUMBER {
+                return fail(l, c"AddVolume needs 6 numbers: x1, y1, z1, x2, y2, z2");
+            }
+            *slot = (a.tonumber)(l, idx);
+            if !slot.is_finite() {
+                return fail(l, c"AddVolume coordinates must be finite");
+            }
         }
-        *slot = (a.tonumber)(l, idx);
-        if !slot.is_finite() {
-            return fail(l, c"AddVolume coordinates must be finite");
-        }
+        let contents = match parse_liquid(l, 7) {
+            Ok(c) => c,
+            Err(msg) => return fail(l, msg),
+        };
+        let min = [
+            v[0].min(v[3]) as f32,
+            v[1].min(v[4]) as f32,
+            v[2].min(v[5]) as f32,
+        ];
+        let max = [
+            v[0].max(v[3]) as f32,
+            v[1].max(v[4]) as f32,
+            v[2].max(v[5]) as f32,
+        ];
+        let id = {
+            let mut vols = volumes();
+            let id = if vols.len() >= MAX_VOLUMES {
+                None
+            } else {
+                let id = NEXT_VOLUME_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                vols.push(Volume {
+                    id,
+                    min,
+                    max,
+                    contents,
+                });
+                Some(id)
+            };
+            drop(vols);
+            id
+        };
+        id.map_or_else(
+            || fail(l, c"too many volumes (limit 256)"),
+            |id| {
+                (a.pushnumber)(l, f64::from(id));
+                1
+            },
+        )
     }
-    let contents = match parse_liquid(l, 7) {
-        Ok(c) => c,
-        Err(msg) => return fail(l, msg),
-    };
-    let min = [v[0].min(v[3]) as f32, v[1].min(v[4]) as f32, v[2].min(v[5]) as f32];
-    let max = [v[0].max(v[3]) as f32, v[1].max(v[4]) as f32, v[2].max(v[5]) as f32];
-    let id = {
-        let mut vols = volumes();
-        if vols.len() >= MAX_VOLUMES {
-            None
-        } else {
-            let id = NEXT_VOLUME_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            vols.push(Volume { id, min, max, contents });
-            Some(id)
-        }
-    };
-    match id {
-        Some(id) => {
-            (a.pushnumber)(l, f64::from(id));
-            1
-        }
-        None => fail(l, c"too many volumes (limit 256)"),
-    }
-}}
+}
 
 /// waterlevel.RemoveVolume(id) -> bool
-unsafe extern "C-unwind" fn l_remove_volume(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let id = (a.tonumber)(l, 1) as u32;
-    let removed = {
-        let mut vols = volumes();
-        let before = vols.len();
-        vols.retain(|v| v.id != id);
-        vols.len() != before
-    };
-    (a.pushboolean)(l, c_int::from(removed));
-    1
-}}
+unsafe extern "C-unwind" fn l_remove_volume(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let id = (a.tonumber)(l, 1) as u32;
+        let removed = {
+            let mut vols = volumes();
+            let before = vols.len();
+            vols.retain(|v| v.id != id);
+            vols.len() != before
+        };
+        (a.pushboolean)(l, c_int::from(removed));
+        1
+    }
+}
 
 /// `waterlevel.ClearVolumes()`
-unsafe extern "C-unwind" fn l_clear_volumes(_l: LuaState) -> c_int { 
+unsafe extern "C-unwind" fn l_clear_volumes(_l: LuaState) -> c_int {
     volumes().clear();
     0
 }
 
 /// `waterlevel.VolumeCount()`
-unsafe extern "C-unwind" fn l_volume_count(l: LuaState) -> c_int { unsafe {
-    let n = volumes().len();
-    (api().pushnumber)(l, n as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_volume_count(l: LuaState) -> c_int {
+    unsafe {
+        let n = volumes().len();
+        (api().pushnumber)(l, n as f64);
+        1
+    }
+}
 
 /// waterlevel.PointInVolume(x, y, z) -> bool (pure lookup, no engine needed)
-unsafe extern "C-unwind" fn l_point_in_volume(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let p = [
-        (a.tonumber)(l, 1) as f32,
-        (a.tonumber)(l, 2) as f32,
-        (a.tonumber)(l, 3) as f32,
-    ];
-    let inside = point_in_volumes(&volumes(), p);
-    (a.pushboolean)(l, c_int::from(inside));
-    1
-}}
+unsafe extern "C-unwind" fn l_point_in_volume(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let p = [
+            (a.tonumber)(l, 1) as f32,
+            (a.tonumber)(l, 2) as f32,
+            (a.tonumber)(l, 3) as f32,
+        ];
+        let inside = point_in_volumes(&volumes(), p);
+        (a.pushboolean)(l, c_int::from(inside));
+        1
+    }
+}
 
 /// `waterlevel.IsContentsHooked()`
-unsafe extern "C-unwind" fn l_is_contents_hooked(l: LuaState) -> c_int { unsafe {
-    (api().pushboolean)(l, c_int::from(hook_state::contents_active()));
-    1
-}}
+unsafe extern "C-unwind" fn l_is_contents_hooked(l: LuaState) -> c_int {
+    unsafe {
+        (api().pushboolean)(l, c_int::from(hook_state::contents_active()));
+        1
+    }
+}
 
 /// `waterlevel.ContentsHits()` - engine point queries answered with water
-unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int { unsafe {
-    let n = VOLUME_HITS.load(std::sync::atomic::Ordering::Relaxed);
-    (api().pushnumber)(l, n as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int {
+    unsafe {
+        let n = VOLUME_HITS.load(std::sync::atomic::Ordering::Relaxed);
+        (api().pushnumber)(l, n as f64);
+        1
+    }
+}
 
 /// `waterlevel.TraceHits()` - engine traces rewritten as water-surface hits
-unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int { unsafe {
-    #[cfg(target_arch = "x86_64")]
-    let n = engine_hook::TRACE_HITS.load(std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(target_arch = "x86_64"))]
-    let n = 0u64;
-    (api().pushnumber)(l, n as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        let n = engine_hook::TRACE_HITS.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_arch = "x86_64"))]
+        let n = 0u64;
+        (api().pushnumber)(l, n as f64);
+        1
+    }
+}
 
 /// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -> id | nil, err
 /// Makes `physobj` an engine fluid (buoyancy + drag for props inside it).
@@ -2484,252 +2944,305 @@ unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int { unsafe {
 /// `options` is an optional table (it may also be the 6th argument): damping,
 /// torque, viscosity, aerodynamics (boolean), contents ("water"/"slime"), currentx, currenty, currentz.
 /// Defaults are those of a map's water brush (see `FluidSettings`).
-unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    if (a.type_)(l, 1) != LUA_TUSERDATA {
-        return fail(l, c"AttachFluid needs a PhysObj as its first argument");
-    }
-    // GMod userdata block: { void *data; u8 type }, PhysObj is type 12.
-    let ud = (a.touserdata)(l, 1) as *const *mut c_void;
-    if ud.is_null() || *ud.add(1).cast::<u8>() != 12 {
-        return fail(l, c"first argument is not a PhysObj");
-    }
-    let obj = ud.read();
-    if obj.is_null() {
-        return fail(l, c"PhysObj is invalid");
-    }
-    let mut v = [0f32; 4];
-    for (i, slot) in v.iter_mut().enumerate() {
-        let idx = i as c_int + 2;
-        if (a.type_)(l, idx) != LUA_TNUMBER {
-            return fail(l, c"AttachFluid needs 4 numbers after the PhysObj: nx, ny, nz, dist");
+unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        if (a.type_)(l, 1) != LUA_TUSERDATA {
+            return fail(l, c"AttachFluid needs a PhysObj as its first argument");
         }
-        let n = (a.tonumber)(l, idx);
-        if !n.is_finite() {
-            return fail(l, c"plane values must be finite");
+        // GMod userdata block: { void *data; u8 type }, PhysObj is type 12.
+        let ud = (a.touserdata)(l, 1) as *const *mut c_void;
+        if ud.is_null() || *ud.add(1).cast::<u8>() != 12 {
+            return fail(l, c"first argument is not a PhysObj");
         }
-        *slot = n as f32;
-    }
-    let mut fluid = FluidSettings::default();
-    let mut opts = 0;
-    if (a.type_)(l, 6) == LUA_TNUMBER {
-        fluid.damping = (a.tonumber)(l, 6) as f32;
-    } else if (a.type_)(l, 6) == LUA_TTABLE {
-        opts = 6;
-    }
-    if (a.type_)(l, 7) == LUA_TTABLE {
-        opts = 7;
-    }
-    if opts != 0 {
-        let num = |name: &CStr, slot: &mut f32| -> bool {
-            (a.getfield)(l, opts, name.as_ptr());
-            let present = (a.type_)(l, -1) == LUA_TNUMBER;
-            if present {
-                *slot = (a.tonumber)(l, -1) as f32;
+        let obj = ud.read();
+        if obj.is_null() {
+            return fail(l, c"PhysObj is invalid");
+        }
+        let mut v = [0f32; 4];
+        for (i, slot) in v.iter_mut().enumerate() {
+            let idx = i as c_int + 2;
+            if (a.type_)(l, idx) != LUA_TNUMBER {
+                return fail(
+                    l,
+                    c"AttachFluid needs 4 numbers after the PhysObj: nx, ny, nz, dist",
+                );
             }
+            let n = (a.tonumber)(l, idx);
+            if !n.is_finite() {
+                return fail(l, c"plane values must be finite");
+            }
+            *slot = n as f32;
+        }
+        let mut fluid = FluidSettings::default();
+        let mut opts = 0;
+        if (a.type_)(l, 6) == LUA_TNUMBER {
+            fluid.damping = (a.tonumber)(l, 6) as f32;
+        } else if (a.type_)(l, 6) == LUA_TTABLE {
+            opts = 6;
+        }
+        if (a.type_)(l, 7) == LUA_TTABLE {
+            opts = 7;
+        }
+        if opts != 0 {
+            let num = |name: &CStr, slot: &mut f32| -> bool {
+                (a.getfield)(l, opts, name.as_ptr());
+                let present = (a.type_)(l, -1) == LUA_TNUMBER;
+                if present {
+                    *slot = (a.tonumber)(l, -1) as f32;
+                }
+                (a.settop)(l, -2);
+                present
+            };
+            num(c"damping", &mut fluid.damping);
+            num(c"torque", &mut fluid.torque);
+            num(c"viscosity", &mut fluid.viscosity);
+            num(c"currentx", &mut fluid.current[0]);
+            num(c"currenty", &mut fluid.current[1]);
+            num(c"currentz", &mut fluid.current[2]);
+            (a.getfield)(l, opts, c"aerodynamics".as_ptr());
+            fluid.aerodynamics = (a.toboolean)(l, -1) != 0;
             (a.settop)(l, -2);
-            present
-        };
-        num(c"damping", &mut fluid.damping);
-        num(c"torque", &mut fluid.torque);
-        num(c"viscosity", &mut fluid.viscosity);
-        num(c"currentx", &mut fluid.current[0]);
-        num(c"currenty", &mut fluid.current[1]);
-        num(c"currentz", &mut fluid.current[2]);
-        (a.getfield)(l, opts, c"aerodynamics".as_ptr());
-        fluid.aerodynamics = (a.toboolean)(l, -1) != 0;
-        (a.settop)(l, -2);
-        (a.getfield)(l, opts, c"contents".as_ptr());
-        let liquid = parse_liquid(l, -1);
-        (a.settop)(l, -2);
-        match liquid {
-            Ok(c) => fluid.contents = c,
-            Err(msg) => return fail(l, msg),
+            (a.getfield)(l, opts, c"contents".as_ptr());
+            let liquid = parse_liquid(l, -1);
+            (a.settop)(l, -2);
+            match liquid {
+                Ok(c) => fluid.contents = c,
+                Err(msg) => return fail(l, msg),
+            }
+        }
+        let finite = fluid.damping.is_finite()
+            && fluid.torque.is_finite()
+            && fluid.viscosity.is_finite()
+            && fluid.current.iter().all(|c| c.is_finite());
+        if !finite {
+            return fail(l, c"fluid settings must be finite numbers");
+        }
+        match hook_state::fluid_attach(obj as usize, v, &fluid) {
+            Ok(id) => {
+                (a.pushnumber)(l, f64::from(id));
+                1
+            }
+            Err(why) => {
+                let msg = CString::new(why).unwrap_or_default();
+                fail(l, &msg)
+            }
         }
     }
-    let finite = fluid.damping.is_finite()
-        && fluid.torque.is_finite()
-        && fluid.viscosity.is_finite()
-        && fluid.current.iter().all(|c| c.is_finite());
-    if !finite {
-        return fail(l, c"fluid settings must be finite numbers");
-    }
-    match hook_state::fluid_attach(obj as usize, v, &fluid) {
-        Ok(id) => {
-            (a.pushnumber)(l, f64::from(id));
-            1
-        }
-        Err(why) => {
-            let msg = CString::new(why).unwrap_or_default();
-            fail(l, &msg)
-        }
-    }
-}}
+}
 
 /// waterlevel.DetachFluid(id) -> bool. Call before removing the entity.
-unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    let ok = (a.type_)(l, 1) == LUA_TNUMBER && hook_state::fluid_detach((a.tonumber)(l, 1) as u32);
-    (a.pushboolean)(l, c_int::from(ok));
-    1
-}}
+unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let ok =
+            (a.type_)(l, 1) == LUA_TNUMBER && hook_state::fluid_detach((a.tonumber)(l, 1) as u32);
+        (a.pushboolean)(l, c_int::from(ok));
+        1
+    }
+}
 
 /// `waterlevel.FluidCount()`
-unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int { unsafe {
-    (api().pushnumber)(l, hook_state::fluid_count() as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
+    unsafe {
+        (api().pushnumber)(l, hook_state::fluid_count() as f64);
+        1
+    }
+}
 
 /// `waterlevel.BubbleClips()` - bullet bubble trails clipped to a volume
-unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int { unsafe {
-    #[cfg(target_arch = "x86_64")]
-    let n = engine_hook::BUBBLE_CLIPS.load(std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(target_arch = "x86_64"))]
-    let n = 0u64;
-    (api().pushnumber)(l, n as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        let n = engine_hook::BUBBLE_CLIPS.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_arch = "x86_64"))]
+        let n = 0u64;
+        (api().pushnumber)(l, n as f64);
+        1
+    }
+}
 
 /// `waterlevel.ExplosionFixes()` - explosives whose water level was raised
-unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int { unsafe {
-    #[cfg(target_arch = "x86_64")]
-    let n = engine_hook::EXPLOSION_FIXES.load(std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(target_arch = "x86_64"))]
-    let n = 0u64;
-    (api().pushnumber)(l, n as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        let n = engine_hook::EXPLOSION_FIXES.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_arch = "x86_64"))]
+        let n = 0u64;
+        (api().pushnumber)(l, n as f64);
+        1
+    }
+}
 
 /// `waterlevel.ExplosionsRedirected()` - explosion events sent as the water explosion
-unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int { unsafe {
-    #[cfg(target_arch = "x86_64")]
-    let n = engine_hook::EXPLOSIONS_REDIRECTED.load(std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(target_arch = "x86_64"))]
-    let n = 0u64;
-    (api().pushnumber)(l, n as f64);
-    1
-}}
+unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        let n = engine_hook::EXPLOSIONS_REDIRECTED.load(std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_arch = "x86_64"))]
+        let n = 0u64;
+        (api().pushnumber)(l, n as f64);
+        1
+    }
+}
 
 /// Replacement for `Entity:WaterLevel()`. Upvalue 1 is the original function.
-unsafe extern "C-unwind" fn l_wrapped_water_level(l: LuaState) -> c_int { unsafe {
-    let a = api();
-    if let Some(idx) = ent_index(l, 1) {
-        let level = overrides().get(&idx).copied(); // guard dropped here
-        if let Some(level) = level {
-            (a.pushnumber)(l, f64::from(level));
-            return 1;
+unsafe extern "C-unwind" fn l_wrapped_water_level(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        if let Some(idx) = ent_index(l, 1) {
+            let level = overrides().get(&idx).copied(); // guard dropped here
+            if let Some(level) = level {
+                (a.pushnumber)(l, f64::from(level));
+                return 1;
+            }
         }
+        let nargs = (a.gettop)(l);
+        (a.pushvalue)(l, LUA_GLOBALSINDEX - 1); // upvalue 1
+        for i in 1..=nargs {
+            (a.pushvalue)(l, i);
+        }
+        (a.call)(l, nargs, LUA_MULTRET);
+        (a.gettop)(l) - nargs
     }
-    let nargs = (a.gettop)(l);
-    (a.pushvalue)(l, LUA_GLOBALSINDEX - 1); // upvalue 1
-    for i in 1..=nargs {
-        (a.pushvalue)(l, i);
-    }
-    (a.call)(l, nargs, LUA_MULTRET);
-    (a.gettop)(l) - nargs
-}}
+}
 
 /// Hook "Tick": re-apply every override, drop entities that are gone.
-unsafe extern "C-unwind" fn l_tick(l: LuaState) -> c_int { unsafe {
-    let snapshot: Vec<(i32, u8)> = overrides().iter().map(|(k, v)| (*k, *v)).collect();
-    if snapshot.is_empty() {
-        return 0;
-    }
-    let key = save_key();
-    for (idx, level) in snapshot {
-        if !apply_level(l, idx, level, key.as_deref()) {
-            overrides().remove(&idx);
+unsafe extern "C-unwind" fn l_tick(l: LuaState) -> c_int {
+    unsafe {
+        let snapshot: Vec<(i32, u8)> = overrides().iter().map(|(k, v)| (*k, *v)).collect();
+        if snapshot.is_empty() {
+            return 0;
         }
+        let key = save_key();
+        for (idx, level) in snapshot {
+            if !apply_level(l, idx, level, key.as_deref()) {
+                overrides().remove(&idx);
+            }
+        }
+        0
     }
-    0
-}}
+}
 
 /// Hook "EntityRemoved"(ent, fullUpdate): forget the override immediately so a
 /// new entity reusing the index never inherits it.
-unsafe extern "C-unwind" fn l_entity_removed(l: LuaState) -> c_int { unsafe {
-    if let Some(idx) = ent_index(l, 1) {
-        overrides().remove(&idx);
+unsafe extern "C-unwind" fn l_entity_removed(l: LuaState) -> c_int {
+    unsafe {
+        if let Some(idx) = ent_index(l, 1) {
+            overrides().remove(&idx);
+        }
+        0
     }
-    0
-}}
+}
 
 // ---------------------------------------------------------------------------
 // Module entry points
 // ---------------------------------------------------------------------------
 
-unsafe fn set_fn(l: LuaState, table: c_int, name: &CStr, f: LuaFn) { unsafe {
-    let a = api();
-    (a.pushcclosure)(l, f, 0);
-    (a.setfield)(l, table, name.as_ptr());
-}}
+unsafe fn set_fn(l: LuaState, table: c_int, name: &CStr, f: LuaFn) {
+    unsafe {
+        let a = api();
+        (a.pushcclosure)(l, f, 0);
+        (a.setfield)(l, table, name.as_ptr());
+    }
+}
 
-unsafe fn set_nil(l: LuaState, table: c_int, name: &CStr) { unsafe {
-    let a = api();
-    (a.pushnil)(l);
-    (a.setfield)(l, table, name.as_ptr());
-}}
+unsafe fn set_nil(l: LuaState, table: c_int, name: &CStr) {
+    unsafe {
+        let a = api();
+        (a.pushnil)(l);
+        (a.setfield)(l, table, name.as_ptr());
+    }
+}
 
-unsafe fn hook_add(l: LuaState, event: &CStr, f: LuaFn) { unsafe {
-    let a = api();
-    let base = (a.gettop)(l);
-    (a.getfield)(l, LUA_GLOBALSINDEX, c"hook".as_ptr());
-    (a.getfield)(l, base + 1, c"Add".as_ptr());
-    (a.pushstring)(l, event.as_ptr());
-    (a.pushstring)(l, HOOK_ID.as_ptr());
-    (a.pushcclosure)(l, f, 0);
-    let _ = (a.pcall)(l, 3, 0, 0);
-    (a.settop)(l, base);
-}}
+unsafe fn hook_add(l: LuaState, event: &CStr, f: LuaFn) {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
+        (a.getfield)(l, LUA_GLOBALSINDEX, c"hook".as_ptr());
+        (a.getfield)(l, base + 1, c"Add".as_ptr());
+        (a.pushstring)(l, event.as_ptr());
+        (a.pushstring)(l, HOOK_ID.as_ptr());
+        (a.pushcclosure)(l, f, 0);
+        let _ = (a.pcall)(l, 3, 0, 0);
+        (a.settop)(l, base);
+    }
+}
 
-unsafe fn hook_remove(l: LuaState, event: &CStr) { unsafe {
-    let a = api();
-    let base = (a.gettop)(l);
-    (a.getfield)(l, LUA_GLOBALSINDEX, c"hook".as_ptr());
-    (a.getfield)(l, base + 1, c"Remove".as_ptr());
-    (a.pushstring)(l, event.as_ptr());
-    (a.pushstring)(l, HOOK_ID.as_ptr());
-    let _ = (a.pcall)(l, 2, 0, 0);
-    (a.settop)(l, base);
-}}
+unsafe fn hook_remove(l: LuaState, event: &CStr) {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
+        (a.getfield)(l, LUA_GLOBALSINDEX, c"hook".as_ptr());
+        (a.getfield)(l, base + 1, c"Remove".as_ptr());
+        (a.pushstring)(l, event.as_ptr());
+        (a.pushstring)(l, HOOK_ID.as_ptr());
+        let _ = (a.pcall)(l, 2, 0, 0);
+        (a.settop)(l, base);
+    }
+}
 
 /// Pushes the Entity metatable and returns true, or leaves the stack unchanged.
-unsafe fn push_entity_meta(l: LuaState) -> bool { unsafe {
-    let a = api();
-    let base = (a.gettop)(l);
-    (a.getfield)(l, LUA_GLOBALSINDEX, c"FindMetaTable".as_ptr());
-    (a.pushstring)(l, c"Entity".as_ptr());
-    if (a.pcall)(l, 1, 1, 0) == 0 && (a.type_)(l, base + 1) == LUA_TTABLE {
-        true
-    } else {
-        (a.settop)(l, base);
-        false
+unsafe fn push_entity_meta(l: LuaState) -> bool {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
+        (a.getfield)(l, LUA_GLOBALSINDEX, c"FindMetaTable".as_ptr());
+        (a.pushstring)(l, c"Entity".as_ptr());
+        if (a.pcall)(l, 1, 1, 0) == 0 && (a.type_)(l, base + 1) == LUA_TTABLE {
+            true
+        } else {
+            (a.settop)(l, base);
+            false
+        }
     }
-}}
+}
 
 #[no_mangle]
-pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int { unsafe {
-    let Some(loaded) = load_api() else {
-        return 0;
-    };
-    let _ = API.set(loaded);
-    let a = api();
-    let base = (a.gettop)(l);
+pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
+    unsafe {
+        let Some(loaded) = load_api() else {
+            return 0;
+        };
+        let _ = API.set(loaded);
+        let a = api();
+        let base = (a.gettop)(l);
 
-    // Loaded as gmcl_waterlevelercore: the client's water. The Lua side gives it the
-    // volumes (AddVolume etc.); its engine trace and the water explosion sound are
-    // patched so the client sees and hears them like the server does.
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    if client_hook::is_client_module() {
-        let explosion = match client_hook::install() {
-            Ok(()) => "explosion sound".to_string(),
-            Err(why) => format!("explosion sound failed: {why}"),
-        };
-        let trace = match hook_state::install_client_contents() {
-            Ok(note) => note,
-            Err(why) => format!("trace hook failed: {why}"),
-        };
-        *HOOK_STATUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = format!("client: {trace}; {explosion}");
-        (a.createtable)(l, 0, 8);
+        // Loaded as gmcl_waterlevelercore: the client's water. The Lua side gives it the
+        // volumes (AddVolume etc.); its engine trace and the water explosion sound are
+        // patched so the client sees and hears them like the server does.
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        if client_hook::is_client_module() {
+            let explosion = match client_hook::install() {
+                Ok(()) => "explosion sound".to_string(),
+                Err(why) => format!("explosion sound failed: {why}"),
+            };
+            let trace = match hook_state::install_client_contents() {
+                Ok(note) => note,
+                Err(why) => format!("trace hook failed: {why}"),
+            };
+            *HOOK_STATUS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                format!("client: {trace}; {explosion}");
+            (a.createtable)(l, 0, 8);
+            let t = base + 1;
+            set_fn(l, t, c"AddVolume", l_add_volume);
+            set_fn(l, t, c"RemoveVolume", l_remove_volume);
+            set_fn(l, t, c"ClearVolumes", l_clear_volumes);
+            set_fn(l, t, c"VolumeCount", l_volume_count);
+            set_fn(l, t, c"PointInVolume", l_point_in_volume);
+            set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
+            set_fn(l, t, c"ContentsHits", l_contents_hits);
+            set_fn(l, t, c"TraceHits", l_trace_hits);
+            set_fn(l, t, c"HookStatus", l_hook_status);
+            (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
+            (a.settop)(l, base);
+            return 0;
+        }
+
+        // Global `waterleveler` table.
+        (a.createtable)(l, 0, 16);
         let t = base + 1;
         set_fn(l, t, c"AddVolume", l_add_volume);
         set_fn(l, t, c"RemoveVolume", l_remove_volume);
@@ -2739,133 +3252,121 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int { unsafe {
         set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
         set_fn(l, t, c"ContentsHits", l_contents_hits);
         set_fn(l, t, c"TraceHits", l_trace_hits);
+        set_fn(l, t, c"BubbleClips", l_bubble_clips);
+        set_fn(l, t, c"ExplosionFixes", l_explosion_fixes);
+        set_fn(l, t, c"ExplosionsRedirected", l_explosions_redirected);
+        set_fn(l, t, c"AttachFluid", l_attach_fluid);
+        set_fn(l, t, c"DetachFluid", l_detach_fluid);
+        set_fn(l, t, c"FluidCount", l_fluid_count);
+        set_fn(l, t, c"Set", l_set);
+        set_fn(l, t, c"Get", l_get);
+        set_fn(l, t, c"Clear", l_clear);
+        set_fn(l, t, c"ClearAll", l_clear_all);
+        set_fn(l, t, c"SetSaveKey", l_set_save_key);
+        set_fn(l, t, c"IsHooked", l_is_hooked);
         set_fn(l, t, c"HookStatus", l_hook_status);
-        (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
-        (a.settop)(l, base);
-        return 0;
-    }
+        set_fn(l, t, c"HookHits", l_hook_hits);
+        (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr()); // pops the table
 
-    // Global `waterleveler` table.
-    (a.createtable)(l, 0, 16);
-    let t = base + 1;
-    set_fn(l, t, c"AddVolume", l_add_volume);
-    set_fn(l, t, c"RemoveVolume", l_remove_volume);
-    set_fn(l, t, c"ClearVolumes", l_clear_volumes);
-    set_fn(l, t, c"VolumeCount", l_volume_count);
-    set_fn(l, t, c"PointInVolume", l_point_in_volume);
-    set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
-    set_fn(l, t, c"ContentsHits", l_contents_hits);
-    set_fn(l, t, c"TraceHits", l_trace_hits);
-    set_fn(l, t, c"BubbleClips", l_bubble_clips);
-    set_fn(l, t, c"ExplosionFixes", l_explosion_fixes);
-    set_fn(l, t, c"ExplosionsRedirected", l_explosions_redirected);
-    set_fn(l, t, c"AttachFluid", l_attach_fluid);
-    set_fn(l, t, c"DetachFluid", l_detach_fluid);
-    set_fn(l, t, c"FluidCount", l_fluid_count);
-    set_fn(l, t, c"Set", l_set);
-    set_fn(l, t, c"Get", l_get);
-    set_fn(l, t, c"Clear", l_clear);
-    set_fn(l, t, c"ClearAll", l_clear_all);
-    set_fn(l, t, c"SetSaveKey", l_set_save_key);
-    set_fn(l, t, c"IsHooked", l_is_hooked);
-    set_fn(l, t, c"HookStatus", l_hook_status);
-    set_fn(l, t, c"HookHits", l_hook_hits);
-    (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr()); // pops the table
+        // Entity metatable: methods + Entity:WaterLevel wrapper.
+        if push_entity_meta(l) {
+            let mt = base + 1;
 
-    // Entity metatable: methods + Entity:WaterLevel wrapper.
-    if push_entity_meta(l) {
-        let mt = base + 1;
+            // Keep the original across module reloads.
+            (a.getfield)(l, mt, ORIG_KEY.as_ptr());
+            let have_orig = (a.type_)(l, -1) != LUA_TNIL;
+            (a.settop)(l, mt);
+            if !have_orig {
+                (a.getfield)(l, mt, c"WaterLevel".as_ptr());
+                (a.setfield)(l, mt, ORIG_KEY.as_ptr()); // pops
+            }
+            (a.getfield)(l, mt, ORIG_KEY.as_ptr());
+            (a.pushcclosure)(l, l_wrapped_water_level, 1); // pops the upvalue
+            (a.setfield)(l, mt, c"WaterLevel".as_ptr());
 
-        // Keep the original across module reloads.
-        (a.getfield)(l, mt, ORIG_KEY.as_ptr());
-        let have_orig = (a.type_)(l, -1) != LUA_TNIL;
-        (a.settop)(l, mt);
-        if !have_orig {
-            (a.getfield)(l, mt, c"WaterLevel".as_ptr());
-            (a.setfield)(l, mt, ORIG_KEY.as_ptr()); // pops
+            set_fn(l, mt, c"SetWaterLevelOverride", l_set);
+            set_fn(l, mt, c"GetWaterLevelOverride", l_get);
+            set_fn(l, mt, c"ClearWaterLevelOverride", l_clear);
+            (a.settop)(l, base);
         }
-        (a.getfield)(l, mt, ORIG_KEY.as_ptr());
-        (a.pushcclosure)(l, l_wrapped_water_level, 1); // pops the upvalue
-        (a.setfield)(l, mt, c"WaterLevel".as_ptr());
 
-        set_fn(l, mt, c"SetWaterLevelOverride", l_set);
-        set_fn(l, mt, c"GetWaterLevelOverride", l_get);
-        set_fn(l, mt, c"ClearWaterLevelOverride", l_clear);
+        hook_add(l, c"Tick", l_tick);
+        hook_add(l, c"EntityRemoved", l_entity_removed);
+
+        // Engine hook (best effort; the Lua layers work without it).
+        let water_level = match hook_state::install() {
+            Ok(rva) => format!("hooked CBaseEntity::SetWaterLevel at server.dll+{rva:#x}"),
+            Err(why) => format!("engine hook inactive: {why}"),
+        };
+        let contents = match hook_state::install_contents() {
+            Ok(what) => format!("water volumes active via {what}"),
+            Err(why) => format!("water volumes inactive: {why}"),
+        };
+        let status = format!("{water_level}; {contents}");
+        lua_print(l, &format!("[waterlevel] {status}"));
+        *HOOK_STATUS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = status;
+
         (a.settop)(l, base);
+        0
     }
-
-    hook_add(l, c"Tick", l_tick);
-    hook_add(l, c"EntityRemoved", l_entity_removed);
-
-    // Engine hook (best effort; the Lua layers work without it).
-    let water_level = match hook_state::install() {
-        Ok(rva) => format!("hooked CBaseEntity::SetWaterLevel at server.dll+{rva:#x}"),
-        Err(why) => format!("engine hook inactive: {why}"),
-    };
-    let contents = match hook_state::install_contents() {
-        Ok(what) => format!("water volumes active via {what}"),
-        Err(why) => format!("water volumes inactive: {why}"),
-    };
-    let status = format!("{water_level}; {contents}");
-    lua_print(l, &format!("[waterlevel] {status}"));
-    *HOOK_STATUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = status;
-
-    (a.settop)(l, base);
-    0
-}}
+}
 
 #[no_mangle]
-pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int { unsafe {
-    if API.get().is_none() {
-        return 0;
-    }
-    let a = api();
-    let base = (a.gettop)(l);
+pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
+    unsafe {
+        if API.get().is_none() {
+            return 0;
+        }
+        let a = api();
+        let base = (a.gettop)(l);
 
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    if client_hook::is_client_module() {
-        client_hook::uninstall();
+        #[cfg(all(windows, target_arch = "x86_64"))]
+        if client_hook::is_client_module() {
+            client_hook::uninstall();
+            hook_state::uninstall_contents();
+            engine_hook::CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
+            volumes().clear();
+            (a.pushnil)(l);
+            (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
+            (a.settop)(l, base);
+            return 0;
+        }
+
+        // Fluid controllers hold engine objects; free them while the module is still loaded.
+        hook_state::fluid_detach_all();
+        // Remove the detour first so the engine never calls into unloaded code.
+        hook_state::uninstall();
         hook_state::uninstall_contents();
-        engine_hook::CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
+        overrides().clear();
         volumes().clear();
+
+        hook_remove(l, c"Tick");
+        hook_remove(l, c"EntityRemoved");
+
+        if push_entity_meta(l) {
+            let mt = base + 1;
+            (a.getfield)(l, mt, ORIG_KEY.as_ptr());
+            if (a.type_)(l, -1) == LUA_TNIL {
+                (a.settop)(l, mt);
+            } else {
+                (a.setfield)(l, mt, c"WaterLevel".as_ptr()); // pops
+            }
+            set_nil(l, mt, ORIG_KEY);
+            set_nil(l, mt, c"SetWaterLevelOverride");
+            set_nil(l, mt, c"GetWaterLevelOverride");
+            set_nil(l, mt, c"ClearWaterLevelOverride");
+            (a.settop)(l, base);
+        }
+
         (a.pushnil)(l);
         (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
+
         (a.settop)(l, base);
-        return 0;
+        0
     }
-
-    // Fluid controllers hold engine objects; free them while the module is still loaded.
-    hook_state::fluid_detach_all();
-    // Remove the detour first so the engine never calls into unloaded code.
-    hook_state::uninstall();
-    hook_state::uninstall_contents();
-    overrides().clear();
-    volumes().clear();
-
-    hook_remove(l, c"Tick");
-    hook_remove(l, c"EntityRemoved");
-
-    if push_entity_meta(l) {
-        let mt = base + 1;
-        (a.getfield)(l, mt, ORIG_KEY.as_ptr());
-        if (a.type_)(l, -1) == LUA_TNIL {
-            (a.settop)(l, mt);
-        } else {
-            (a.setfield)(l, mt, c"WaterLevel".as_ptr()); // pops
-        }
-        set_nil(l, mt, ORIG_KEY);
-        set_nil(l, mt, c"SetWaterLevelOverride");
-        set_nil(l, mt, c"GetWaterLevelOverride");
-        set_nil(l, mt, c"ClearWaterLevelOverride");
-        (a.settop)(l, base);
-    }
-
-    (a.pushnil)(l);
-    (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
-
-    (a.settop)(l, base);
-    0
-}}
+}
 
 // ---------------------------------------------------------------------------
 // Tests (Linux x86-64): exercise the real hook machinery against the real
@@ -2885,8 +3386,14 @@ mod tests {
     const FUNC_LEN: usize = 0xbb;
 
     extern "C" {
-        fn mmap(addr: *mut c_void, len: usize, prot: c_int, flags: c_int, fd: c_int, off: i64)
-            -> *mut c_void;
+        fn mmap(
+            addr: *mut c_void,
+            len: usize,
+            prot: c_int,
+            flags: c_int,
+            fd: c_int,
+            off: i64,
+        ) -> *mut c_void;
     }
 
     fn server_dll() -> Option<Vec<u8>> {
@@ -2916,7 +3423,8 @@ mod tests {
             return;
         };
         let pe = parse_pe(&d);
-        let (_, _, _, text_raw, text_size, _) = pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
+        let (_, _, _, text_raw, text_size, _) =
+            pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
         let text = &d[text_raw..text_raw + text_size];
         for sig in [CLIENT_TRACE_SIG, RAY_HELPER_SIG] {
             assert_eq!(find_all(text, &parse_sig(sig)).len(), 1, "{sig}");
@@ -2942,7 +3450,9 @@ mod tests {
         let mut sections = Vec::new();
         for i in 0..nsec {
             let s = opt + optsz + i * 40;
-            let name = String::from_utf8_lossy(&d[s..s + 8]).trim_end_matches('\0').to_string();
+            let name = String::from_utf8_lossy(&d[s..s + 8])
+                .trim_end_matches('\0')
+                .to_string();
             sections.push((
                 name,
                 u32at(s + 12),
@@ -2969,22 +3479,24 @@ mod tests {
         img
     }
 
-    unsafe fn rwx(len: usize) -> *mut u8 { unsafe {
-        // PROT_READ|WRITE|EXEC, MAP_PRIVATE|MAP_ANONYMOUS
-        let p = mmap(std::ptr::null_mut(), len, 7, 0x22, -1, 0);
-        assert_ne!(p as isize, -1, "mmap failed");
-        p.cast::<u8>()
-    }}
-    unsafe fn t_alloc(n: usize) -> *mut u8 { unsafe {
-        rwx(n.max(4096))
-    }}
+    unsafe fn rwx(len: usize) -> *mut u8 {
+        unsafe {
+            // PROT_READ|WRITE|EXEC, MAP_PRIVATE|MAP_ANONYMOUS
+            let p = mmap(std::ptr::null_mut(), len, 7, 0x22, -1, 0);
+            assert_ne!(p as isize, -1, "mmap failed");
+            p.cast::<u8>()
+        }
+    }
+    unsafe fn t_alloc(n: usize) -> *mut u8 {
+        unsafe { rwx(n.max(4096)) }
+    }
     // Same signature as the Windows implementation it stands in for.
     #[allow(clippy::unnecessary_wraps)]
-    unsafe fn t_writable(_: *mut u8, _: usize) -> Option<u32> { 
+    const unsafe fn t_writable(_: *mut u8, _: usize) -> Option<u32> {
         Some(0)
     }
-    unsafe fn t_restore(_: *mut u8, _: usize, _: u32) {}
-    unsafe fn t_flush(_: *mut u8, _: usize) {}
+    const unsafe fn t_restore(_: *mut u8, _: usize, _: u32) {}
+    const unsafe fn t_flush(_: *mut u8, _: usize) {}
     const TEST_PLATFORM: Platform = Platform {
         alloc_exec: t_alloc,
         make_writable: t_writable,
@@ -3023,7 +3535,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(total.len(), 1, "SetWaterLevel signature must match exactly once: {total:x?}");
+        assert_eq!(
+            total.len(),
+            1,
+            "SetWaterLevel signature must match exactly once: {total:x?}"
+        );
         total[0]
     }
 
@@ -3120,7 +3636,12 @@ mod tests {
 
     #[test]
     fn volume_math() {
-        let v = [Volume { id: 1, min: [0.0, 0.0, 0.0], max: [128.0, 128.0, 128.0], contents: CONTENTS_WATER }];
+        let v = [Volume {
+            id: 1,
+            min: [0.0, 0.0, 0.0],
+            max: [128.0, 128.0, 128.0],
+            contents: CONTENTS_WATER,
+        }];
         assert!(point_in_volumes(&v, [64.0, 64.0, 64.0]));
         assert!(point_in_volumes(&v, [0.0, 128.0, 0.0])); // edges are inside
         assert!(!point_in_volumes(&v, [129.0, 64.0, 64.0]));
@@ -3144,7 +3665,11 @@ mod tests {
                 .iter()
                 .find(|s| s.1 <= grva && grva < s.1 + s.2)
                 .expect("global is outside every section");
-            assert!(sec.0 == ".data" || sec.0 == ".bss", "enginetrace global is in {}", sec.0);
+            assert!(
+                sec.0 == ".data" || sec.0 == ".bss",
+                "enginetrace global is in {}",
+                sec.0
+            );
         }
     }
 
@@ -3156,7 +3681,7 @@ mod tests {
         _pos: *const f32,
         a3: usize,
         a4: usize,
-    ) -> c_int { 
+    ) -> c_int {
         *GPC_ARGS.lock().unwrap() = (a3, a4);
         0x1
     }
@@ -3166,27 +3691,58 @@ mod tests {
 
     #[test]
     fn rays_starting_inside_behave_like_a_real_water_brush() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             let vols = cube();
 
             // The engine's water-height probe: starts 256 above a point that is
             // inside, ends at that point (also inside) -> allsolid, fraction 0,
             // end point = start.
-            let ray = make_ray([64.0, 64.0, 100.0], [0.0, 0.0, -40.0], [0.0; 3], [0.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, 100.0],
+                [0.0, 0.0, -40.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
             let mut tr = miss_trace();
-            assert!(apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+            assert!(apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
             assert_eq!(f32at(&tr, 0x2c), 0.0, "fraction");
             assert_eq!(f32at(&tr, 0x0c + 8), 100.0, "endpos = start");
             assert_eq!((tr[0x36], tr[0x37]), (1, 1), "allsolid / startsolid");
-            assert_eq!(i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()), CONTENTS_WATER);
-            assert_eq!(u64::from_le_bytes(tr[0x58..0x60].try_into().unwrap()), 0x1234, "m_pEnt = the world entity");
+            assert_eq!(
+                i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
+                CONTENTS_WATER
+            );
+            assert_eq!(
+                u64::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
+                0x1234,
+                "m_pEnt = the world entity"
+            );
 
             // Starts inside but leaves: startsolid only, the rest is the engine's.
-            let ray = make_ray([64.0, 64.0, 64.0], [0.0, 0.0, 300.0], [0.0; 3], [0.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, 64.0],
+                [0.0, 0.0, 300.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
             let mut tr = miss_trace();
             let before = tr;
-            assert!(apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+            assert!(apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
             assert_eq!((tr[0x36], tr[0x37]), (0, 1));
             let mut expect = before;
             expect[0x37] = 1;
@@ -3199,13 +3755,13 @@ mod tests {
     static UNTOUCH_EVENTS: AtomicUsize = AtomicUsize::new(0);
     static UNTOUCH_CONTENTS: AtomicUsize = AtomicUsize::new(0);
 
-    unsafe extern "win64" fn fake_end_touch(_: *mut c_void, _: *mut c_void, _: *mut c_void) { 
+    unsafe extern "win64" fn fake_end_touch(_: *mut c_void, _: *mut c_void, _: *mut c_void) {
         END_TOUCH_ORIGINAL_CALLS.fetch_add(1, Ordering::SeqCst);
     }
-    unsafe extern "win64" fn fake_get_game_data(object: *mut c_void) -> *mut u8 { unsafe {
-        *(object as *const *mut u8).add(1)
-    }}
-    unsafe extern "win64" fn fake_on_entity_event(_: *mut u8, event: c_int, data: *mut c_void) { 
+    unsafe extern "win64" fn fake_get_game_data(object: *mut c_void) -> *mut u8 {
+        unsafe { *(object as *const *mut u8).add(1) }
+    }
+    unsafe extern "win64" fn fake_on_entity_event(_: *mut u8, event: c_int, data: *mut c_void) {
         assert_eq!(event, ENTITY_EVENT_WATER_UNTOUCH);
         UNTOUCH_EVENTS.fetch_add(1, Ordering::SeqCst);
         UNTOUCH_CONTENTS.store(data as usize, Ordering::SeqCst);
@@ -3213,7 +3769,9 @@ mod tests {
 
     #[test]
     fn end_touch_with_a_destroyed_fluid_skips_the_splash_code() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         FLUID_END_TOUCH_TRAMPOLINE.store(fake_end_touch as *const () as usize, Ordering::SeqCst);
         END_TOUCH_ORIGINAL_CALLS.store(0, Ordering::SeqCst);
         UNTOUCH_EVENTS.store(0, Ordering::SeqCst);
@@ -3222,29 +3780,54 @@ mod tests {
         entity_vtable[ENTITY_EVENT_SLOT] = fake_on_entity_event as *const () as usize;
         let mut entity = vec![0u8; 0x400];
         entity[..8].copy_from_slice(&(entity_vtable.as_ptr() as usize).to_le_bytes());
-        entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4].copy_from_slice(&(EFL_TOUCHING_FLUID | 0x4).to_le_bytes());
+        entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4]
+            .copy_from_slice(&(EFL_TOUCHING_FLUID | 0x4).to_le_bytes());
         let mut object_vtable = [0usize; OBJ_GET_GAME_DATA_SLOT + 1];
         object_vtable[OBJ_GET_GAME_DATA_SLOT] = fake_get_game_data as *const () as usize;
-        let object = [object_vtable.as_ptr() as usize, entity.as_mut_ptr() as usize];
+        let object = [
+            object_vtable.as_ptr() as usize,
+            entity.as_mut_ptr() as usize,
+        ];
         let live = 0x1000usize;
         let dead = 0x2000usize;
         fluid_died(dead, CONTENTS_SLIME);
         unsafe {
             // A live fluid goes to the engine's own code.
-            hook_fluid_end_touch(std::ptr::null_mut(), object.as_ptr() as *mut c_void, live as *mut c_void);
+            hook_fluid_end_touch(
+                std::ptr::null_mut(),
+                object.as_ptr().cast_mut().cast::<c_void>(),
+                live as *mut c_void,
+            );
             assert_eq!(END_TOUCH_ORIGINAL_CALLS.load(Ordering::SeqCst), 1);
             assert_eq!(UNTOUCH_EVENTS.load(Ordering::SeqCst), 0);
             // A destroyed one never reaches it; the entity is released.
-            hook_fluid_end_touch(std::ptr::null_mut(), object.as_ptr() as *mut c_void, dead as *mut c_void);
+            hook_fluid_end_touch(
+                std::ptr::null_mut(),
+                object.as_ptr().cast_mut().cast::<c_void>(),
+                dead as *mut c_void,
+            );
         }
         assert_eq!(END_TOUCH_ORIGINAL_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(UNTOUCH_EVENTS.load(Ordering::SeqCst), 1);
-        assert_eq!(UNTOUCH_CONTENTS.load(Ordering::SeqCst), CONTENTS_SLIME as usize);
-        let flags = u32::from_le_bytes(entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4].try_into().unwrap());
+        assert_eq!(
+            UNTOUCH_CONTENTS.load(Ordering::SeqCst),
+            CONTENTS_SLIME as usize
+        );
+        let flags = u32::from_le_bytes(
+            entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4]
+                .try_into()
+                .unwrap(),
+        );
         assert_eq!(flags, 0x4, "only EFL_TOUCHING_FLUID is cleared");
         // A new controller at the same address is live again.
         fluid_born(dead);
-        unsafe { hook_fluid_end_touch(std::ptr::null_mut(), object.as_ptr() as *mut c_void, dead as *mut c_void) };
+        unsafe {
+            hook_fluid_end_touch(
+                std::ptr::null_mut(),
+                object.as_ptr().cast_mut().cast::<c_void>(),
+                dead as *mut c_void,
+            );
+        }
         assert_eq!(END_TOUCH_ORIGINAL_CALLS.load(Ordering::SeqCst), 2);
         forget_dead_fluids();
     }
@@ -3257,7 +3840,8 @@ mod tests {
         };
         let pat = parse_sig(FLUID_END_TOUCH_SIG);
         let pe = parse_pe(&d);
-        let (_, _, _, text_raw, text_size, _) = pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
+        let (_, _, _, text_raw, text_size, _) =
+            pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
         let hits = find_all(&d[text_raw..text_raw + text_size], &pat);
         assert_eq!(hits.len(), 1, "must match exactly once");
         // The stolen bytes end on an instruction boundary (`inc dword [rcx+0x1f0]`).
@@ -3286,11 +3870,25 @@ mod tests {
 
     #[test]
     fn bubble_trail_clip_math() {
-        let v = [Volume { id: 1, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER }];
+        let v = [Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [128.0; 3],
+            contents: CONTENTS_WATER,
+        }];
         // Fully inside, or nowhere near: unchanged.
-        assert_eq!(clip_bubble_trail(&v, [10.0; 3], [100.0; 3]), BubbleClip::Keep);
-        assert_eq!(clip_bubble_trail(&v, [500.0; 3], [600.0; 3]), BubbleClip::Keep);
-        assert_eq!(clip_bubble_trail(&v, [5.0, 5.0, 5.0], [5.0, 5.0, 5.0]), BubbleClip::Keep);
+        assert_eq!(
+            clip_bubble_trail(&v, [10.0; 3], [100.0; 3]),
+            BubbleClip::Keep
+        );
+        assert_eq!(
+            clip_bubble_trail(&v, [500.0; 3], [600.0; 3]),
+            BubbleClip::Keep
+        );
+        assert_eq!(
+            clip_bubble_trail(&v, [5.0, 5.0, 5.0], [5.0, 5.0, 5.0]),
+            BubbleClip::Keep
+        );
 
         // Out through a side wall: 64 inside, 1000 units of flight.
         let BubbleClip::Clipped(a, b, frac) =
@@ -3299,7 +3897,10 @@ mod tests {
             panic!("expected a clip");
         };
         assert_eq!(a, [64.0, 64.0, 64.0]);
-        assert!((b[0] - 127.5).abs() < 1e-3, "{b:?}: exit point nudged 0.5 inside");
+        assert!(
+            (b[0] - 127.5).abs() < 1e-3,
+            "{b:?}: exit point nudged 0.5 inside"
+        );
         assert!((frac - 63.5 / 1000.0).abs() < 1e-5, "{frac}");
 
         // From outside through the box: clipped at both walls.
@@ -3319,8 +3920,18 @@ mod tests {
 
         // Two volumes: the one the trail starts in wins.
         let two = [
-            Volume { id: 1, min: [200.0, 0.0, 0.0], max: [328.0, 128.0, 128.0], contents: CONTENTS_WATER },
-            Volume { id: 2, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER },
+            Volume {
+                id: 1,
+                min: [200.0, 0.0, 0.0],
+                max: [328.0, 128.0, 128.0],
+                contents: CONTENTS_WATER,
+            },
+            Volume {
+                id: 2,
+                min: [0.0; 3],
+                max: [128.0; 3],
+                contents: CONTENTS_WATER,
+            },
         ];
         let BubbleClip::Clipped(_, b, _) =
             clip_bubble_trail(&two, [64.0, 64.0, 64.0], [1000.0, 64.0, 64.0])
@@ -3331,25 +3942,33 @@ mod tests {
     }
 
     type BubbleCall = ([f32; 3], [f32; 3], i32);
-    static BUBBLE_CALLS: Mutex<Vec<BubbleCall>> =
-        Mutex::new(Vec::new());
+    static BUBBLE_CALLS: Mutex<Vec<BubbleCall>> = Mutex::new(Vec::new());
 
-    unsafe extern "win64" fn fake_bubble_trail(from: *const f32, to: *const f32, count: c_int) { unsafe {
-        BUBBLE_CALLS.lock().unwrap().push((
-            [*from, *from.add(1), *from.add(2)],
-            [*to, *to.add(1), *to.add(2)],
-            count,
-        ));
-    }}
+    unsafe extern "win64" fn fake_bubble_trail(from: *const f32, to: *const f32, count: c_int) {
+        unsafe {
+            BUBBLE_CALLS.lock().unwrap().push((
+                [*from, *from.add(1), *from.add(2)],
+                [*to, *to.add(1), *to.add(2)],
+                count,
+            ));
+        }
+    }
 
     #[test]
     fn bubble_hook_clips_count_and_releases_the_lock() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             BUBBLE_TRAMPOLINE.store(fake_bubble_trail as *const () as usize, Ordering::SeqCst);
             BUBBLE_CALLS.lock().unwrap().clear();
             let clips = BUBBLE_CLIPS.load(Ordering::Relaxed);
-            *VOLUMES.lock().unwrap() = vec![Volume { id: 1, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER }];
+            *VOLUMES.lock().unwrap() = vec![Volume {
+                id: 1,
+                min: [0.0; 3],
+                max: [128.0; 3],
+                contents: CONTENTS_WATER,
+            }];
 
             let from = [64.0f32, 64.0, 64.0];
             let to = [1064.0f32, 64.0, 64.0];
@@ -3359,13 +3978,17 @@ mod tests {
                 assert_eq!(calls.len(), 1);
                 assert!((calls[0].1[0] - 127.5).abs() < 1e-3);
                 assert_eq!(calls[0].2, 8, "ceil(125 * 0.0635)");
+                drop(calls);
             }
             assert_eq!(BUBBLE_CLIPS.load(Ordering::Relaxed), clips + 1);
 
             // Inside the volume the original must be able to take the lock.
             // (The fake just proves the lock is free at call time.)
-            unsafe extern "win64" fn lock_probe(_: *const f32, _: *const f32, _: c_int) { 
-                assert!(VOLUMES.try_lock().is_ok(), "VOLUMES held across the original call");
+            unsafe extern "win64" fn lock_probe(_: *const f32, _: *const f32, _: c_int) {
+                assert!(
+                    VOLUMES.try_lock().is_ok(),
+                    "VOLUMES held across the original call"
+                );
             }
             BUBBLE_TRAMPOLINE.store(lock_probe as *const () as usize, Ordering::SeqCst);
             hook_bubble_trail(from.as_ptr(), to.as_ptr(), 125);
@@ -3419,9 +4042,13 @@ mod tests {
             );
             assert!(written[14..].iter().all(|&b| b == 0x90));
             // Trampoline = stolen bytes + absolute jump back past them.
-            let t = std::slice::from_raw_parts(patch.trampoline as *const u8, BUBBLE_TRAIL_STOLEN + 14);
+            let t =
+                std::slice::from_raw_parts(patch.trampoline as *const u8, BUBBLE_TRAIL_STOLEN + 14);
             assert_eq!(&t[..BUBBLE_TRAIL_STOLEN], &func[..BUBBLE_TRAIL_STOLEN]);
-            assert_eq!(&t[BUBBLE_TRAIL_STOLEN..BUBBLE_TRAIL_STOLEN + 6], &[0xFF, 0x25, 0, 0, 0, 0]);
+            assert_eq!(
+                &t[BUBBLE_TRAIL_STOLEN..BUBBLE_TRAIL_STOLEN + 6],
+                &[0xFF, 0x25, 0, 0, 0, 0]
+            );
             assert_eq!(
                 u64::from_le_bytes(t[BUBBLE_TRAIL_STOLEN + 6..].try_into().unwrap()),
                 target as u64 + BUBBLE_TRAIL_STOLEN as u64
@@ -3429,7 +4056,14 @@ mod tests {
             // A wrong prologue is refused and nothing is written.
             let bad = rwx(4096);
             std::ptr::write_bytes(bad, 0xCC, 64);
-            assert!(install_patch(bad, BUBBLE_TRAIL_SIG, BUBBLE_TRAIL_STOLEN, 1, &TEST_PLATFORM).is_err());
+            assert!(install_patch(
+                bad,
+                BUBBLE_TRAIL_SIG,
+                BUBBLE_TRAIL_STOLEN,
+                1,
+                &TEST_PLATFORM
+            )
+            .is_err());
             assert_eq!(*bad, 0xCC);
 
             uninstall_patch(&patch, &TEST_PLATFORM);
@@ -3457,7 +4091,8 @@ mod tests {
         let pe = parse_pe(&d);
         let img = map_image(&d, &pe);
         unsafe {
-            let at = scan_sig(img.as_ptr(), PHYSENV_SIG).expect("signature must match exactly once");
+            let at =
+                scan_sig(img.as_ptr(), PHYSENV_SIG).expect("signature must match exactly once");
             let global = physenv_global_from(at);
             let grva = global as usize - img.as_ptr() as usize;
             let sec = pe
@@ -3465,28 +4100,51 @@ mod tests {
                 .iter()
                 .find(|s| s.1 <= grva && grva < s.1 + s.2)
                 .expect("physenv global outside every section");
-            assert!(sec.0 == ".data" || sec.0 == ".bss", "physenv is in {}", sec.0);
+            assert!(
+                sec.0 == ".data" || sec.0 == ".bss",
+                "physenv is in {}",
+                sec.0
+            );
         }
     }
 
     type FluidCall = (&'static str, usize, usize, [f32; 4], f32, i32);
-    static FLUID_CALLS: Mutex<Vec<FluidCall>> =
-        Mutex::new(Vec::new());
+    static FLUID_CALLS: Mutex<Vec<FluidCall>> = Mutex::new(Vec::new());
 
-    unsafe extern "win64" fn fake_create(env: *mut c_void, obj: *mut c_void, p: *const FluidParams) -> *mut c_void { unsafe {
-        let p = &*p;
-        FLUID_CALLS.lock().unwrap().push(("create", env as usize, obj as usize, p.surface_plane, p.damping, p.contents));
-        0x7777 as *mut c_void
-    }}
-    unsafe extern "win64" fn fake_destroy(env: *mut c_void, fluid: *mut c_void) { 
-        FLUID_CALLS.lock().unwrap().push(("destroy", env as usize, fluid as usize, [0.0; 4], 0.0, 0));
+    unsafe extern "win64" fn fake_create(
+        env: *mut c_void,
+        obj: *mut c_void,
+        p: *const FluidParams,
+    ) -> *mut c_void {
+        unsafe {
+            let p = &*p;
+            FLUID_CALLS.lock().unwrap().push((
+                "create",
+                env as usize,
+                obj as usize,
+                p.surface_plane,
+                p.damping,
+                p.contents,
+            ));
+            0x7777 as *mut c_void
+        }
+    }
+    unsafe extern "win64" fn fake_destroy(env: *mut c_void, fluid: *mut c_void) {
+        FLUID_CALLS.lock().unwrap().push((
+            "destroy",
+            env as usize,
+            fluid as usize,
+            [0.0; 4],
+            0.0,
+            0,
+        ));
     }
 
     static FLAGS: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0x0001);
-    unsafe extern "win64" fn fake_get_flags(_: *mut c_void) -> u16 { 
+    unsafe extern "win64" fn fake_get_flags(_: *mut c_void) -> u16 {
         FLAGS.load(Ordering::SeqCst)
     }
-    unsafe extern "win64" fn fake_set_flags(_: *mut c_void, f: u16) { 
+    unsafe extern "win64" fn fake_set_flags(_: *mut c_void, f: u16) {
         FLAGS.store(f, Ordering::SeqCst);
     }
 
@@ -3504,7 +4162,11 @@ mod tests {
             // The mapped image is not relocated: translate from the preferred base.
             let base = img.as_ptr() as usize;
             let nt = img.as_ptr().add(0x3C).cast::<u32>().read_unaligned() as usize;
-            let preferred = img.as_ptr().add(nt + 24 + 24).cast::<u64>().read_unaligned() as usize;
+            let preferred = img
+                .as_ptr()
+                .add(nt + 24 + 24)
+                .cast::<u64>()
+                .read_unaligned() as usize;
             let addr = base + (slot4 - preferred);
             // CBaseTempEntity::Create starts with `mov [rsp+8], rbx`.
             let bytes = std::slice::from_raw_parts(addr as *const u8, 5);
@@ -3523,51 +4185,81 @@ mod tests {
 
     #[test]
     fn explosion_in_a_volume_is_redirected_outside_is_not() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER });
+        volumes().push(Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [100.0; 3],
+            contents: CONTENTS_WATER,
+        });
         static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
-        unsafe extern "win64" fn fake_dispatch(name: *const u8, _data: *const u8) { unsafe {
-            let n = CStr::from_ptr(name.cast()).to_string_lossy().to_string();
-            NAMES.lock().unwrap().push(n);
-        }}
+        unsafe extern "win64" fn fake_dispatch(name: *const u8, _data: *const u8) {
+            unsafe {
+                let n = CStr::from_ptr(name.cast()).to_string_lossy().to_string();
+                NAMES.lock().unwrap().push(n);
+            }
+        }
         DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
         let mut te = [0u8; 0x38];
         let put = |te: &mut [u8], p: [f32; 3]| {
             for (i, v) in p.iter().enumerate() {
-                te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+                te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4]
+                    .copy_from_slice(&v.to_le_bytes());
             }
         };
         put(&mut te, [500.0, 0.0, 0.0]);
         assert!(!unsafe { redirect_explosion(te.as_ptr()) });
         put(&mut te, [50.0, 50.0, 50.0]);
         assert!(unsafe { redirect_explosion(te.as_ptr()) });
-        assert_eq!(NAMES.lock().unwrap().as_slice(), ["WaterSurfaceExplosion".to_string()]);
+        assert_eq!(
+            NAMES.lock().unwrap().as_slice(),
+            ["WaterSurfaceExplosion".to_string()]
+        );
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
         volumes().clear();
     }
 
     #[test]
     fn redirected_explosion_carries_the_blast_point_in_the_effect_start() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [1000.0; 3], contents: CONTENTS_WATER });
+        volumes().push(Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [1000.0; 3],
+            contents: CONTENTS_WATER,
+        });
         static SEEN: Mutex<Vec<[f32; 6]>> = Mutex::new(Vec::new());
-        unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) { unsafe {
-            let f = data.cast::<f32>();
-            SEEN.lock().unwrap().push([
-                f.read_unaligned(), f.add(1).read_unaligned(), f.add(2).read_unaligned(),
-                f.add(3).read_unaligned(), f.add(4).read_unaligned(), f.add(5).read_unaligned(),
-            ]);
-        }}
+        unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
+            unsafe {
+                let f = data.cast::<f32>();
+                SEEN.lock().unwrap().push([
+                    f.read_unaligned(),
+                    f.add(1).read_unaligned(),
+                    f.add(2).read_unaligned(),
+                    f.add(3).read_unaligned(),
+                    f.add(4).read_unaligned(),
+                    f.add(5).read_unaligned(),
+                ]);
+            }
+        }
         DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
         let mut te = [0u8; 0x38];
         for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
-            te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4]
+                .copy_from_slice(&v.to_le_bytes());
         }
         assert!(unsafe { redirect_explosion(te.as_ptr()) });
         // origin on the surface (z 1000), start at the blast
-        assert_eq!(SEEN.lock().unwrap().as_slice(), [[10.0, 20.0, 1000.0, 10.0, 20.0, 30.0]]);
+        assert_eq!(
+            SEEN.lock().unwrap().as_slice(),
+            [[10.0, 20.0, 1000.0, 10.0, 20.0, 30.0]]
+        );
         DISPATCH_EFFECT_ADDR.store(0, Ordering::SeqCst);
         volumes().clear();
     }
@@ -3586,20 +4278,34 @@ mod tests {
         use client_hook::*;
         use std::sync::atomic::Ordering;
         static SOUND_AT: Mutex<Vec<[f32; 3]>> = Mutex::new(Vec::new());
-        unsafe extern "win64" fn fake_create(this: *mut u8, _d: *const f32, _m: f32, _s: f32, _f: u32) { unsafe {
-            // the real Create copies the origin and calls the sound through the vtable
-            hook_sound(this);
-        }}
-        unsafe extern "win64" fn fake_sound(this: *mut u8) { unsafe {
-            let o = this.add(ORIGIN_OFFSET) as *const f32;
-            SOUND_AT.lock().unwrap().push([o.read(), o.add(1).read(), o.add(2).read()]);
-        }}
+        unsafe extern "win64" fn fake_create(
+            this: *mut u8,
+            _d: *const f32,
+            _m: f32,
+            _s: f32,
+            _f: u32,
+        ) {
+            unsafe {
+                // the real Create copies the origin and calls the sound through the vtable
+                hook_sound(this);
+            }
+        }
+        unsafe extern "win64" fn fake_sound(this: *mut u8) {
+            unsafe {
+                let o = this.add(ORIGIN_OFFSET) as *const f32;
+                SOUND_AT
+                    .lock()
+                    .unwrap()
+                    .push([o.read(), o.add(1).read(), o.add(2).read()]);
+            }
+        }
         ORIG_CREATE.store(fake_create as *const () as usize, Ordering::SeqCst);
         ORIG_SOUND.store(fake_sound as *const () as usize, Ordering::SeqCst);
         let mut obj = [0u8; 0x80];
         let set = |obj: &mut [u8; 0x80], v: [f32; 3]| {
             for i in 0..3 {
-                obj[ORIGIN_OFFSET + i * 4..ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v[i].to_le_bytes());
+                obj[ORIGIN_OFFSET + i * 4..ORIGIN_OFFSET + i * 4 + 4]
+                    .copy_from_slice(&v[i].to_le_bytes());
             }
         };
         set(&mut obj, [10.0, 20.0, 1000.0]);
@@ -3607,31 +4313,65 @@ mod tests {
         unsafe { hook_create(obj.as_mut_ptr(), data.as_ptr(), 0.0, 0.0, 0) };
         let data2 = [10.0f32, 20.0, 1000.0, 0.0, 0.0, 0.0];
         unsafe { hook_create(obj.as_mut_ptr(), data2.as_ptr(), 0.0, 0.0, 0) };
-        assert_eq!(SOUND_AT.lock().unwrap().as_slice(), [[10.0, 20.0, 30.0], [10.0, 20.0, 1000.0]]);
+        assert_eq!(
+            SOUND_AT.lock().unwrap().as_slice(),
+            [[10.0, 20.0, 30.0], [10.0, 20.0, 1000.0]]
+        );
         // the effect keeps its surface origin afterwards
-        assert_eq!(f32::from_le_bytes(obj[ORIGIN_OFFSET + 8..ORIGIN_OFFSET + 12].try_into().unwrap()), 1000.0);
+        assert_eq!(
+            f32::from_le_bytes(
+                obj[ORIGIN_OFFSET + 8..ORIGIN_OFFSET + 12]
+                    .try_into()
+                    .unwrap()
+            ),
+            1000.0
+        );
         assert!(!ACTIVE.load(Ordering::SeqCst));
     }
 
     #[test]
     fn slime_volumes_report_slime_and_only_water_is_a_surface() {
         let vols = [
-            Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_SLIME },
-            Volume { id: 2, min: [200.0, 0.0, 0.0], max: [300.0, 100.0, 100.0], contents: CONTENTS_WATER },
+            Volume {
+                id: 1,
+                min: [0.0; 3],
+                max: [100.0; 3],
+                contents: CONTENTS_SLIME,
+            },
+            Volume {
+                id: 2,
+                min: [200.0, 0.0, 0.0],
+                max: [300.0, 100.0, 100.0],
+                contents: CONTENTS_WATER,
+            },
         ];
         assert_eq!(contents_at(&vols, [50.0; 3]), CONTENTS_SLIME);
         assert_eq!(contents_at(&vols, [250.0, 50.0, 50.0]), CONTENTS_WATER);
         assert_eq!(contents_at(&vols, [150.0; 3]), 0);
         assert_eq!(surface_z_at(&vols, [50.0; 3]), None);
         assert_eq!(surface_z_at(&vols, [250.0, 50.0, 50.0]), Some(100.0));
-        let both = [vols[0], Volume { id: 3, ..vols[0] }, Volume { id: 4, contents: CONTENTS_WATER, ..vols[0] }];
-        assert_eq!(contents_at(&both, [50.0; 3]), CONTENTS_SLIME | CONTENTS_WATER);
+        let both = [
+            vols[0],
+            Volume { id: 3, ..vols[0] },
+            Volume {
+                id: 4,
+                contents: CONTENTS_WATER,
+                ..vols[0]
+            },
+        ];
+        assert_eq!(
+            contents_at(&both, [50.0; 3]),
+            CONTENTS_SLIME | CONTENTS_WATER
+        );
     }
 
     #[test]
     fn fluid_defaults_match_a_map_water_brush() {
         let d = FluidSettings::default();
-        assert_eq!((d.torque, d.viscosity, d.aerodynamics, d.current), (0.0, 0.0, false, [0.0; 3]));
+        assert_eq!(
+            (d.torque, d.viscosity, d.aerodynamics, d.current),
+            (0.0, 0.0, false, [0.0; 3])
+        );
         assert_eq!(d.damping, 0.01);
         assert_eq!(d.contents, CONTENTS_WATER);
     }
@@ -3648,12 +4388,19 @@ mod tests {
             let at = scan_sig(img.as_ptr(), TE_CREATE_SIG).expect("must match once");
             let b = std::slice::from_raw_parts(at, TE_CREATE_STOLEN + 7);
             // The instruction after the stolen bytes is the rip-relative `mov rax, [rip+x]`.
-            assert_eq!(&b[TE_CREATE_STOLEN..TE_CREATE_STOLEN + 3], &[0x48, 0x8B, 0x05]);
+            assert_eq!(
+                &b[TE_CREATE_STOLEN..TE_CREATE_STOLEN + 3],
+                &[0x48, 0x8B, 0x05]
+            );
             // and it is the very function the CTEExplosion vtable names in slot 4.
             let vt = te_explosion_vtable(img.as_ptr()).unwrap();
             let slot4 = (vt as *const usize).add(4).read();
             let nt = img.as_ptr().add(0x3C).cast::<u32>().read_unaligned() as usize;
-            let preferred = img.as_ptr().add(nt + 24 + 24).cast::<u64>().read_unaligned() as usize;
+            let preferred = img
+                .as_ptr()
+                .add(nt + 24 + 24)
+                .cast::<u64>()
+                .read_unaligned() as usize;
             assert_eq!(img.as_ptr() as usize + (slot4 - preferred), at as usize);
         }
     }
@@ -3684,14 +4431,20 @@ mod tests {
         unsafe {
             let g = entity_array_global(img.as_ptr()).expect("entity array global");
             let grva = g - img.as_ptr() as usize;
-            let sec = pe.sections.iter().find(|s| s.1 <= grva && grva < s.1 + s.2).expect("outside sections");
+            let sec = pe
+                .sections
+                .iter()
+                .find(|s| s.1 <= grva && grva < s.1 + s.2)
+                .expect("outside sections");
             assert!(sec.0 == ".data" || sec.0 == ".bss", "in {}", sec.0);
         }
     }
 
     #[test]
     fn world_entity_is_entry_zero_of_the_array() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut array = [0usize; 8]; // entry 0: [?, pEntity, serial, ?]
         array[1] = 0xABCD;
         let global: usize = array.as_ptr() as usize;
@@ -3703,11 +4456,26 @@ mod tests {
 
     #[test]
     fn water_hit_names_the_world_entity_or_is_skipped() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let vols = [Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER }];
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let vols = [Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [100.0; 3],
+            contents: CONTENTS_WATER,
+        }];
         let mut ray = vec![0u8; 0x60];
-        let put = |ray: &mut Vec<u8>, o: usize, v: f32| ray[o..o + 4].copy_from_slice(&v.to_le_bytes());
-        for (o, v) in [(0x00, -50.0f32), (0x04, 50.0), (0x08, 50.0), (0x10, 200.0), (0x14, 0.0), (0x18, 0.0)] {
+        let put =
+            |ray: &mut Vec<u8>, o: usize, v: f32| ray[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        for (o, v) in [
+            (0x00, -50.0f32),
+            (0x04, 50.0),
+            (0x08, 50.0),
+            (0x10, 200.0),
+            (0x14, 0.0),
+            (0x18, 0.0),
+        ] {
             put(&mut ray, o, v);
         }
         ray[0x41] = 1;
@@ -3715,11 +4483,24 @@ mod tests {
         tr[0x2c..0x30].copy_from_slice(&1.0f32.to_le_bytes());
         unsafe {
             // No entity known anywhere: leave the trace alone.
-            assert!(!apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0));
+            assert!(!apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0
+            ));
             assert_eq!(tr[0x58..0x60], [0u8; 8]);
             // World known: the hit names it.
-            assert!(apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
-            assert_eq!(usize::from_le_bytes(tr[0x58..0x60].try_into().unwrap()), 0x1234);
+            assert!(apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
+            assert_eq!(
+                usize::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
+                0x1234
+            );
         }
     }
 
@@ -3733,27 +4514,40 @@ mod tests {
         let img = map_image(&d, &pe);
         for i in 0..EXPLOSION_TARGETS.len() {
             unsafe {
-                let (at, _sig, stolen) =
-                    find_explosion_target(img.as_ptr(), i).expect("explosion signature must match exactly once");
+                let (at, _sig, stolen) = find_explosion_target(img.as_ptr(), i)
+                    .expect("explosion signature must match exactly once");
                 assert!(stolen >= 14);
                 let bytes = std::slice::from_raw_parts(at, stolen + 8);
                 // No rip-relative operands or relative branches in the stolen part.
-                assert!(!bytes[..stolen].windows(1).any(|b| b[0] == 0xE8 || b[0] == 0xE9), "call/jmp in stolen bytes");
+                assert!(
+                    !bytes[..stolen]
+                        .windows(1)
+                        .any(|b| b[0] == 0xE8 || b[0] == 0xE9),
+                    "call/jmp in stolen bytes"
+                );
             }
         }
     }
 
     #[test]
     fn explosion_hook_raises_water_level_only_inside_a_volume() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut ent = vec![0u8; 0x400];
         let set = |ent: &mut Vec<u8>, p: [f32; 3]| {
             for i in 0..3 {
-                ent[ENTITY_ORIGIN_OFFSET + i * 4..ENTITY_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&p[i].to_le_bytes());
+                ent[ENTITY_ORIGIN_OFFSET + i * 4..ENTITY_ORIGIN_OFFSET + i * 4 + 4]
+                    .copy_from_slice(&p[i].to_le_bytes());
             }
         };
         volumes().clear();
-        volumes().push(Volume { id: 1, min: [0.0; 3], max: [100.0; 3], contents: CONTENTS_WATER });
+        volumes().push(Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [100.0; 3],
+            contents: CONTENTS_WATER,
+        });
         set(&mut ent, [500.0, 0.0, 0.0]);
         unsafe { raise_water_level_in_volume(ent.as_mut_ptr()) };
         assert_eq!(ent[ENTITY_WATER_LEVEL_OFFSET], 0);
@@ -3768,13 +4562,15 @@ mod tests {
 
     #[test]
     fn fluid_object_gets_callback_flag_via_slots_0xb0_0xb8() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             let mut vtable = [0usize; 32];
             vtable[OBJ_GET_CALLBACK_FLAGS_SLOT] = fake_get_flags as *const () as usize;
             vtable[OBJ_SET_CALLBACK_FLAGS_SLOT] = fake_set_flags as *const () as usize;
             let obj: [*const usize; 1] = [vtable.as_ptr()];
-            let old = add_fluid_callback_flag(obj.as_ptr() as *mut c_void);
+            let old = add_fluid_callback_flag(obj.as_ptr().cast_mut().cast::<c_void>());
             assert_eq!(old, 0x0001);
             assert_eq!(FLAGS.load(Ordering::SeqCst), 0x0201);
         }
@@ -3782,13 +4578,15 @@ mod tests {
 
     #[test]
     fn fluid_calls_use_vtable_slots_11_and_12() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             let mut vtable = [0usize; 16];
             vtable[CREATE_FLUID_SLOT] = fake_create as *const () as usize;
             vtable[DESTROY_FLUID_SLOT] = fake_destroy as *const () as usize;
             let env_obj: [*const usize; 1] = [vtable.as_ptr()];
-            let env = env_obj.as_ptr() as *mut c_void;
+            let env = env_obj.as_ptr().cast_mut().cast::<c_void>();
             FLUID_CALLS.lock().unwrap().clear();
             let params = FluidParams {
                 surface_plane: [0.0, 0.0, 1.0, 192.0],
@@ -3804,13 +4602,30 @@ mod tests {
             assert_eq!(fluid as usize, 0x7777);
             destroy_fluid(env, fluid);
             let calls = FLUID_CALLS.lock().unwrap();
-            assert_eq!(calls[0], ("create", env as usize, 0x1234, [0.0, 0.0, 1.0, 192.0], 0.01, CONTENTS_WATER));
+            assert_eq!(
+                calls[0],
+                (
+                    "create",
+                    env as usize,
+                    0x1234,
+                    [0.0, 0.0, 1.0, 192.0],
+                    0.01,
+                    CONTENTS_WATER
+                )
+            );
             assert_eq!(calls[1].0, "destroy");
             assert_eq!(calls[1].2, 0x7777);
+            drop(calls);
         }
     }
 
-    fn make_ray(start: [f32; 3], delta: [f32; 3], off: [f32; 3], ext: [f32; 3], swept: bool) -> [u8; 0x50] {
+    fn make_ray(
+        start: [f32; 3],
+        delta: [f32; 3],
+        off: [f32; 3],
+        ext: [f32; 3],
+        swept: bool,
+    ) -> [u8; 0x50] {
         let mut r = [0u8; 0x50];
         for i in 0..3 {
             r[i * 4..i * 4 + 4].copy_from_slice(&start[i].to_le_bytes());
@@ -3834,8 +4649,13 @@ mod tests {
         f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
     }
 
-    fn cube() -> [Volume; 1] {
-        [Volume { id: 1, min: [0.0; 3], max: [128.0; 3], contents: CONTENTS_WATER }]
+    const fn cube() -> [Volume; 1] {
+        [Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [128.0; 3],
+            contents: CONTENTS_WATER,
+        }]
     }
 
     #[test]
@@ -3868,14 +4688,32 @@ mod tests {
     fn newer_ray_layout_keeps_the_swept_flag_at_0x49() {
         unsafe {
             let vols = cube();
-            let mut ray = make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], false);
+            let mut ray = make_ray(
+                [64.0, 64.0, 300.0],
+                [0.0, 0.0, -300.0],
+                [0.0; 3],
+                [0.0; 3],
+                false,
+            );
             ray[0x48] = 1; // m_IsRay
             ray[0x49] = 1; // m_IsSwept
             let mut tr = miss_trace();
-            assert!(apply_water_to_trace_at(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234, 0x49));
+            assert!(apply_water_to_trace_at(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234,
+                0x49
+            ));
             // Reading the old position (0x41, zero here) would call it "not swept".
             let mut tr = miss_trace();
-            assert!(!apply_water_to_trace_at(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234, 0x41));
+            assert!(!apply_water_to_trace_at(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234,
+                0x41
+            ));
         }
     }
 
@@ -3888,73 +4726,159 @@ mod tests {
         let pe = parse_pe(&d);
         let img = map_image(&d, &pe);
         unsafe {
-            let f = scan_sig(img.as_ptr(), RAY_HELPER_SIG).expect("ray helper must match exactly once");
+            let f =
+                scan_sig(img.as_ptr(), RAY_HELPER_SIG).expect("ray helper must match exactly once");
             let off = ray_swept_offset_from(f);
-            assert!(off == 0x41 || off == 0x49, "unexpected m_IsSwept offset {off:#x}");
+            assert!(
+                off == 0x41 || off == 0x49,
+                "unexpected m_IsSwept offset {off:#x}"
+            );
         }
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn trace_is_rewritten_as_water_surface_hit() {
         unsafe {
             let vols = cube();
 
             // A line trace that would otherwise travel the full length.
-            let ray = make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, 300.0],
+                [0.0, 0.0, -300.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
             let mut tr = miss_trace();
-            assert!(apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+            assert!(apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
             let t = 172.0 / 300.0;
             assert!((f32at(&tr, 0x2c) - t).abs() < 1e-6, "fraction");
-            assert!((f32at(&tr, 0x0c + 8) - 128.0).abs() < 1e-3, "endpos.z is the surface");
+            assert!(
+                (f32at(&tr, 0x0c + 8) - 128.0).abs() < 1e-3,
+                "endpos.z is the surface"
+            );
             assert_eq!(f32at(&tr, 8), 300.0, "startpos.z");
-            assert_eq!((f32at(&tr, 0x18), f32at(&tr, 0x1c), f32at(&tr, 0x20)), (0.0, 0.0, 1.0), "normal");
+            assert_eq!(
+                (f32at(&tr, 0x18), f32at(&tr, 0x1c), f32at(&tr, 0x20)),
+                (0.0, 0.0, 1.0),
+                "normal"
+            );
             assert_eq!(f32at(&tr, 0x24), 128.0, "plane.dist");
             assert_eq!((tr[0x28], tr[0x29]), (2, 0), "plane.type / signbits");
-            assert_eq!(i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()), CONTENTS_WATER);
+            assert_eq!(
+                i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
+                CONTENTS_WATER
+            );
             assert_eq!((tr[0x36], tr[0x37]), (0, 0), "allsolid / startsolid");
-            assert_eq!(u64::from_le_bytes(tr[0x58..0x60].try_into().unwrap()), 0x1234, "m_pEnt = the world entity");
+            assert_eq!(
+                u64::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
+                0x1234,
+                "m_pEnt = the world entity"
+            );
             let name = usize::from_le_bytes(tr[0x40..0x48].try_into().unwrap()) as *const c_char;
             assert_eq!(CStr::from_ptr(name).to_bytes(), b"water");
 
             // Entering from below flips the normal and sets signbits.
-            let ray = make_ray([64.0, 64.0, -100.0], [0.0, 0.0, 300.0], [0.0; 3], [0.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, -100.0],
+                [0.0, 0.0, 300.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
             let mut tr = miss_trace();
-            assert!(apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+            assert!(apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
             assert_eq!(f32at(&tr, 0x20), -1.0);
             assert_eq!(tr[0x29], 1 << 2);
             assert_eq!(f32at(&tr, 0x24), -0.0);
 
             // A hull trace is stopped by the box grown by its half-extents.
-            let ray = make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [8.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, 300.0],
+                [0.0, 0.0, -300.0],
+                [0.0; 3],
+                [8.0; 3],
+                true,
+            );
             let mut tr = miss_trace();
-            assert!(apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+            assert!(apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
             assert!((f32at(&tr, 0x2c) - 164.0 / 300.0).abs() < 1e-6);
-            assert!((f32at(&tr, 0x0c + 8) - 136.0).abs() < 1e-3, "hull origin rests 8 above");
-            assert_eq!(f32at(&tr, 0x24), 128.0, "plane is the real face, not the grown one");
+            assert!(
+                (f32at(&tr, 0x0c + 8) - 136.0).abs() < 1e-3,
+                "hull origin rests 8 above"
+            );
+            assert_eq!(
+                f32at(&tr, 0x24),
+                128.0,
+                "plane is the real face, not the grown one"
+            );
 
             // The engine already hit something nearer: leave it alone.
-            let ray = make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, 300.0],
+                [0.0, 0.0, -300.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
             let mut tr = miss_trace();
             tr[0x2c..0x30].copy_from_slice(&0.3f32.to_le_bytes());
             let before = tr;
-            assert!(!apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+            assert!(!apply_water_to_trace(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234
+            ));
             assert_eq!(tr, before);
 
             // Not swept, or misses the box: unchanged.
             for ray in [
-                make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], false),
-                make_ray([900.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], true),
+                make_ray(
+                    [64.0, 64.0, 300.0],
+                    [0.0, 0.0, -300.0],
+                    [0.0; 3],
+                    [0.0; 3],
+                    false,
+                ),
+                make_ray(
+                    [900.0, 64.0, 300.0],
+                    [0.0, 0.0, -300.0],
+                    [0.0; 3],
+                    [0.0; 3],
+                    true,
+                ),
             ] {
                 let mut tr = miss_trace();
                 let before = tr;
-                assert!(!apply_water_to_trace(&vols, ray.as_ptr(), tr.as_mut_ptr(), 0x1234));
+                assert!(!apply_water_to_trace(
+                    &vols,
+                    ray.as_ptr(),
+                    tr.as_mut_ptr(),
+                    0x1234
+                ));
                 assert_eq!(tr, before);
             }
         }
     }
 
-    static TRACE_ARGS: Mutex<Vec<(u32, usize, usize, usize)>> =
-        Mutex::new(Vec::new());
+    static TRACE_ARGS: Mutex<Vec<(u32, usize, usize, usize)>> = Mutex::new(Vec::new());
 
     /// Stand-in for the engine's `TraceRay`: records its arguments, reports a miss.
     unsafe extern "win64" fn fake_trace_ray(
@@ -3963,14 +4887,21 @@ mod tests {
         mask: u32,
         filter: *mut c_void,
         trace: *mut u8,
-    ) { unsafe {
-        TRACE_ARGS.lock().unwrap().push((mask, ray as usize, filter as usize, trace as usize));
-        trace.add(0x2c).cast::<f32>().write_unaligned(1.0);
-    }}
+    ) {
+        unsafe {
+            TRACE_ARGS
+                .lock()
+                .unwrap()
+                .push((mask, ray as usize, filter as usize, trace as usize));
+            trace.add(0x2c).cast::<f32>().write_unaligned(1.0);
+        }
+    }
 
     #[test]
     fn trace_hook_through_vtable() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             let mut vtable: Vec<usize> = vec![fake_trace_ray as *const () as usize; 8];
             let mut object: [usize; 2] = [vtable.as_mut_ptr() as usize, 0];
@@ -3981,25 +4912,45 @@ mod tests {
             let hits_before = TRACE_HITS.load(Ordering::Relaxed);
 
             let hook = hook_trace_ray as *const () as usize;
-            let (entry, original) =
-                install_slot_hook(trace_obj, TRACE_RAY_SLOT, hook, &ORIGINAL_TRACE_RAY, &TEST_PLATFORM)
-                    .expect("install");
+            let (entry, original) = install_slot_hook(
+                trace_obj,
+                TRACE_RAY_SLOT,
+                hook,
+                &ORIGINAL_TRACE_RAY,
+                &TEST_PLATFORM,
+            )
+            .expect("install");
             assert_eq!(entry, vtable.as_ptr().add(TRACE_RAY_SLOT) as usize);
             assert_eq!(vtable[TRACE_RAY_SLOT], hook);
             assert_eq!(vtable[0], original, "other slots untouched");
 
-            let ray = make_ray([64.0, 64.0, 300.0], [0.0, 0.0, -300.0], [0.0; 3], [0.0; 3], true);
+            let ray = make_ray(
+                [64.0, 64.0, 300.0],
+                [0.0, 0.0, -300.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
             let call = |mask: u32, tr: &mut [u8; 0x70]| {
                 let f: unsafe extern "win64" fn(*mut c_void, *const u8, u32, *mut c_void, *mut u8) =
                     std::mem::transmute(vtable[TRACE_RAY_SLOT]);
-                f(trace_obj, ray.as_ptr(), mask, 0x1234 as *mut c_void, tr.as_mut_ptr());
+                f(
+                    trace_obj,
+                    ray.as_ptr(),
+                    mask,
+                    0x1234 as *mut c_void,
+                    tr.as_mut_ptr(),
+                );
             };
 
             // Water in the mask: the miss becomes a water-surface hit.
             let mut tr = miss_trace();
             call(CONTENTS_WATER as u32 | 0x10, &mut tr);
             assert!((f32at(&tr, 0x2c) - 172.0 / 300.0).abs() < 1e-6);
-            assert_eq!(i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()), CONTENTS_WATER);
+            assert_eq!(
+                i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
+                CONTENTS_WATER
+            );
 
             // No water in the mask (e.g. a solid-only trace): untouched.
             let mut tr = miss_trace();
@@ -4024,13 +4975,18 @@ mod tests {
             assert_eq!(TRACE_HITS.load(Ordering::Relaxed), hits_before + 1);
 
             uninstall_slot_hook(entry, hook, original, &TEST_PLATFORM);
-            assert_eq!(vtable[TRACE_RAY_SLOT], original, "uninstall restores the slot");
+            assert_eq!(
+                vtable[TRACE_RAY_SLOT], original,
+                "uninstall restores the slot"
+            );
         }
     }
 
     #[test]
     fn contents_hook_adds_water_inside_volumes() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             // A fake IEngineTrace: object -> vtable -> [GetPointContents, ...]
             let mut vtable: Vec<usize> = vec![fake_get_point_contents as *const () as usize; 8];
@@ -4038,7 +4994,12 @@ mod tests {
             let trace = object.as_mut_ptr().cast::<c_void>();
 
             volumes().clear();
-            volumes().push(Volume { id: 1, min: [0.0, 0.0, 0.0], max: [128.0, 128.0, 128.0], contents: CONTENTS_WATER });
+            volumes().push(Volume {
+                id: 1,
+                min: [0.0, 0.0, 0.0],
+                max: [128.0, 128.0, 128.0],
+                contents: CONTENTS_WATER,
+            });
             let hits_before = VOLUME_HITS.load(Ordering::Relaxed);
 
             let (slot, original) = install_contents_hook(trace, &TEST_PLATFORM).expect("install");
@@ -4055,7 +5016,11 @@ mod tests {
             };
             assert_eq!(call([64.0, 64.0, 64.0]), 0x1 | CONTENTS_WATER); // inside: water added
             assert_eq!(call([500.0, 0.0, 0.0]), 0x1); // outside: untouched
-            assert_eq!(*GPC_ARGS.lock().unwrap(), (7, 9), "extra args must be forwarded");
+            assert_eq!(
+                *GPC_ARGS.lock().unwrap(),
+                (7, 9),
+                "extra args must be forwarded"
+            );
             assert_eq!(VOLUME_HITS.load(Ordering::Relaxed), hits_before + 1);
 
             volumes().clear();
