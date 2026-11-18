@@ -8,7 +8,7 @@ binary module. 64-bit (x86-64 branch) on Windows and Linux. Server realm only.
 GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 `lua/bin`), so install in two parts: the DLL into `garrysmod/lua/bin/`, and the
 `addon/waterleveler` folder (Lua library + volume script) into `garrysmod/addons/`.
-`build.sh` does both on Windows. Files:
+`build.sh` does both on Windows (it installs the server and the client module). The CI artifact has both too. Files:
 
 | Platform | File name                       |
 |----------|---------------------------------|
@@ -117,7 +117,7 @@ Limits (read these):
   from server.dll's world setup and vphysics.dll). `waterleveler.AttachFluid(
   physobj, nx, ny, nz, dist [, damping] [, options])` does the same for a PhysObj you
   created (plane in world space, normal out of the fluid) and
-  `options` is an optional table (also accepted as the 6th argument) with `damping` (default 0.01), `torque`, `viscosity`, `aerodynamics` (boolean) and the flow `currentx`, `currenty`, `currentz` (units/s). The defaults are what a map's water brush has: the engine reads only the plane, current, damping and contents from the map, so torque, viscosity and aerodynamics are 0. The Water Volume tool has a control for each, and for the fluid object's physics material (default `water`; its density sets how high props float), which `WLWater.Spawn` takes as `fluidOptions.material`. `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
+  `options` is an optional table (also accepted as the 6th argument) with `damping` (default 0.01), `torque`, `viscosity`, `aerodynamics` (boolean) and the flow `currentx`, `currenty`, `currentz` (units/s). The defaults are what a map's water brush has: the engine reads only the plane, current, damping and contents from the map, so torque, viscosity and aerodynamics are 0. The Water Volume tool has a control for each. The fluid object's physics material (its density sets how high props float) follows the liquid: `water` or `slime`. `waterleveler.DetachFluid(id)` removes it; **detach before the entity is
   removed**. The `physenv` pointer is found by signature. `wl_water_spawn
   <size> fluid` builds one. Unknowns: whether a Lua-created
   object is accepted exactly like the world's, and the engine-side teardown.
@@ -161,6 +161,8 @@ Tool: **Water Volume** under Tools > Construction (size per axis, vertical offse
 biggest size, buoyancy, and surface/body materials; an outline previews the volume where you
 are looking).
 
+Every numeric `wl_water_*` convar has limits (sizes 1-16384, offset +-16384, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).
+
 Commands: `wl_water_spawn [size]` (a 128 cube resting on whatever your
 crosshair hits; undoable), `wl_water_clear`, `wl_water_status`.
 
@@ -198,6 +200,10 @@ fetched. Cross-compiling Windows from Linux is described at the top of
 
 Tests: `SERVER_DLL_X64=/path/to/server.dll cargo test --release`
 
+## Removing a volume with props in it
+
+vphysics keeps a list of the fluids each physics object touches and calls the game's `FluidEndTouch` for them when the object is destroyed, even for a fluid controller that was destroyed in the meantime. The splash code in there read the dead controller and crashed the game. The function (`CCollisionEvent::FluidEndTouch`, found by signature) is detoured: for a controller this module destroyed, it skips the splash and does the rest (clears `EFL_TOUCHING_FLUID`, sends `ENTITY_EVENT_WATER_UNTOUCH`). `HookStatus()` shows `FluidEndTouch` when it is active.
+
 ## Explosions
 
 Explosive entities pick the water explosion (underwater sound, splash and wake, all produced by the client from one effect) from their own water level, not from point contents; one of them needs a water level of 2 or more. Three of those server functions are patched so an entity whose origin is inside a volume has its water level raised to 2 before the original runs (`waterleveler.ExplosionFixes()` counts them; `HookStatus()` reports how many of the 3 signatures matched).
@@ -217,7 +223,7 @@ Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the clie
 engine derives the water type from the point contents, so slime volumes get slime-coloured splashes and
 ripples and a different swim sound value, players cannot wade in them, and underwater explosions do not
 use the water explosion effect (the engine only does that for water). The Water Volume tool has a Liquid
-dropdown.
+dropdown, and the liquid also picks the fluid object's physics material (`water` or `slime`).
 
 ## License
 

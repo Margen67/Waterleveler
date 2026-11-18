@@ -1004,6 +1004,87 @@ mod engine_hook {
         f(env, fluid)
     }
 
+    // ---- CCollisionEvent::FluidEndTouch(IPhysicsObject *, IPhysicsFluidController *) --
+    //
+    // A physics object remembers the fluids it is touching, and when it is
+    // destroyed vphysics calls FluidEndTouch for each of them, even for a
+    // fluid controller that was destroyed in the meantime (our DetachFluid).
+    // The splash code in there reads the dead controller and crashed the
+    // game: removing a water volume (or the prop in it) while a prop was
+    // inside. The hook recognises the controllers this module destroyed and
+    // does the rest of FluidEndTouch without them: it clears
+    // EFL_TOUCHING_FLUID and sends ENTITY_EVENT_WATER_UNTOUCH, no splash.
+    // (The signature covers the entity offsets and slots used here.)
+
+    pub const FLUID_END_TOUCH_SIG: &str = "48 89 5C 24 10 48 89 7C 24 18 41 56 48 83 EC 20 \
+        FF 81 F0 01 00 00 4D 8B F0 48 8B DA 48 8B F9 48 85 D2 0F 84 ?? ?? ?? ?? 4D 85 C0 74 ?? \
+        48 8B 02 48 8B CA 48 89 74 24 30 FF 90 88 00 00 00 48 8B F0 48 85 C0 74 ?? \
+        48 8B D0 48 8B CF E8 ?? ?? ?? ?? 0F 2F 05 ?? ?? ?? ?? 72 ?? 4C 8B C6 48 8B D3 49 8B CE \
+        E8 ?? ?? ?? ?? 81 A6 90 01 00 00 FF FF F7 FF 49 8B CE 49 8B 06 48 8B 1E FF 50 30 \
+        4C 63 C0 BA 01 00 00 00 48 8B CE FF 93 E8 02 00 00 FF 8F F0 01 00 00";
+    /// Whole instructions covered by the 14-byte jump.
+    pub const FLUID_END_TOUCH_STOLEN: usize = 16;
+    pub static FLUID_END_TOUCH_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
+    /// IPhysicsObject::GetGameData (the entity), vtable offset 0x88.
+    pub const OBJ_GET_GAME_DATA_SLOT: usize = 0x88 / 8;
+    /// CBaseEntity::m_iEFlags and its EFL_TOUCHING_FLUID bit.
+    pub const ENTITY_EFLAGS_OFFSET: usize = 0x190;
+    pub const EFL_TOUCHING_FLUID: u32 = 0x80000;
+    /// CBaseEntity::OnEntityEvent(event, data), vtable offset 0x2e8.
+    pub const ENTITY_EVENT_SLOT: usize = 0x2e8 / 8;
+    pub const ENTITY_EVENT_WATER_UNTOUCH: c_int = 1;
+
+    /// Controllers destroyed by this module (address, contents) that
+    /// vphysics objects may still point at.
+    static DEAD_FLUIDS: Mutex<Vec<(usize, c_int)>> = Mutex::new(Vec::new());
+    const DEAD_FLUIDS_MAX: usize = 256;
+
+    pub fn fluid_died(controller: usize, contents: c_int) {
+        let mut dead = DEAD_FLUIDS.lock().unwrap_or_else(|e| e.into_inner());
+        dead.retain(|d| d.0 != controller);
+        if dead.len() >= DEAD_FLUIDS_MAX {
+            dead.remove(0);
+        }
+        dead.push((controller, contents));
+    }
+
+    /// A new controller may reuse a dead one's address.
+    pub fn fluid_born(controller: usize) {
+        DEAD_FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).retain(|d| d.0 != controller);
+    }
+
+    pub fn forget_dead_fluids() {
+        DEAD_FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    pub unsafe extern "win64" fn hook_fluid_end_touch(this: *mut c_void, object: *mut c_void, fluid: *mut c_void) {
+        // Never block inside an engine callback.
+        let dead = DEAD_FLUIDS
+            .try_lock()
+            .ok()
+            .and_then(|d| d.iter().find(|e| e.0 == fluid as usize).map(|e| e.1));
+        let Some(contents) = dead else {
+            let original: unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut c_void) =
+                std::mem::transmute(FLUID_END_TOUCH_TRAMPOLINE.load(Ordering::Relaxed));
+            original(this, object, fluid);
+            return;
+        };
+        if object.is_null() {
+            return;
+        }
+        let get_game_data: unsafe extern "win64" fn(*mut c_void) -> *mut u8 =
+            std::mem::transmute(*(*(object as *const *const usize)).add(OBJ_GET_GAME_DATA_SLOT));
+        let entity = get_game_data(object);
+        if entity.is_null() {
+            return;
+        }
+        let flags = entity.add(ENTITY_EFLAGS_OFFSET) as *mut u32;
+        flags.write_unaligned(flags.read_unaligned() & !EFL_TOUCHING_FLUID);
+        let on_event: unsafe extern "win64" fn(*mut u8, c_int, *mut c_void) =
+            std::mem::transmute(*(*(entity as *const *const usize)).add(ENTITY_EVENT_SLOT));
+        on_event(entity, ENTITY_EVENT_WATER_UNTOUCH, contents as isize as *mut c_void);
+    }
+
     // ---- UTIL_BubbleTrail(const Vector &from, const Vector &to, int count) --
     //
     // Found in the 64-bit server.dll by signature (5 call sites; it is the
@@ -1787,6 +1868,23 @@ mod hook_state {
             }
             Err(why) => format!(" (bubble-trail clipping inactive: {why})"),
         };
+        // Fluids destroyed while props are in them must not crash FluidEndTouch.
+        let end_touch = match engine_hook::scan_sig(base, engine_hook::FLUID_END_TOUCH_SIG).and_then(|t| {
+            engine_hook::install_patch(
+                t,
+                engine_hook::FLUID_END_TOUCH_SIG,
+                engine_hook::FLUID_END_TOUCH_STOLEN,
+                engine_hook::hook_fluid_end_touch as *const () as usize,
+                &engine_hook::win::PLATFORM,
+            )
+        }) {
+            Ok(patch) => {
+                engine_hook::FLUID_END_TOUCH_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+                *FLUID_END_TOUCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
+                " + FluidEndTouch".to_string()
+            }
+            Err(why) => format!(" (removing a volume with props in it may crash: {why})"),
+        };
         if let Ok(t) = engine_hook::scan_sig(base, engine_hook::DISPATCH_EFFECT_SIG) {
             engine_hook::DISPATCH_EFFECT_ADDR.store(t as usize, std::sync::atomic::Ordering::SeqCst);
         }
@@ -1845,16 +1943,17 @@ mod hook_state {
         }
         let explosion = format!(" + {}/{} explosion checks", patches.len(), engine_hook::EXPLOSION_TARGETS.len());
         *EXPLOSIONS.lock().unwrap_or_else(|e| e.into_inner()) = patches;
-        Ok(format!("{summary}{bubble}{explosion}{te_note}{world_note}"))
+        Ok(format!("{summary}{bubble}{end_touch}{explosion}{te_note}{world_note}"))
     }
 
     pub static EXPLOSIONS: Mutex<Vec<engine_hook::Patch>> = Mutex::new(Vec::new());
     pub static TE_HOOK: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
     pub static BUBBLE: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
+    pub static FLUID_END_TOUCH: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
-    /// (id, controller pointer) for every fluid this module created.
-    pub static FLUIDS: Mutex<Vec<(u32, usize)>> = Mutex::new(Vec::new());
+    /// (id, controller pointer, contents) for every fluid this module created.
+    pub static FLUIDS: Mutex<Vec<(u32, usize, c_int)>> = Mutex::new(Vec::new());
     static NEXT_FLUID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     unsafe fn physenv() -> Result<*mut std::ffi::c_void, &'static str> {
@@ -1892,7 +1991,8 @@ mod hook_state {
             return Err("the engine refused to create a fluid controller (object has no physics?)");
         }
         let id = NEXT_FLUID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).push((id, controller as usize));
+        FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).push((id, controller as usize, fluid.contents));
+        engine_hook::fluid_born(controller as usize);
         Ok(id)
     }
 
@@ -1901,10 +2001,11 @@ mod hook_state {
             let mut list = FLUIDS.lock().unwrap_or_else(|e| e.into_inner());
             list.iter().position(|f| f.0 == id).map(|i| list.remove(i))
         };
-        let Some((_, fluid)) = taken else { return false };
+        let Some((_, fluid, contents)) = taken else { return false };
         match physenv() {
             Ok(env) => {
                 engine_hook::destroy_fluid(env, fluid as *mut _);
+                engine_hook::fluid_died(fluid, contents);
                 true
             }
             Err(_) => false,
@@ -1933,6 +2034,11 @@ mod hook_state {
         for patch in std::mem::take(&mut *EXPLOSIONS.lock().unwrap_or_else(|e| e.into_inner())) {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
+        let patch = FLUID_END_TOUCH.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(patch) = patch {
+            engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+        }
+        engine_hook::forget_dead_fluids();
         // Bubble detour first: it calls through the trampoline, not the slots.
         let patch = BUBBLE.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(patch) = patch {
@@ -2921,6 +3027,77 @@ mod tests {
             expect[0x37] = 1;
             assert_eq!(tr, expect);
         }
+    }
+
+    use std::sync::atomic::AtomicUsize;
+    static END_TOUCH_ORIGINAL_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static UNTOUCH_EVENTS: AtomicUsize = AtomicUsize::new(0);
+    static UNTOUCH_CONTENTS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "win64" fn fake_end_touch(_: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        END_TOUCH_ORIGINAL_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+    unsafe extern "win64" fn fake_get_game_data(object: *mut c_void) -> *mut u8 {
+        *(object as *const *mut u8).add(1)
+    }
+    unsafe extern "win64" fn fake_on_entity_event(_: *mut u8, event: c_int, data: *mut c_void) {
+        assert_eq!(event, ENTITY_EVENT_WATER_UNTOUCH);
+        UNTOUCH_EVENTS.fetch_add(1, Ordering::SeqCst);
+        UNTOUCH_CONTENTS.store(data as usize, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn end_touch_with_a_destroyed_fluid_skips_the_splash_code() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        FLUID_END_TOUCH_TRAMPOLINE.store(fake_end_touch as *const () as usize, Ordering::SeqCst);
+        END_TOUCH_ORIGINAL_CALLS.store(0, Ordering::SeqCst);
+        UNTOUCH_EVENTS.store(0, Ordering::SeqCst);
+        // A fake entity (vtable + eflags) and a fake physics object that returns it.
+        let mut entity_vtable = vec![0usize; ENTITY_EVENT_SLOT + 1];
+        entity_vtable[ENTITY_EVENT_SLOT] = fake_on_entity_event as *const () as usize;
+        let mut entity = vec![0u8; 0x400];
+        entity[..8].copy_from_slice(&(entity_vtable.as_ptr() as usize).to_le_bytes());
+        entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4].copy_from_slice(&(EFL_TOUCHING_FLUID | 0x4).to_le_bytes());
+        let mut object_vtable = vec![0usize; OBJ_GET_GAME_DATA_SLOT + 1];
+        object_vtable[OBJ_GET_GAME_DATA_SLOT] = fake_get_game_data as *const () as usize;
+        let object = [object_vtable.as_ptr() as usize, entity.as_mut_ptr() as usize];
+        let live = 0x1000usize;
+        let dead = 0x2000usize;
+        fluid_died(dead, CONTENTS_SLIME);
+        unsafe {
+            // A live fluid goes to the engine's own code.
+            hook_fluid_end_touch(std::ptr::null_mut(), object.as_ptr() as *mut c_void, live as *mut c_void);
+            assert_eq!(END_TOUCH_ORIGINAL_CALLS.load(Ordering::SeqCst), 1);
+            assert_eq!(UNTOUCH_EVENTS.load(Ordering::SeqCst), 0);
+            // A destroyed one never reaches it; the entity is released.
+            hook_fluid_end_touch(std::ptr::null_mut(), object.as_ptr() as *mut c_void, dead as *mut c_void);
+        }
+        assert_eq!(END_TOUCH_ORIGINAL_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(UNTOUCH_EVENTS.load(Ordering::SeqCst), 1);
+        assert_eq!(UNTOUCH_CONTENTS.load(Ordering::SeqCst), CONTENTS_SLIME as usize);
+        let flags = u32::from_le_bytes(entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4].try_into().unwrap());
+        assert_eq!(flags, 0x4, "only EFL_TOUCHING_FLUID is cleared");
+        // A new controller at the same address is live again.
+        fluid_born(dead);
+        unsafe { hook_fluid_end_touch(std::ptr::null_mut(), object.as_ptr() as *mut c_void, dead as *mut c_void) };
+        assert_eq!(END_TOUCH_ORIGINAL_CALLS.load(Ordering::SeqCst), 2);
+        forget_dead_fluids();
+    }
+
+    #[test]
+    fn fluid_end_touch_signature_is_unique_in_server_dll() {
+        let Some(d) = server_dll() else {
+            eprintln!("SERVER_DLL_X64 not set; skipping");
+            return;
+        };
+        let pat = parse_sig(FLUID_END_TOUCH_SIG);
+        let pe = parse_pe(&d);
+        let (_, _, _, text_raw, text_size, _) = pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
+        let hits = find_all(&d[text_raw..text_raw + text_size], &pat);
+        assert_eq!(hits.len(), 1, "must match exactly once");
+        // The stolen bytes end on an instruction boundary (`inc dword [rcx+0x1f0]`).
+        let o = text_raw + hits[0] + FLUID_END_TOUCH_STOLEN;
+        assert_eq!(&d[o..o + 3], &[0xFF, 0x81, 0xF0]);
     }
 
     #[test]

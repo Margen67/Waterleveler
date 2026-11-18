@@ -5,10 +5,10 @@
 -- client half draws the placeholder box).
 --
 -- Console commands (server, superadmin or listen-server host):
---   wl_water_spawn [size] [fluid]
---                           spawn a water volume (default 128x128x128) that
+--   wl_water_spawn [size] [nofluid]
+--                           spawn a water volume (default 128x128x128, 1-16384) that
 --                           rests on whatever surface you are looking at.
---                           Buoyancy (EXPERIMENTAL) is on by default; add "nofluid" to skip it.
+--                           Buoyancy is on by default; add "nofluid" to skip it.
 --   wl_water_clear          remove all water volumes
 --   wl_water_status         hook status, volume count, engine hit counter,
 --                           and your own water level / whether you are inside
@@ -19,6 +19,8 @@
 -- only a client-side placeholder: there is no real water surface shader.
 
 local SIZE = 128
+local MIN_SIZE, MAX_SIZE = 1, 16384
+local DEFAULT_MATERIAL = "nature/water_movingplane" -- when a volume names none
 
 WLWater = WLWater or {}
 
@@ -39,8 +41,8 @@ if SERVER then
     util.AddNetworkString("wl_volumes")
     util.AddNetworkString("wl_wake")
 
-    -- EXPERIMENTAL buoyancy. Creates the same kind of engine object a map's
-    -- water brush uses: a static physics box with the "water" material that
+    -- Buoyancy. Creates the same kind of engine object a map's
+    -- water brush uses: a static physics box with the liquid's material that
     -- gets a fluid controller (waterleveler.AttachFluid). vphysics then floats
     -- props that overlap it. Created by wl_water_spawn unless it is given "nofluid".
     do
@@ -55,10 +57,9 @@ if SERVER then
             self:PhysicsInitBox(-h, h)
             local phys = self:GetPhysicsObject()
             if not IsValid(phys) then return print("[wl] fluid: no physics object") end
-            -- The density (and so how high props float) comes from this material; "water"
-            -- is what a map's water brush uses.
-            local material = self.WLFluidOptions and self.WLFluidOptions.material
-            phys:SetMaterial(isstring(material) and material ~= "" and material or "water")
+            -- The density (and so how high props float) comes from this material:
+            -- "water" is what a map's water brush uses, "slime" is the slime one.
+            phys:SetMaterial(self.WLLiquid or "water")
             phys:EnableMotion(false)
             -- Invisible, no shadow, and not solid to players (the engine's
             -- fluid object is a trigger for props; the entity itself isn't).
@@ -190,20 +191,21 @@ if SERVER then
         for _, b in pairs(boxes) do
             net.WriteVector(b.mins)
             net.WriteVector(b.maxs)
-            net.WriteString(b.surface or "") -- "" = the client's default (convar)
+            net.WriteString(b.surface or "") -- "" = the default material
             net.WriteString(b.body or "")
         end
         if IsValid(ply) then net.Send(ply) else net.Broadcast() end
     end
 
     --- Create a volume (engine water + optional buoyancy + undo entry).
-    --- opts: fluid (default true), surface / body (material paths, "" = client default).
+    --- opts: liquid ("water" default or "slime"; it also picks the fluid's physics material),
+    --- fluid (default true), surface / body (material names, "" = the default), fluidOptions
+    --- (the options table of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics,
+    --- currentx/y/z).
     --- Returns the volume id, or nil, err.
-    --- opts: liquid ("water" default or "slime"), fluid (default true), surface, body (material names), fluidOptions (the options table
-    --- of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics, currentx/y/z, plus
-    --- material: the physics material of the fluid object, whose density sets the buoyancy).
     function WLWater.Spawn(ply, mins, maxs, opts)
         opts = opts or {}
+        if opts.liquid ~= "slime" then opts.liquid = "water" end
         local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid)
         if not id then return nil, err end
 
@@ -213,12 +215,10 @@ if SERVER then
             local e = ents.Create("wl_fluid")
             if IsValid(e) then
                 e.WLHalf = (maxs - mins) / 2
-                local fo = opts.fluidOptions
-                if opts.liquid then
-                    fo = table.Copy(fo or {})
-                    fo.contents = opts.liquid
-                end
-                e.WLFluidOptions = fo -- nil = a map water brush's values
+                local fo = table.Copy(opts.fluidOptions or {}) -- empty = a map water brush's values
+                fo.contents = opts.liquid
+                e.WLFluidOptions = fo
+                e.WLLiquid = opts.liquid
                 e:SetPos((mins + maxs) / 2)
                 e:Spawn()
                 fluids[#fluids + 1] = e
@@ -262,7 +262,7 @@ if SERVER then
         local ply = resolve(caller)
         if not IsValid(ply) then return print("[wl] no player to aim from") end
 
-        local size = tonumber(args[1]) or SIZE
+        local size = math.Clamp(tonumber(args[1]) or SIZE, MIN_SIZE, MAX_SIZE)
         local tr = util.TraceLine({
             start = ply:EyePos(),
             endpos = ply:EyePos() + ply:GetAimVector() * 16384,
@@ -322,16 +322,10 @@ if CLIENT then
         syncVolumeEntities()
     end)
 
-    -- Materials are configurable (client convars, saved):
-    --   wl_water_surface_material  top face
-    --   wl_water_body_material     bottom and sides
-    -- Any material path works, for example nature/water_movingplane or
-    -- nature/water_canals/canal_wall. A name that does not resolve falls back
-    -- to a translucent blue so the volume never disappears.
-    local cvSurface = CreateClientConVar("wl_water_surface_material", "nature/water_movingplane", true, false,
-        "Material for the top face of water volumes")
-    local cvBody = CreateClientConVar("wl_water_body_material", "nature/water_movingplane", true, false,
-        "Material for the bottom and sides of water volumes")
+    -- The Water Volume tool picks the materials of the top face and of the
+    -- bottom and sides. Any material path works, for example
+    -- nature/water_movingplane or models/shadertest/predator. A name that does
+    -- not resolve falls back to a translucent blue so the volume never disappears.
 
     local fallback = Material("color") -- plain white, tinted by the color below
     local cache = {}
@@ -344,7 +338,7 @@ if CLIENT then
     -- authored for that shader, and re-wrapping it showed them as raw texture
     -- alpha: pink with holes); anything
     -- else is re-wrapped as UnlitGeneric using the same base texture.
-    local passthrough = { water = true, refract = true, unlitgeneric = true, spritecard = true, vertexlitgeneric = true }
+    local passthrough = { refract = true, unlitgeneric = true, spritecard = true, vertexlitgeneric = true }
 
     local function mat(name)
         local entry = cache[name]
@@ -363,7 +357,24 @@ if CLIENT then
                 -- Texture parameters are read as strings: GetTexture() warns
                 -- ("not a texture value") for vars a shader does not declare.
                 local nm, dudv = m:GetString("$normalmap"), m:GetString("$dudvmap")
-                if shader == "refract" and m:GetInt("$model") == 1 and nm and nm ~= "" then
+                if shader == "water" and nm and nm ~= "" then
+                    -- The Water shader draws its reflection and refraction only for the
+                    -- world's own water surfaces; on a mesh the animated normal map
+                    -- (dev/water_normal, advanced by $bumpframe) never shows. A Refract
+                    -- material with the same normal map and the same animation does.
+                    unlitCount = unlitCount + 1
+                    entry = { mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", {
+                        ["$normalmap"] = nm,
+                        ["$refractamount"] = 0.1,
+                        ["$bluramount"] = 0,
+                        ["$scale"] = "[1 1]",
+                        ["$refracttint"] = "{190 215 255}",
+                        Proxies = { AnimatedTexture = {
+                            animatedtexturevar = "$normalmap",
+                            animatedtextureframenumvar = "$bumpframe",
+                            animatedtextureframerate = 30 } },
+                    }), color = color_white, vcol = false, cull = true, refract = true }
+                elseif shader == "refract" and m:GetInt("$model") == 1 and nm and nm ~= "" then
                     -- Refract materials flagged "$model 1" (models/shadertest/shader3, ...)
                     -- are built for model vertex data and an env_cubemap; on a plain
                     -- mesh they come out pink with holes. Same refraction, minus those.
@@ -382,10 +393,10 @@ if CLIENT then
                         params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255)
                     end
                     entry = { mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params),
-                        color = color_white, vcol = false, cull = true }
+                        color = color_white, vcol = false, cull = true, refract = true }
                 elseif passthrough[shader] then
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
-                    entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric" }
+                    entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric", refract = shader == "refract" }
                 else
                     local tex = m:GetTexture("$basetexture")
                     if tex and not tex:IsError() then
@@ -461,9 +472,12 @@ if CLIENT then
     -- sort, so it is ordered against splashes, sprites and shards by distance
     -- like any other translucent thing (origin = the box centre).
     local function drawVolume(bx)
-        local top = mat(bx.surface ~= "" and bx.surface or cvSurface:GetString())
-        local body = mat(bx.body ~= "" and bx.body or cvBody:GetString())
+        local top = mat(bx.surface ~= "" and bx.surface or DEFAULT_MATERIAL)
+        local body = mat(bx.body ~= "" and bx.body or DEFAULT_MATERIAL)
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
+        -- Refract materials sample a copy of the frame, which is only updated when
+        -- asked to: a stale copy is what made their faces flicker.
+        if top.refract or body.refract then render.UpdateRefractTexture() end
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
         render.PushFilterMag(TEXFILTER.ANISOTROPIC)
         render.PushFilterMin(TEXFILTER.ANISOTROPIC)

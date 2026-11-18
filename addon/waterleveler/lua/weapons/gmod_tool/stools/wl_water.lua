@@ -13,9 +13,8 @@ TOOL.ClientConVar = {
     sizey = "128",
     sizez = "128",
     offset = "0",
-    liquid = "water",
+    liquid = "water", -- "water" or "slime": the contents and the fluid's physics material
     fluid = "1",
-    fluid_material = "water",
     fluid_damping = "0.01",
     fluid_torque = "0",
     fluid_viscosity = "0",
@@ -28,6 +27,25 @@ TOOL.ClientConVar = {
 }
 
 local MIN_SIZE, MAX_SIZE = 1, 16384
+local MAX_FLUID, MAX_CURRENT = 10, 1000
+
+-- The numeric convars have limits: the console can't set a value outside them.
+-- (Created here, before the tool registers TOOL.ClientConVar, which would
+-- otherwise create them without limits.)
+if CLIENT then
+    local limits = {
+        sizex = { 128, MIN_SIZE, MAX_SIZE }, sizey = { 128, MIN_SIZE, MAX_SIZE }, sizez = { 128, MIN_SIZE, MAX_SIZE },
+        offset = { 0, -MAX_SIZE, MAX_SIZE },
+        fluid = { 1, 0, 1 },
+        fluid_damping = { 0.01, 0, MAX_FLUID }, fluid_torque = { 0, 0, MAX_FLUID },
+        fluid_viscosity = { 0, 0, MAX_FLUID }, fluid_aero = { 0, 0, 1 },
+        fluid_currentx = { 0, -MAX_CURRENT, MAX_CURRENT }, fluid_currenty = { 0, -MAX_CURRENT, MAX_CURRENT },
+        fluid_currentz = { 0, -MAX_CURRENT, MAX_CURRENT },
+    }
+    for name, l in pairs(limits) do
+        CreateClientConVar("wl_water_" .. name, tostring(l[1]), true, true, "", l[2], l[3])
+    end
+end
 
 local function readSize(get)
     return Vector(
@@ -72,14 +90,13 @@ function TOOL:LeftClick(trace)
         liquid = self:GetClientInfo("liquid") == "slime" and "slime" or "water",
         fluid = self:GetClientNumber("fluid", 1) ~= 0,
         fluidOptions = {
-            material = self:GetClientInfo("fluid_material"),
-            damping = self:GetClientNumber("fluid_damping", 0.01),
-            torque = self:GetClientNumber("fluid_torque", 0),
-            viscosity = self:GetClientNumber("fluid_viscosity", 0),
+            damping = math.Clamp(self:GetClientNumber("fluid_damping", 0.01), 0, MAX_FLUID),
+            torque = math.Clamp(self:GetClientNumber("fluid_torque", 0), 0, MAX_FLUID),
+            viscosity = math.Clamp(self:GetClientNumber("fluid_viscosity", 0), 0, MAX_FLUID),
             aerodynamics = self:GetClientNumber("fluid_aero", 0) ~= 0,
-            currentx = self:GetClientNumber("fluid_currentx", 0),
-            currenty = self:GetClientNumber("fluid_currenty", 0),
-            currentz = self:GetClientNumber("fluid_currentz", 0),
+            currentx = math.Clamp(self:GetClientNumber("fluid_currentx", 0), -MAX_CURRENT, MAX_CURRENT),
+            currenty = math.Clamp(self:GetClientNumber("fluid_currenty", 0), -MAX_CURRENT, MAX_CURRENT),
+            currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -MAX_CURRENT, MAX_CURRENT),
         },
         surface = self:GetClientInfo("surface"),
         body = self:GetClientInfo("body"),
@@ -94,7 +111,8 @@ end
 if CLIENT then
     local PRESETS = {
         "nature/water_movingplane",
-        "nature/water_canals/canal_wall",
+        "nature/water_movingplane_dx70",
+        "models/shadertest/predator",
         "models/shadertest/shader3",
     }
 
@@ -140,9 +158,10 @@ if CLIENT then
 
         offset = panel:NumSlider("Offset", "wl_water_offset", -MAX_SIZE, MAX_SIZE, 0)
         panel:ControlHelp("Moves the volume up (or down) from where it would rest. The limit is the biggest size above.")
+        panel:ControlHelp("Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).")
         updateOffsetRange()
 
-        panel:Help("Liquid")
+        panel:Help("Liquid (also the fluid's physics material)")
         local liquid = panel:ComboBox("")
         liquid:SetSortItems(false)
         local current = GetConVar("wl_water_liquid")
@@ -153,15 +172,13 @@ if CLIENT then
         panel:ControlHelp("Slime: slime-coloured splashes and ripples, no wading, no water explosion effect.")
         panel:CheckBox("Buoyancy (props float)", "wl_water_fluid")
         panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.")
-        panel:Help("Fluid physics material (its density sets how high props float)")
-        panel:TextEntry("", "wl_water_fluid_material")
-        panel:NumSlider("Damping (drag)", "wl_water_fluid_damping", 0, 10, 3)
-        panel:NumSlider("Torque factor", "wl_water_fluid_torque", 0, 10, 3)
-        panel:NumSlider("Viscosity factor", "wl_water_fluid_viscosity", 0, 10, 3)
+        panel:NumSlider("Damping (drag)", "wl_water_fluid_damping", 0, MAX_FLUID, 3)
+        panel:NumSlider("Torque factor", "wl_water_fluid_torque", 0, MAX_FLUID, 3)
+        panel:NumSlider("Viscosity factor", "wl_water_fluid_viscosity", 0, MAX_FLUID, 3)
         panel:CheckBox("Aerodynamic drag", "wl_water_fluid_aero")
-        panel:NumSlider("Current X", "wl_water_fluid_currentx", -1000, 1000, 0)
-        panel:NumSlider("Current Y", "wl_water_fluid_currenty", -1000, 1000, 0)
-        panel:NumSlider("Current Z", "wl_water_fluid_currentz", -1000, 1000, 0)
+        panel:NumSlider("Current X", "wl_water_fluid_currentx", -MAX_CURRENT, MAX_CURRENT, 0)
+        panel:NumSlider("Current Y", "wl_water_fluid_currenty", -MAX_CURRENT, MAX_CURRENT, 0)
+        panel:NumSlider("Current Z", "wl_water_fluid_currentz", -MAX_CURRENT, MAX_CURRENT, 0)
 
         local function materialRow(label, convar)
             panel:Help(label)
