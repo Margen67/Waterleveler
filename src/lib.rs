@@ -299,7 +299,9 @@ fn point_in_volumes(vols: &[Volume], p: [f32; 3]) -> bool {
 
 #[cfg(target_arch = "x86_64")]
 mod engine_hook {
-    use super::{c_void, c_int, OVERRIDES, VOLUMES, contents_at, VOLUME_HITS, Volume, CONTENTS_WATER, CONTENTS_SLIME, Mutex, point_in_volumes, surface_z_at};
+    // The Windows-only code below needs more of the parent's names than the Linux build uses.
+    #[allow(clippy::wildcard_imports)]
+    use super::*;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     /// Bytes overwritten at the function entry (14-byte absolute jmp + 1 nop).
@@ -2003,7 +2005,7 @@ mod hook_state {
     pub static FLUIDS: Mutex<Vec<(u32, usize, c_int)>> = Mutex::new(Vec::new());
     static NEXT_FLUID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-    unsafe fn physenv() -> Result<*mut std::ffi::c_void, &'static str> { unsafe {
+    unsafe fn physenv() -> Result<*mut c_void, &'static str> { unsafe {
         let base = engine_hook::win::server_base();
         if base.is_null() {
             return Err("server.dll is not loaded");
@@ -2017,7 +2019,7 @@ mod hook_state {
         Ok(env)
     }}
 
-    pub unsafe fn fluid_attach(object: usize, plane: [f32; 4], fluid: &super::FluidSettings) -> Result<u32, &'static str> { unsafe {
+    pub unsafe fn fluid_attach(object: usize, plane: [f32; 4], fluid: &FluidSettings) -> Result<u32, &'static str> { unsafe {
         let env = physenv()?;
         let params = engine_hook::FluidParams {
             surface_plane: plane,
