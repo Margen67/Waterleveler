@@ -271,14 +271,6 @@ if CLIENT then
     -- else is re-wrapped as UnlitGeneric using the same base texture.
     local passthrough = { refract = true, unlitgeneric = true, spritecard = true, vertexlitgeneric = true }
 
-    -- Scrolls a matrix texture variable (what the TextureScroll proxy does).
-    local function scroll(m, var, rate, angle, t)
-        local a = math.rad(angle)
-        local mtx = Matrix()
-        mtx:SetTranslation(Vector(math.cos(a) * rate * t, math.sin(a) * rate * t, 0))
-        m:SetMatrix(var, mtx)
-    end
-
     local function mat(name)
         local entry = cache[name]
         if entry == nil then
@@ -296,6 +288,7 @@ if CLIENT then
                 -- Texture parameters are read as strings: GetTexture() warns
                 -- ("not a texture value") for vars a shader does not declare.
                 local nm, dudv = m:GetString("$normalmap"), m:GetString("$dudvmap")
+                local bump = m:GetString("$bumpmap")
                 if shader == "water" and nm and nm ~= "" then
                     -- The Water shader draws its reflection and refraction only for the
                     -- world's own water surfaces; on a mesh the animated normal map
@@ -312,16 +305,15 @@ if CLIENT then
                     }
                     local dm = m:GetString("$bumpmap")
                     if dm and dm ~= "" then params["$dudvmap"] = dm end
-                    local rm = CreateMaterial("wl_water_" .. unlitCount, "Refract", params)
-                    local nt = m:GetTexture("$normalmap")
-                    local frames = nt and nt:GetNumAnimationFrames() or 1
-                    -- Animated here, not with proxies: the original's own scroll and frame
-                    -- proxies cannot be read, and proxies on re-created materials did not run.
-                    entry = { mat = rm, color = color_white, vcol = false, cull = true, refract = true,
-                        animate = function(t)
-                            if frames > 1 then rm:SetInt("$bumpframe", math.floor(t * 30) % frames) end
-                            scroll(rm, "$bumptransform", 0.02, 25, t)
-                        end }
+                    params.Proxies = {
+                        AnimatedTexture = { animatedtexturevar = "$normalmap",
+                            animatedtextureframenumvar = "$bumpframe", animatedtextureframerate = 30 },
+                        -- water_13 and the other Water materials scroll their bump map.
+                        TextureScroll = { texturescrollvar = "$bumptransform",
+                            texturescrollrate = 0.02, texturescrollangle = 25 },
+                    }
+                    entry = { mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", params),
+                        color = color_white, vcol = false, cull = true, refract = true }
                 elseif shader == "refract" and m:GetInt("$model") == 1 and nm and nm ~= "" then
                     -- Refract materials flagged "$model 1" (models/shadertest/shader3, ...)
                     -- are built for model vertex data and an env_cubemap; on a plain
@@ -332,15 +324,30 @@ if CLIENT then
                         ["$refractamount"] = m:GetFloat("$refractamount") or 0.25,
                         ["$bluramount"] = m:GetInt("$bluramount") or 1,
                         ["$scale"] = "[1 1]",
+                        Proxies = { TextureScroll = {
+                            texturescrollvar = "$bumptransform", texturescrollrate = 0.3, texturescrollangle = -90 } },
                     }
                     if dudv and dudv ~= "" then params["$dudvmap"] = dudv end
                     local tint = m:GetVector("$refracttint")
                     if tint then
                         params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255)
                     end
-                    local rm = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params)
-                    entry = { mat = rm, color = color_white, vcol = false, cull = true, refract = true,
-                        animate = function(t) scroll(rm, "$bumptransform", 0.3, -90, t) end }
+                    entry = { mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params),
+                        color = color_white, vcol = false, cull = true, refract = true }
+                elseif not passthrough[shader] and bump and bump ~= "" then
+                    -- World water such as nature/water_movingplane: its look is the animated
+                    -- bump map (dev/water_normal), which only a refracting shader can show.
+                    unlitCount = unlitCount + 1
+                    entry = { mat = CreateMaterial("wl_bump_" .. unlitCount, "Refract", {
+                        ["$normalmap"] = bump,
+                        ["$bumpframe"] = 0,
+                        ["$refractamount"] = 0.1,
+                        ["$bluramount"] = 0,
+                        ["$scale"] = "[1 1]",
+                        ["$refracttint"] = "{190 215 255}",
+                        Proxies = { AnimatedTexture = { animatedtexturevar = "$normalmap",
+                            animatedtextureframenumvar = "$bumpframe", animatedtextureframerate = 21 } },
+                    }), color = color_white, vcol = false, cull = true, refract = true }
                 elseif passthrough[shader] then
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
                     entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric", refract = shader == "refract" }
