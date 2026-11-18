@@ -153,6 +153,8 @@ unsafe fn find_symbol(name: &CStr) -> *mut c_void {
 #[cfg(not(any(target_os = "linux", windows)))]
 compile_error!("gmsv_waterlevel supports Linux and Windows only");
 
+// The target of each transmute is the function pointer type of the `Api` field it fills.
+#[allow(clippy::missing_transmute_annotations)]
 unsafe fn load_api() -> Option<Api> {
     macro_rules! load {
         ($name:literal) => {{
@@ -644,9 +646,9 @@ mod engine_hook {
             if inside(e) {
                 let wf = |o: usize, val: f32| (trace.add(o) as *mut f32).write_unaligned(val);
                 let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
-                for i in 0..3 {
-                    wf(i * 4, origin[i]);
-                    wf(0x0c + i * 4, origin[i]);
+                for (i, &component) in origin.iter().enumerate() {
+                    wf(i * 4, component);
+                    wf(0x0c + i * 4, component);
                     wf(0x18 + i * 4, 0.0);
                 }
                 wf(0x24, 0.0);
@@ -1235,7 +1237,7 @@ mod engine_hook {
     pub fn clip_bubble_trail(vols: &[Volume], from: [f32; 3], to: [f32; 3]) -> BubbleClip {
         let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
         let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-        if !(len > 1e-3) {
+        if len.is_nan() || len <= 1e-3 {
             return BubbleClip::Keep;
         }
         // A volume the trail starts in wins; otherwise the first one it enters.
@@ -1481,7 +1483,7 @@ mod engine_hook {
             }
             // `vtable[-1]` holds its address: relocated, or preferred-base when only mapped.
             for target in [base as usize + col, preferred + col] {
-                for p in find(&target.to_le_bytes(), 8) {
+                if let Some(p) = find(&target.to_le_bytes(), 8).into_iter().next() {
                     return Ok(base as usize + p + 8);
                 }
             }
@@ -1541,7 +1543,7 @@ mod engine_hook {
             data[EFFECT_START_OFFSET + i * 4..EFFECT_START_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
         }
         let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
-        f(b"WaterSurfaceExplosion\0".as_ptr(), data.as_ptr());
+        f(c"WaterSurfaceExplosion".as_ptr().cast(), data.as_ptr());
         EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
         true
     }
@@ -1692,8 +1694,8 @@ mod client_hook {
         if !data.is_null() {
             let rd = |i: usize| data.add(i).read_unaligned();
             if is_blast_point([rd(0), rd(1), rd(2)], [rd(3), rd(4), rd(5)]) {
-                for i in 0..3 {
-                    START[i].store(rd(3 + i).to_bits(), Ordering::Relaxed);
+                for (i, start) in START.iter().enumerate() {
+                    start.store(rd(3 + i).to_bits(), Ordering::Relaxed);
                 }
                 ACTIVE.store(true, Ordering::Relaxed);
             }
@@ -1709,12 +1711,12 @@ mod client_hook {
         }
         let o = this.add(ORIGIN_OFFSET) as *mut u32;
         let saved = [o.read_unaligned(), o.add(1).read_unaligned(), o.add(2).read_unaligned()];
-        for i in 0..3 {
-            o.add(i).write_unaligned(START[i].load(Ordering::Relaxed));
+        for (i, start) in START.iter().enumerate() {
+            o.add(i).write_unaligned(start.load(Ordering::Relaxed));
         }
         original(this);
-        for i in 0..3 {
-            o.add(i).write_unaligned(saved[i]);
+        for (i, &value) in saved.iter().enumerate() {
+            o.add(i).write_unaligned(value);
         }
         SOUNDS_MOVED.fetch_add(1, Ordering::Relaxed);
     }
@@ -3211,7 +3213,7 @@ mod tests {
         let mut entity = vec![0u8; 0x400];
         entity[..8].copy_from_slice(&(entity_vtable.as_ptr() as usize).to_le_bytes());
         entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4].copy_from_slice(&(EFL_TOUCHING_FLUID | 0x4).to_le_bytes());
-        let mut object_vtable = vec![0usize; OBJ_GET_GAME_DATA_SLOT + 1];
+        let mut object_vtable = [0usize; OBJ_GET_GAME_DATA_SLOT + 1];
         object_vtable[OBJ_GET_GAME_DATA_SLOT] = fake_get_game_data as *const () as usize;
         let object = [object_vtable.as_ptr() as usize, entity.as_mut_ptr() as usize];
         let live = 0x1000usize;
@@ -3318,7 +3320,8 @@ mod tests {
         assert!((b[0] - 127.5).abs() < 1e-3);
     }
 
-    static BUBBLE_CALLS: std::sync::Mutex<Vec<([f32; 3], [f32; 3], i32)>> =
+    type BubbleCall = ([f32; 3], [f32; 3], i32);
+    static BUBBLE_CALLS: std::sync::Mutex<Vec<BubbleCall>> =
         std::sync::Mutex::new(Vec::new());
 
     unsafe extern "win64" fn fake_bubble_trail(from: *const f32, to: *const f32, count: c_int) {
@@ -3456,7 +3459,8 @@ mod tests {
         }
     }
 
-    static FLUID_CALLS: std::sync::Mutex<Vec<(&'static str, usize, usize, [f32; 4], f32, i32)>> =
+    type FluidCall = (&'static str, usize, usize, [f32; 4], f32, i32);
+    static FLUID_CALLS: std::sync::Mutex<Vec<FluidCall>> =
         std::sync::Mutex::new(Vec::new());
 
     unsafe extern "win64" fn fake_create(env: *mut c_void, obj: *mut c_void, p: *const FluidParams) -> *mut c_void {
@@ -3518,10 +3522,10 @@ mod tests {
             NAMES.lock().unwrap().push(n);
         }
         DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
-        let mut te = vec![0u8; 0x38];
-        let put = |te: &mut Vec<u8>, p: [f32; 3]| {
-            for i in 0..3 {
-                te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&p[i].to_le_bytes());
+        let mut te = [0u8; 0x38];
+        let put = |te: &mut [u8], p: [f32; 3]| {
+            for (i, v) in p.iter().enumerate() {
+                te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
             }
         };
         put(&mut te, [500.0, 0.0, 0.0]);
@@ -3547,7 +3551,7 @@ mod tests {
             ]);
         }
         DISPATCH_EFFECT_ADDR.store(fake_dispatch as *const () as usize, Ordering::SeqCst);
-        let mut te = vec![0u8; 0x38];
+        let mut te = [0u8; 0x38];
         for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
             te[TE_ORIGIN_OFFSET + i * 4..TE_ORIGIN_OFFSET + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
         }
@@ -3892,7 +3896,7 @@ mod tests {
             let t = 172.0 / 300.0;
             assert!((f32at(&tr, 0x2c) - t).abs() < 1e-6, "fraction");
             assert!((f32at(&tr, 0x0c + 8) - 128.0).abs() < 1e-3, "endpos.z is the surface");
-            assert_eq!(f32at(&tr, 0x00 + 8), 300.0, "startpos.z");
+            assert_eq!(f32at(&tr, 8), 300.0, "startpos.z");
             assert_eq!((f32at(&tr, 0x18), f32at(&tr, 0x1c), f32at(&tr, 0x20)), (0.0, 0.0, 1.0), "normal");
             assert_eq!(f32at(&tr, 0x24), 128.0, "plane.dist");
             assert_eq!((tr[0x28], tr[0x29]), (2, 0), "plane.type / signbits");
