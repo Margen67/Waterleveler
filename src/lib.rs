@@ -504,7 +504,7 @@ mod engine_hook {
         Ok((vtable as usize, original))
     }}
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) unsafe fn uninstall_contents_hook(slot: usize, original: usize, p: &Platform) { unsafe {
         let slot = slot as *mut usize;
         if slot.read() != hook_get_point_contents as *const () as usize {
@@ -1406,7 +1406,7 @@ mod engine_hook {
     /// Only its address is used (to send the water explosion effect), nothing is patched.
     pub(crate) const DISPATCH_EFFECT_SIG: &str = "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 48 8B FA \
                                            48 8D 4C 24 30 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 8B D7";
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) const DISPATCH_EFFECT_STOLEN: usize = 16;
 
     // ---- Explosion events (CTEExplosion::Create) -------------------------
@@ -1493,7 +1493,7 @@ mod engine_hook {
 
     /// Fills a `CEffectData` the way the engine does for the water explosion
     /// (flags 0x428, scale 128, magnitude 50; byte at +0x88 set).
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn water_explosion_effect_data(origin: [f32; 3]) -> [u8; 0xa0] {
         water_explosion_effect_data_with(origin, 0x428, 128.0, 50.0)
     }
@@ -1658,8 +1658,8 @@ mod engine_hook {
 mod client_hook {
     use super::engine_hook::{self, Platform};
     #[cfg(windows)]
-    use super::*;
     #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
+    use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
     /// Slot 0: `void Create(this, const CEffectData &, float magnitude, float scale, int flags)`.
@@ -1822,8 +1822,8 @@ mod client_hook {
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod hook_state {
     use super::engine_hook::{self, STOLEN};
-    use super::*;
     #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
+    use super::*;
 
     pub(crate) static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);
 
@@ -1854,8 +1854,8 @@ mod hook_state {
 
     /// Hooks `IEngineTrace::GetPointContents` via the engine object that
     /// `server.dll` itself uses (found through `UpdateWaterState`).
-    pub(crate) unsafe fn install_contents() -> Result<String, &'static str> { unsafe {
     #[allow(clippy::too_many_lines)]
+    pub(crate) unsafe fn install_contents() -> Result<String, &'static str> { unsafe {
         let base = engine_hook::win::server_base();
         if base.is_null() {
             return Err("server.dll is not loaded");
