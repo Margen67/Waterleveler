@@ -5,6 +5,10 @@ edition = "2021"
 rust-version = "1.77"
 description = "Garry's Mod (server) binary module: per-entity water level overrides"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/Margen67/Waterleveler"
+readme = "README.md"
+keywords = ["garrys-mod", "gmod", "water"]
+categories = ["game-development"]
 
 # No dependencies on purpose: the module resolves the Lua C API from the
 # already-loaded lua_shared library at runtime, so it builds offline and does
@@ -21,3 +25,33 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Every lint on, including the pedantic and cargo groups, except the ones that
+# are wrong for this crate (each is explained next to its entry).
+[lints.rust]
+rust-2018-idioms = { level = "warn", priority = -1 }
+unsafe_op_in_unsafe_fn = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+missing_debug_implementations = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+
+# Wrong for this crate:
+# - The module only builds for x86_64 (the engine's 64-bit branch), so pointer-width casts
+#   cannot truncate or wrap.
+# - Lua numbers are doubles; every conversion to an integer or f32 is of a value the code
+#   has bounded (clamped arguments, small engine offsets), and converting is the point.
+# - Pointers are cast into engine objects whose fields really are aligned; the lint only sees
+#   `*const u8`.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_ptr_alignment = "allow"
