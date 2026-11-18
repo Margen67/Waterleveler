@@ -504,6 +504,7 @@ mod engine_hook {
         Ok((vtable as usize, original))
     }}
 
+    #[cfg(test)]
     pub(crate) unsafe fn uninstall_contents_hook(slot: usize, original: usize, p: &Platform) { unsafe {
         let slot = slot as *mut usize;
         if slot.read() != hook_get_point_contents as *const () as usize {
@@ -1405,6 +1406,7 @@ mod engine_hook {
     /// Only its address is used (to send the water explosion effect), nothing is patched.
     pub(crate) const DISPATCH_EFFECT_SIG: &str = "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 48 8B FA \
                                            48 8D 4C 24 30 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 8B D7";
+    #[cfg(test)]
     pub(crate) const DISPATCH_EFFECT_STOLEN: usize = 16;
 
     // ---- Explosion events (CTEExplosion::Create) -------------------------
@@ -1419,10 +1421,6 @@ mod engine_hook {
     // origin (this+0x18) is in a volume is sent as that effect, and the event
     // is dropped.
 
-    /// `CTEExplosion`'s scalar deleting destructor (object size 0x38): `lea rax, [vtable]` at +10.
-    pub(crate) const TE_EXPLOSION_CTOR_SIG: &str =
-        "48 89 5C 24 08 57 48 83 EC 20 48 8D 05 ?? ?? ?? ?? 8B DA 48 89 01 48 8B F9 E8 ?? ?? ?? ?? \
-         F6 C3 01 74 0D BA 38 00 00 00";
     pub(crate) const TE_ORIGIN_OFFSET: usize = 0x18;
     pub(crate) static ORIGINAL_TE_CREATE: AtomicUsize = AtomicUsize::new(0);
     pub(crate) static DISPATCH_EFFECT_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -1495,6 +1493,7 @@ mod engine_hook {
 
     /// Fills a `CEffectData` the way the engine does for the water explosion
     /// (flags 0x428, scale 128, magnitude 50; byte at +0x88 set).
+    #[cfg(test)]
     pub(crate) fn water_explosion_effect_data(origin: [f32; 3]) -> [u8; 0xa0] {
         water_explosion_effect_data_with(origin, 0x428, 128.0, 50.0)
     }
@@ -1571,7 +1570,8 @@ mod engine_hook {
     // ---- Windows glue (thin on purpose) ----------------------------------
 
     #[cfg(windows)]
-    pub mod win {
+    pub(crate) mod win {
+        #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
         use super::*;
 
         #[link(name = "kernel32")]
@@ -1586,12 +1586,11 @@ mod engine_hook {
         const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
         unsafe fn alloc_exec(size: usize) -> *mut u8 { unsafe {
-            VirtualAlloc(std::ptr::null_mut(), size, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE)
-                as *mut u8
+            VirtualAlloc(std::ptr::null_mut(), size, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE).cast::<u8>()
         }}
         unsafe fn make_writable(p: *mut u8, n: usize) -> Option<u32> { unsafe {
             let mut old = 0u32;
-            if VirtualProtect(p as *mut c_void, n, PAGE_EXECUTE_READWRITE, &mut old) != 0 {
+            if VirtualProtect(p.cast::<c_void>(), n, PAGE_EXECUTE_READWRITE, &mut old) != 0 {
                 Some(old)
             } else {
                 None
@@ -1599,29 +1598,29 @@ mod engine_hook {
         }}
         unsafe fn restore_protect(p: *mut u8, n: usize, old: u32) { unsafe {
             let mut tmp = 0u32;
-            VirtualProtect(p as *mut c_void, n, old, &mut tmp);
+            VirtualProtect(p.cast::<c_void>(), n, old, &mut tmp);
         }}
         unsafe fn flush(p: *mut u8, n: usize) { unsafe {
             FlushInstructionCache(GetCurrentProcess(), p as *const c_void, n);
         }}
 
-        pub const PLATFORM: Platform = Platform {
+        pub(crate) const PLATFORM: Platform = Platform {
             alloc_exec,
             make_writable,
             restore_protect,
             flush,
         };
 
-        pub unsafe fn server_base() -> *const u8 { unsafe {
+        pub(crate) unsafe fn server_base() -> *const u8 { unsafe {
             GetModuleHandleA(c"server.dll".as_ptr()) as *const u8
         }}
 
-        pub unsafe fn client_base() -> *const u8 { unsafe {
+        pub(crate) unsafe fn client_base() -> *const u8 { unsafe {
             GetModuleHandleA(c"client.dll".as_ptr()) as *const u8
         }}
 
         /// An interface of client.dll (`CreateInterface("VClientEntityList003")`).
-        pub unsafe fn client_interface(name: &CStr) -> usize { unsafe {
+        pub(crate) unsafe fn client_interface(name: &CStr) -> usize { unsafe {
             #[link(name = "kernel32")]
             extern "system" {
                 fn GetProcAddress(module: *mut c_void, name: *const c_char) -> *mut c_void;
@@ -1660,6 +1659,7 @@ mod client_hook {
     use super::engine_hook::{self, Platform};
     #[cfg(windows)]
     use super::*;
+    #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
     /// Slot 0: `void Create(this, const CEffectData &, float magnitude, float scale, int flags)`.
@@ -1776,7 +1776,7 @@ mod client_hook {
     }}
 
     #[cfg(windows)]
-    pub unsafe fn install() -> Result<(), &'static str> { unsafe {
+    pub(crate) unsafe fn install() -> Result<(), &'static str> { unsafe {
         let base = engine_hook::win::client_base();
         if base.is_null() {
             return Err("client.dll is not loaded");
@@ -1785,22 +1785,22 @@ mod client_hook {
     }}
 
     #[cfg(windows)]
-    pub unsafe fn uninstall() { unsafe {
+    pub(crate) unsafe fn uninstall() { unsafe {
         let slot = SLOT.swap(0, Ordering::SeqCst) as *mut usize;
         if slot.is_null() {
             return;
         }
         let p = &engine_hook::win::PLATFORM;
-        if let Some(old) = (p.make_writable)(slot as *mut u8, 16) {
+        if let Some(old) = (p.make_writable)(slot.cast::<u8>(), 16) {
             slot.write(ORIG_CREATE.load(Ordering::SeqCst));
             slot.add(1).write(ORIG_SOUND.load(Ordering::SeqCst));
-            (p.restore_protect)(slot as *mut u8, 16, old);
+            (p.restore_protect)(slot.cast::<u8>(), 16, old);
         }
     }}
 
     #[cfg(windows)]
     /// True when this DLL was loaded as the client module (file name gmcl_*).
-    pub unsafe fn is_client_module() -> bool { unsafe {
+    pub(crate) unsafe fn is_client_module() -> bool { unsafe {
         #[link(name = "kernel32")]
         extern "system" {
             fn GetModuleHandleExA(flags: u32, addr: *const c_void, out: *mut *mut c_void) -> i32;
@@ -1823,37 +1823,39 @@ mod client_hook {
 mod hook_state {
     use super::engine_hook::{self, STOLEN};
     use super::*;
+    #[allow(clippy::wildcard_imports)] // the Windows-only code needs more names than the Linux build uses
 
-    pub static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);
+    pub(crate) static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);
 
-    pub unsafe fn install() -> Result<usize, &'static str> { unsafe {
+    pub(crate) unsafe fn install() -> Result<usize, &'static str> { unsafe {
         let base = engine_hook::win::server_base();
         if base.is_null() {
             return Err("server.dll is not loaded");
         }
         let target = engine_hook::scan_image(base)?;
         let original = engine_hook::install(target, &engine_hook::win::PLATFORM)?;
-        *TARGET.lock().unwrap_or_else(|e| e.into_inner()) = Some((target as usize, original));
+        *TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((target as usize, original));
         Ok(target as usize - base as usize)
     }}
 
-    pub unsafe fn uninstall() { unsafe {
-        let taken = TARGET.lock().unwrap_or_else(|e| e.into_inner()).take();
+    pub(crate) unsafe fn uninstall() { unsafe {
+        let taken = TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         if let Some((target, original)) = taken {
             engine_hook::uninstall(target as *mut u8, &original, &engine_hook::win::PLATFORM);
         }
     }}
 
-    pub fn active() -> bool {
-        TARGET.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    pub(crate) fn active() -> bool {
+        TARGET.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
     }
 
     /// (vtable slot address, original function pointer)
-    pub static CONTENTS: Mutex<Vec<(usize, usize, usize)>> = Mutex::new(Vec::new());
+    pub(crate) static CONTENTS: Mutex<Vec<(usize, usize, usize)>> = Mutex::new(Vec::new());
 
-    /// Hooks IEngineTrace::GetPointContents via the engine object that
-    /// server.dll itself uses (found through UpdateWaterState).
-    pub unsafe fn install_contents() -> Result<String, &'static str> { unsafe {
+    /// Hooks `IEngineTrace::GetPointContents` via the engine object that
+    /// `server.dll` itself uses (found through `UpdateWaterState`).
+    pub(crate) unsafe fn install_contents() -> Result<String, &'static str> { unsafe {
+    #[allow(clippy::too_many_lines)]
         let base = engine_hook::win::server_base();
         if base.is_null() {
             return Err("server.dll is not loaded");
@@ -1897,7 +1899,7 @@ mod hook_state {
             }
             Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
         };
-        *CONTENTS.lock().unwrap_or_else(|e| e.into_inner()) = hooks;
+        *CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
 
         // Third hook: bubble trails are clipped to the volume they are in.
         let bubble = match engine_hook::scan_sig(base, engine_hook::BUBBLE_TRAIL_SIG).and_then(|t| {
@@ -1912,7 +1914,7 @@ mod hook_state {
             Ok(patch) => {
                 engine_hook::BUBBLE_TRAMPOLINE
                     .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-                *BUBBLE.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
+                *BUBBLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
                 " + UTIL_BubbleTrail".to_string()
             }
             Err(why) => format!(" (bubble-trail clipping inactive: {why})"),
@@ -1929,7 +1931,7 @@ mod hook_state {
         }) {
             Ok(patch) => {
                 engine_hook::FLUID_END_TOUCH_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-                *FLUID_END_TOUCH.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
+                *FLUID_END_TOUCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
                 " + FluidEndTouch".to_string()
             }
             Err(why) => format!(" (removing a volume with props in it may crash: {why})"),
@@ -1954,7 +1956,7 @@ mod hook_state {
                 &engine_hook::win::PLATFORM,
             )?;
             engine_hook::ORIGINAL_TE_CREATE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-            *TE_HOOK.lock().unwrap_or_else(|e| e.into_inner()) = Some(patch);
+            *TE_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
             Ok(())
         })();
         let te_note = match te_note {
@@ -1991,18 +1993,18 @@ mod hook_state {
             }
         }
         let explosion = format!(" + {}/{} explosion checks", patches.len(), engine_hook::EXPLOSION_TARGETS.len());
-        *EXPLOSIONS.lock().unwrap_or_else(|e| e.into_inner()) = patches;
+        *EXPLOSIONS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = patches;
         Ok(format!("{summary}{bubble}{end_touch}{explosion}{te_note}{world_note}"))
     }}
 
-    pub static EXPLOSIONS: Mutex<Vec<engine_hook::Patch>> = Mutex::new(Vec::new());
-    pub static TE_HOOK: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
+    pub(crate) static EXPLOSIONS: Mutex<Vec<engine_hook::Patch>> = Mutex::new(Vec::new());
+    pub(crate) static TE_HOOK: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
-    pub static BUBBLE: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
-    pub static FLUID_END_TOUCH: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
+    pub(crate) static BUBBLE: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
+    pub(crate) static FLUID_END_TOUCH: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
     /// (id, controller pointer, contents) for every fluid this module created.
-    pub static FLUIDS: Mutex<Vec<(u32, usize, c_int)>> = Mutex::new(Vec::new());
+    pub(crate) static FLUIDS: Mutex<Vec<(u32, usize, c_int)>> = Mutex::new(Vec::new());
     static NEXT_FLUID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
     unsafe fn physenv() -> Result<*mut c_void, &'static str> { unsafe {
@@ -2019,7 +2021,7 @@ mod hook_state {
         Ok(env)
     }}
 
-    pub unsafe fn fluid_attach(object: usize, plane: [f32; 4], fluid: &FluidSettings) -> Result<u32, &'static str> { unsafe {
+    pub(crate) unsafe fn fluid_attach(object: usize, plane: [f32; 4], fluid: &FluidSettings) -> Result<u32, &'static str> { unsafe {
         let env = physenv()?;
         let params = engine_hook::FluidParams {
             surface_plane: plane,
@@ -2028,7 +2030,7 @@ mod hook_state {
             torque_factor: fluid.torque,
             viscosity_factor: fluid.viscosity,
             game_data: std::ptr::null_mut(),
-            use_aerodynamics: fluid.aerodynamics as u8,
+            use_aerodynamics: u8::from(fluid.aerodynamics),
             contents: fluid.contents,
         };
         if object == 0 {
@@ -2040,14 +2042,14 @@ mod hook_state {
             return Err("the engine refused to create a fluid controller (object has no physics?)");
         }
         let id = NEXT_FLUID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).push((id, controller as usize, fluid.contents));
+        FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((id, controller as usize, fluid.contents));
         engine_hook::fluid_born(controller as usize);
         Ok(id)
     }}
 
-    pub unsafe fn fluid_detach(id: u32) -> bool { unsafe {
+    pub(crate) unsafe fn fluid_detach(id: u32) -> bool { unsafe {
         let taken = {
-            let mut list = FLUIDS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut list = FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             list.iter().position(|f| f.0 == id).map(|i| list.remove(i))
         };
         let Some((_, fluid, contents)) = taken else { return false };
@@ -2061,52 +2063,52 @@ mod hook_state {
         }
     }}
 
-    pub unsafe fn fluid_detach_all() { unsafe {
-        let ids: Vec<u32> = FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|f| f.0).collect();
+    pub(crate) unsafe fn fluid_detach_all() { unsafe {
+        let ids: Vec<u32> = FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().map(|f| f.0).collect();
         for id in ids {
             fluid_detach(id);
         }
     }}
 
-    pub fn fluid_count() -> usize {
-        FLUIDS.lock().unwrap_or_else(|e| e.into_inner()).len()
+    pub(crate) fn fluid_count() -> usize {
+        FLUIDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
     }
 
-    pub unsafe fn uninstall_contents() { unsafe {
+    pub(crate) unsafe fn uninstall_contents() { unsafe {
         engine_hook::RAY_SWEPT_OFFSET
             .store(engine_hook::RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
         engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
-        if let Some(patch) = TE_HOOK.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(patch) = TE_HOOK.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
         engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
-        for patch in std::mem::take(&mut *EXPLOSIONS.lock().unwrap_or_else(|e| e.into_inner())) {
+        for patch in std::mem::take(&mut *EXPLOSIONS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)) {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
-        let patch = FLUID_END_TOUCH.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let patch = FLUID_END_TOUCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         if let Some(patch) = patch {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
         engine_hook::forget_dead_fluids();
         // Bubble detour first: it calls through the trampoline, not the slots.
-        let patch = BUBBLE.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let patch = BUBBLE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         if let Some(patch) = patch {
             engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
         }
-        let taken = std::mem::take(&mut *CONTENTS.lock().unwrap_or_else(|e| e.into_inner()));
+        let taken = std::mem::take(&mut *CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         for (entry, original, hook) in taken.into_iter().rev() {
             engine_hook::uninstall_slot_hook(entry, hook, original, &engine_hook::win::PLATFORM);
         }
     }}
 
-    pub fn contents_active() -> bool {
-        !CONTENTS.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+    pub(crate) fn contents_active() -> bool {
+        !CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
     }
 
-    /// Client realm: the same two hooks on the client's own IEngineTrace, so what the
+    /// Client realm: the same two hooks on the client's own `IEngineTrace`, so what the
     /// client does with water (ripples and splashes, the underwater sound filter,
     /// prediction) sees the volumes the Lua side gave it.
-    pub unsafe fn install_client_contents() -> Result<String, &'static str> { unsafe {
+    pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> { unsafe {
         let base = engine_hook::win::client_base();
         if base.is_null() {
             return Err("client.dll is not loaded");
@@ -2147,7 +2149,7 @@ mod hook_state {
             (Err(why), _) => format!("GetPointContents only (Ray_t helper: {why})"),
             _ => "GetPointContents only (no VClientEntityList003)".to_string(),
         };
-        *CONTENTS.lock().unwrap_or_else(|e| e.into_inner()) = hooks;
+        *CONTENTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
         Ok(note)
     }}
 }
@@ -2726,7 +2728,7 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int { unsafe {
             Ok(note) => note,
             Err(why) => format!("trace hook failed: {why}"),
         };
-        *HOOK_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = format!("client: {trace}; {explosion}");
+        *HOOK_STATUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = format!("client: {trace}; {explosion}");
         (a.createtable)(l, 0, 8);
         let t = base + 1;
         set_fn(l, t, c"AddVolume", l_add_volume);
