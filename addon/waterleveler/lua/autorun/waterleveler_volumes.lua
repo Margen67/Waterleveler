@@ -589,6 +589,8 @@ if CLIENT then
     -- by client code that does its own water trace, which a volume cannot
     -- feed, so the same material is drawn here as flat, growing, fading quads
     -- on the surface wherever something moves through it.
+    local cvRipples = CreateClientConVar("wl_water_ripples", "1", true, false,
+        "Draw this script's ripples (0 = off, e.g. when the engine's own show with the client module)", 0, 1)
     local rippleMat = Material("effects/splashwake1")
     local ripples = {}
     local straddling = {} -- entindex -> true while the entity crosses the surface
@@ -606,6 +608,7 @@ if CLIENT then
     local function bias(x, b) return x ^ (math.log(b) / math.log(0.5)) end
 
     local function addRipple(pos)
+        if not cvRipples:GetBool() then return end
         local light = render.GetLightColor(pos + Vector(0, 0, 4))
         local luma = light.x * 0.3 + light.y * 0.59 + light.z * 0.11
         local m = math.max(light.x, light.y, light.z)
@@ -645,8 +648,8 @@ if CLIENT then
         for i = #ripples, 1, -1 do
             if now - ripples[i].born > RIPPLE_LIFE then table.remove(ripples, i) end
         end
-        if #boxes == 0 then
-            ripples = {}
+        if #boxes == 0 or not cvRipples:GetBool() then
+            if #boxes == 0 then ripples = {} end
             straddling = {}
             return
         end
