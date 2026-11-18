@@ -15,7 +15,6 @@ GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 | Linux 64 | `gmsv_waterlevelercore_linux64.dll`   |
 | Win 64   | `gmsv_waterlevelercore_win64.dll`     |
 
-The same DLL, copied as `gmcl_waterlevelercore_win64.dll` (Win 64 only), is the optional *client* module. The client has its own engine trace object, so what the client does with water (ripples and splashes, the underwater sound filter and particles, prediction) did not see volumes. With the module the client gets the volumes (the script sends them; `waterlevelercore.AddVolume` and the rest of the volume functions exist on the client) and its `IEngineTrace` is hooked the same way as the server's: `GetPointContents` and `TraceRay`, found from the client's `UpdateWaterState` pattern and the `Ray_t` helper, with the world entity named in water hits taken from `VClientEntityList003`. It also makes the water explosion play its sound at the blast point: the server puts the blast point in the effect's unused start vector and keeps the effect on the surface, and two entries of the effect's vtable in `client.dll` (found by signature) use it. Clients without the module get none of this. `waterlevelercore.HookStatus()` on the client says what was hooked. The script still draws its own ripples; `wl_water_ripples 0` (client convar, 0 or 1) turns them off, for when the engine's own wakes show with the client module.
 
 (The Linux file really is named `.dll`; GMod's module loader expects that.)
 
@@ -139,19 +138,11 @@ Limits (read these):
   temporary ents!"). The function is detoured: the trail is clipped to the
   volume it is in (or enters) and `count` is scaled by the kept fraction.
   Trails outside every volume are untouched.
-- **Client-decided effects** cannot be fixed from the server. The flat
-  `effects/splashwake1` ripple (`FX_WaterRipple`) is
-  only created if the client's *own* `TraceRay` with `MASK_WATER` hits
-  something just below the splash point; the splash effect data the server
-  sends (origin, normal, scale, flags) is already enough for the particle
-  splashes, which is why those appear. The same applies to anything else the
-  client checks against its own copy of the map.
-  The script redraws that ripple with the engine's numbers: scale
-  `effect scale * 0.125` (10-12 for a player's `waterripple`), the quad grows
-  from `scale*16` to `scale*128` units over 1.5 s (size bias 0.7), starts at an
-  alpha of `clamp(luma(light)*4, 0.25, 1)` and fades to 0 (alpha bias 0.25), tinted
-  `0.75 + 0.25*light`. A wake needs the entity to move at
-  least 25 units/s (the engine's `PhysicsSplash` limit).
+- **Client-decided effects** (the flat `effects/splashwake1` ripple, `FX_WaterRipple`) are
+  only created if the client's *own* `TraceRay` with `MASK_WATER` hits something just below
+  the splash point. The splash effect data the server sends is enough for the particle
+  splashes, but the ripples need the client module (`gmcl_waterlevelercore_win64.dll`), which
+  hooks the client's trace so the engine makes them itself. Without it there are no ripples.
 
 Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` (loaded automatically as part of the addon).
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
