@@ -41,9 +41,13 @@ jobs:
           cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
           find package -type f | sort
 
+      - name: Create the 7z archive
+        working-directory: package
+        run: 7z a -mx9 -bb3 ../waterleveler.7z garrysmod
+
       - name: Upload artifact
         uses: actions/upload-artifact@main
         with:
-          name: waterleveler
-          path: package
+          path: waterleveler.7z
+          archive: false
           if-no-files-found: error
