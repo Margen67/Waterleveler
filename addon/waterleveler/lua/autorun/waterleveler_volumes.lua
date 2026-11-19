@@ -291,6 +291,19 @@ if CLIENT then
         vertexlitgeneric = true
     }
 
+    -- A re-wrapped material keeps every parameter the original sets ($basetexture,
+    -- $nocull, $refractamount, ...); the values written here are only the defaults for
+    -- what the original leaves out (and what the shader needs to work on a mesh).
+    local function inherit(m, params)
+        for key in pairs(params) do
+            if key ~= "Proxies" then
+                local own = m:GetString(key)
+                if own and own ~= "" then params[key] = own end
+            end
+        end
+        return params
+    end
+
     -- Any other shader (world textures etc.) is re-wrapped as UnlitGeneric with the same base texture,
     -- and the animation its proxies would have given it is redone in Lua.
     local function wrapGeneric(m)
@@ -314,7 +327,7 @@ if CLIENT then
             local scale = m:GetString("$texscale")
             local scaled = scale and scale ~= ""
             if scaled then params["$basetexturetransform"] = "center .5 .5 scale 1 1 rotate 0 translate 0 0" end
-            local um = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", params)
+            local um = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", inherit(m, params))
             local frames = tex:GetNumAnimationFrames()
             local sv = scaled and m:GetVector("$texscale") or Vector(1, 1, 0)
             animate = function(t)
@@ -403,7 +416,7 @@ if CLIENT then
                     }
 
                     entry = {
-                        mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", params),
+                        mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", inherit(m, params)),
                         color = color_white,
                         vcol = false,
                         refract = true
@@ -432,7 +445,7 @@ if CLIENT then
                     local tint = m:GetVector("$refracttint")
                     if tint then params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255) end
                     entry = {
-                        mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", params),
+                        mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", inherit(m, params)),
                         color = color_white,
                         vcol = false,
                         refract = true
@@ -442,7 +455,7 @@ if CLIENT then
                     -- bump map (dev/water_normal), which only a refracting shader can show.
                     unlitCount = unlitCount + 1
                     entry = {
-                        mat = CreateMaterial("wl_bump_" .. unlitCount, "Refract", {
+                        mat = CreateMaterial("wl_bump_" .. unlitCount, "Refract", inherit(m, {
                             ["$normalmap"] = bump,
                             ["$bumpframe"] = 0,
                             ["$refractamount"] = 0.1,
@@ -457,7 +470,7 @@ if CLIENT then
                                     animatedtextureframerate = 21
                                 }
                             },
-                        }),
+                        })),
                         color = color_white,
                         vcol = false,
                         refract = true
