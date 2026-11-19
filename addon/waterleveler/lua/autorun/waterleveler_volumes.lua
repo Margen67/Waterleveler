@@ -304,6 +304,45 @@ if CLIENT then
         return params;
     end
 
+    -- World water drawn by the cheap path (nature/water_movingplane): a LightmappedGeneric with an
+    -- animated, translucent base texture and a bump map whose alpha masks an envmap. That is what a
+    -- map brush shows, so a VertexLitGeneric (lightmaps do not exist on a mesh) with the same
+    -- parameters is used; both animations are advanced in Lua (a material can only have one
+    -- AnimatedTexture proxy per name).
+    local carried = {"$envmap", "$envmaptint", "$envmapcontrast", "$normalmapalphaenvmapmask", "$color", "$alpha"};
+    local function wrapLightmappedWater(m, base, bump)
+        unlitCount = unlitCount + 1;
+        local params = inherit(m, {
+            ["$basetexture"] = base,
+            ["$bumpmap"] = bump,
+            ["$translucent"] = 1,
+            ["$nocull"] = 1,
+            ["$bumpframe"] = 0,
+            ["$frame"] = 0
+        });
+
+        for _, key in ipairs(carried) do
+            local own = m:GetString(key);
+            if own and own ~= "" then params[key] = own; end
+        end
+
+        local wrapped = CreateMaterial("wl_water_lit_" .. unlitCount, "VertexLitGeneric", params);
+        local baseTex, bumpTex = m:GetTexture("$basetexture"), m:GetTexture("$bumpmap");
+        local baseFrames = baseTex and baseTex:GetNumAnimationFrames() or 1;
+        local bumpFrames = bumpTex and bumpTex:GetNumAnimationFrames() or 1;
+        local function animate(t)
+            -- 21 frames per second, like the original's proxies
+            if baseFrames > 1 then wrapped:SetInt("$frame", math.floor(t * 21) % baseFrames); end
+            if bumpFrames > 1 then wrapped:SetInt("$bumpframe", math.floor(t * 21) % bumpFrames); end
+        end
+        return {
+            mat = wrapped,
+            color = color_white,
+            vcol = false,
+            animate = animate
+        };
+    end
+
     -- Any other shader (world textures etc.) is re-wrapped as UnlitGeneric with the same base texture,
     -- and the animation its proxies would have given it is redone in Lua.
     local function wrapGeneric(m)
@@ -450,6 +489,8 @@ if CLIENT then
                         vcol = false,
                         refract = true
                     };
+                elseif shader == "lightmappedgeneric" and bump and bump ~= "" and (m:GetString("$basetexture") or "") ~= "" then
+                    entry = wrapLightmappedWater(m, m:GetString("$basetexture"), bump);
                 elseif not passthrough[shader] and bump and bump ~= "" then
                     -- World water such as nature/water_movingplane: its look is the animated
                     -- bump map (dev/water_normal), which only a refracting shader can show.
