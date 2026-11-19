@@ -148,7 +148,7 @@ Tool: **Water Volume** under Tools > Construction (size per axis, vertical offse
 biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
 
-Every numeric `waterleveler_*` convar has limits (sizes 1-16384, offset +-16384, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).
+Every numeric `waterleveler_*` convar has limits (sizes 1-16384, offset +-16384, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).
 
 Debugging commands (the volumes themselves come from the Water Volume tool):
 `waterleveler_status` (server: hook status, counters, your water level),
@@ -204,7 +204,7 @@ A water hit produced for a volume names the world entity (entry 0 of the engine'
 
 ## Explosion events
 
-Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect (splash and wake) is on the volume's surface; the blast point travels in its start vector (see the client module above). `waterleveler.ExplosionsRedirected()` counts them.
+Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect is sent at the blast point; the client traces up from it with `MASK_WATER` to find the surface (splash and wake go there) and the depth, and plays the muffled `WaterExplosionEffect.Sound` file when that depth is over 128 units. The client module's trace hook therefore reports the exit point (`fractionleftsolid`) for rays that start inside a volume. `waterleveler.ExplosionsRedirected()` counts them.
 
 ## Water or slime
 

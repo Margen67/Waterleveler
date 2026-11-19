@@ -157,7 +157,7 @@ if CLIENT then
 
         offset = panel:NumSlider("Offset", "waterleveler_offset", -MAX_SIZE, MAX_SIZE, 0)
         panel:ControlHelp("Moves the volume up (or down) from where it would rest. The limit is the biggest size above.")
-        panel:ControlHelp("Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).")
+        panel:ControlHelp("The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).")
         updateOffsetRange()
 
         panel:Help("Liquid (also the fluid's physics material)")
