@@ -325,14 +325,6 @@ if CLIENT then
             if own and own ~= "" then params[key] = own; end
         end
 
-        -- GetString cannot see the envmap of a loaded material (it comes back unset), so the
-        -- texture and the integer flag are asked instead: the original's own envmap is kept.
-        if not params["$envmap"] then
-            local envTexture = m:GetTexture("$envmap");
-            if envTexture and not envTexture:IsError() then params["$envmap"] = envTexture:GetName(); end
-        end
-
-        if not params["$normalmapalphaenvmapmask"] and m:GetInt("$normalmapalphaenvmapmask") ~= 0 then params["$normalmapalphaenvmapmask"] = 1; end
         -- 21 frames per second, like the original's proxies (a material can have only one
         -- AnimatedTexture proxy, so the bump map's frame counter is a ramp).
         params.Proxies = {
@@ -581,8 +573,7 @@ if CLIENT then
             print(("[wl]   %s: original %s | wrapper %s"):format(key, param(original, key), param(e.mat, key)));
         end
 
-        local envTexture = original:GetTexture("$envmap");
-        print(("[wl]   original $envmap texture: %s | $normalmapalphaenvmapmask (int): %s | $translucent (int): %s"):format(envTexture and envTexture:GetName() or "(none)", tostring(original:GetInt("$normalmapalphaenvmapmask")), tostring(original:GetInt("$translucent"))));
+        print(("[wl]   flags as integers: $translucent %s, $nocull %s, $normalmapalphaenvmapmask %s"):format(tostring(original:GetInt("$translucent") or "(not set)"), tostring(original:GetInt("$nocull") or "(not set)"), tostring(original:GetInt("$normalmapalphaenvmapmask") or "(not set)")));
         if e.info then print(("[wl]   animation frames: base texture %d, bump map %d"):format(e.info.baseFrames, e.info.bumpFrames)); end
         local function frames(label)
             print(("[wl]   %s: wrapper $frame = %s, $bumpframe = %s"):format(label, param(e.mat, "$frame"), param(e.mat, "$bumpframe")));
