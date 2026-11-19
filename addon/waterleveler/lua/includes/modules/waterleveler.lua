@@ -6,9 +6,7 @@
 -- waterleveler.AddVolume, ...); the helpers below only add Vector-based
 -- convenience on top. Server realm only.
 if not SERVER then return end
-
 require("waterlevelercore")
-
 local core = waterlevelercore
 if not core then
     ErrorNoHalt("[waterleveler] waterlevelercore loaded but did not provide its table\n")
@@ -17,14 +15,12 @@ end
 
 waterleveler = waterleveler or {}
 local lib = waterleveler
-
 for k, v in pairs(core) do
     lib[k] = v
 end
 
 --- Raw module table, for anything the wrappers do not cover.
 lib.Core = core
-
 --- true when the engine hooks are installed (volumes affect contents/traces).
 function lib.IsAvailable()
     return core.IsContentsHooked() == true
@@ -47,12 +43,8 @@ end
 --- Returns the volume id, or nil, err. Remove it with waterleveler.RemoveVolume(id).
 function lib.CreateVolume(pos, size, anchor, liquid)
     if type(size) == "number" then size = Vector(size, size, size) end
-    if not isvector(pos) or not isvector(size) then
-        return nil, "CreateVolume needs a position Vector and a size (Vector or number)"
-    end
-    if size.x <= 0 or size.y <= 0 or size.z <= 0 then
-        return nil, "CreateVolume size must be positive"
-    end
+    if not isvector(pos) or not isvector(size) then return nil, "CreateVolume needs a position Vector and a size (Vector or number)" end
+    if size.x <= 0 or size.y <= 0 or size.z <= 0 then return nil, "CreateVolume size must be positive" end
     anchor = anchor or "center"
     local mins
     if anchor == "center" then
@@ -71,5 +63,4 @@ end
 function lib.InWater(pos)
     return core.PointInVolume(pos.x, pos.y, pos.z)
 end
-
 return lib

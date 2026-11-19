@@ -143,6 +143,8 @@ Limits (read these):
   splashes, but the ripples need the client module (`gmcl_waterlevelercore_win64.dll`), which
   hooks the client's trace so the engine makes them itself. Without it there are no ripples.
 
+Lua is linted and formatted with [GLuaFixer](https://github.com/FPtje/GLuaFixer) (`glualint.json`; CI checks both; `glualint --pretty-print-files addon` formats).
+
 Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` (loaded automatically as part of the addon).
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy and material; an outline previews the volume where you

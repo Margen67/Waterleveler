@@ -4,12 +4,9 @@
 --   Left click: create a water volume where you are looking. It rests against the
 --               surface you aim at and can be moved up or down with Offset.
 -- Needs the waterleveler addon's autorun script (WLWater) and the binary module.
-
 cleanup.Register("waterleveler")
-
 TOOL.Category = "Construction"
 TOOL.Name = "#tool.waterleveler.name"
-
 TOOL.ClientConVar = {
     sizex = "128",
     sizey = "128",
@@ -27,32 +24,34 @@ TOOL.ClientConVar = {
     material = "nature/water_movingplane",
 }
 
-local MIN_SIZE, MAX_SIZE = 1, 32768
-local MAX_FLUID, MAX_CURRENT = 10, 1000
-
+local minSize, maxSize = 1, 32768
+local maxFluid, maxCurrent = 10, 1000
 -- The numeric convars have limits: the console can't set a value outside them.
 -- (Created here, before the tool registers TOOL.ClientConVar, which would
 -- otherwise create them without limits.)
 if CLIENT then
     local limits = {
-        sizex = { 128, MIN_SIZE, MAX_SIZE }, sizey = { 128, MIN_SIZE, MAX_SIZE }, sizez = { 128, MIN_SIZE, MAX_SIZE },
-        offset = { 0, -MAX_SIZE, MAX_SIZE },
-        fluid = { 1, 0, 1 },
-        fluid_damping = { 0.01, 0, MAX_FLUID }, fluid_torque = { 0, 0, MAX_FLUID },
-        fluid_viscosity = { 0, 0, MAX_FLUID }, fluid_aero = { 0, 0, 1 },
-        fluid_currentx = { 0, -MAX_CURRENT, MAX_CURRENT }, fluid_currenty = { 0, -MAX_CURRENT, MAX_CURRENT },
-        fluid_currentz = { 0, -MAX_CURRENT, MAX_CURRENT },
+        sizex = {128, minSize, maxSize},
+        sizey = {128, minSize, maxSize},
+        sizez = {128, minSize, maxSize},
+        offset = {0, -maxSize, maxSize},
+        fluid = {1, 0, 1},
+        fluid_damping = {0.01, 0, maxFluid},
+        fluid_torque = {0, 0, maxFluid},
+        fluid_viscosity = {0, 0, maxFluid},
+        fluid_aero = {0, 0, 1},
+        fluid_currentx = {0, -maxCurrent, maxCurrent},
+        fluid_currenty = {0, -maxCurrent, maxCurrent},
+        fluid_currentz = {0, -maxCurrent, maxCurrent},
     }
+
     for name, l in pairs(limits) do
         CreateClientConVar("waterleveler_" .. name, tostring(l[1]), true, true, "", l[2], l[3])
     end
 end
 
 local function readSize(get)
-    return Vector(
-        math.Clamp(get("sizex"), MIN_SIZE, MAX_SIZE),
-        math.Clamp(get("sizey"), MIN_SIZE, MAX_SIZE),
-        math.Clamp(get("sizez"), MIN_SIZE, MAX_SIZE))
+    return Vector(math.Clamp(get("sizex"), minSize, maxSize), math.Clamp(get("sizey"), minSize, maxSize), math.Clamp(get("sizez"), minSize, maxSize))
 end
 
 -- The offset is limited to the biggest dimension of the volume.
@@ -70,39 +69,47 @@ if CLIENT then
     language.Add("Cleaned_waterleveler", "Cleaned up all water volumes")
 end
 
-TOOL.Information = { { name = "left" } }
+TOOL.Information = {
+    {
+        name = "left"
+    }
+}
 
 function TOOL:LeftClick(trace)
     if not trace.Hit then return false end
     if CLIENT then return true end
-
     local ply = self:GetOwner()
     if not WLWater or not WLWater.Spawn then
         ply:ChatPrint("[waterleveler] the water module is not loaded")
         return false
     end
+
     if not WLWater.Allowed(ply) then
         ply:ChatPrint("[waterleveler] only superadmins can create water volumes")
         return false
     end
 
-    local function get(name) return self:GetClientNumber(name, 0) end
+    local function get(name)
+        return self:GetClientNumber(name, 0)
+    end
+
     local size = readSize(get)
     local mins, maxs = WLWater.Placement(trace, size, readOffset(get, size))
     local id, err = WLWater.Spawn(ply, mins, maxs, {
         liquid = self:GetClientInfo("liquid"):lower() == "slime" and "slime" or "water",
         fluid = self:GetClientNumber("fluid", 1) ~= 0,
         fluidOptions = {
-            damping = math.Clamp(self:GetClientNumber("fluid_damping", 0.01), 0, MAX_FLUID),
-            torque = math.Clamp(self:GetClientNumber("fluid_torque", 0), 0, MAX_FLUID),
-            viscosity = math.Clamp(self:GetClientNumber("fluid_viscosity", 0), 0, MAX_FLUID),
+            damping = math.Clamp(self:GetClientNumber("fluid_damping", 0.01), 0, maxFluid),
+            torque = math.Clamp(self:GetClientNumber("fluid_torque", 0), 0, maxFluid),
+            viscosity = math.Clamp(self:GetClientNumber("fluid_viscosity", 0), 0, maxFluid),
             aerodynamics = self:GetClientNumber("fluid_aero", 0) ~= 0,
-            currentx = math.Clamp(self:GetClientNumber("fluid_currentx", 0), -MAX_CURRENT, MAX_CURRENT),
-            currenty = math.Clamp(self:GetClientNumber("fluid_currenty", 0), -MAX_CURRENT, MAX_CURRENT),
-            currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -MAX_CURRENT, MAX_CURRENT),
+            currentx = math.Clamp(self:GetClientNumber("fluid_currentx", 0), -maxCurrent, maxCurrent),
+            currenty = math.Clamp(self:GetClientNumber("fluid_currenty", 0), -maxCurrent, maxCurrent),
+            currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -maxCurrent, maxCurrent),
         },
         material = self:GetClientInfo("material"),
     })
+
     if not id then
         ply:ChatPrint("[waterleveler] could not create the volume: " .. tostring(err))
         return false
@@ -111,26 +118,14 @@ function TOOL:LeftClick(trace)
 end
 
 if CLIENT then
-    local PRESETS = {
-        "nature/water_movingplane",
-        "nature/water_movingplane_dx70",
-        "gm_construct/water_13",
-        "models/shadertest/predator",
-        "models/shadertest/shader3",
-    }
-
+    local presets = {"nature/water_movingplane", "nature/water_movingplane_dx70", "gm_construct/water_13", "models/shadertest/predator", "models/shadertest/shader3",}
     function TOOL.BuildCPanel(panel)
         panel:Help("Creates a water volume where you aim. Swimming, water level and impact splashes work like normal water.")
-
         local sliders = {}
         local offset
-
         local function updateOffsetRange()
             if not IsValid(offset) then return end
-            local max = math.max(
-                GetConVar("waterleveler_sizex"):GetFloat(),
-                GetConVar("waterleveler_sizey"):GetFloat(),
-                GetConVar("waterleveler_sizez"):GetFloat())
+            local max = math.max(GetConVar("waterleveler_sizex"):GetFloat(), GetConVar("waterleveler_sizey"):GetFloat(), GetConVar("waterleveler_sizez"):GetFloat())
             offset:SetMin(-max)
             offset:SetMax(max)
             local cur = GetConVar("waterleveler_offset"):GetFloat()
@@ -138,32 +133,27 @@ if CLIENT then
         end
 
         -- Sets all three axes at once.
-        local all = panel:NumSlider("All axes", "", MIN_SIZE, MAX_SIZE, 0)
-        all:SetValue(math.max(
-            GetConVar("waterleveler_sizex"):GetFloat(),
-            GetConVar("waterleveler_sizey"):GetFloat(),
-            GetConVar("waterleveler_sizez"):GetFloat()))
+        local all = panel:NumSlider("All axes", "", minSize, maxSize, 0)
+        all:SetValue(math.max(GetConVar("waterleveler_sizex"):GetFloat(), GetConVar("waterleveler_sizey"):GetFloat(), GetConVar("waterleveler_sizez"):GetFloat()))
         all.OnValueChanged = function(_, value)
             value = math.Round(value)
-            for _, axis in ipairs({ "x", "y", "z" }) do
-                if GetConVar("waterleveler_size" .. axis):GetInt() ~= value then
-                    RunConsoleCommand("waterleveler_size" .. axis, tostring(value))
-                end
+            for _, axis in ipairs({"x", "y", "z"}) do
+                if GetConVar("waterleveler_size" .. axis):GetInt() ~= value then RunConsoleCommand("waterleveler_size" .. axis, tostring(value)) end
             end
+
             timer.Simple(0, updateOffsetRange)
         end
 
-        for _, axis in ipairs({ { "x", "Width (X)" }, { "y", "Length (Y)" }, { "z", "Height (Z)" } }) do
-            local sl = panel:NumSlider(axis[2], "waterleveler_size" .. axis[1], MIN_SIZE, MAX_SIZE, 0)
+        for _, axis in ipairs({{"x", "Width (X)"}, {"y", "Length (Y)"}, {"z", "Height (Z)"}}) do
+            local sl = panel:NumSlider(axis[2], "waterleveler_size" .. axis[1], minSize, maxSize, 0)
             sl.OnValueChanged = function() timer.Simple(0, updateOffsetRange) end
             sliders[#sliders + 1] = sl
         end
 
-        offset = panel:NumSlider("Offset", "waterleveler_offset", -MAX_SIZE, MAX_SIZE, 0)
+        offset = panel:NumSlider("Offset", "waterleveler_offset", -maxSize, maxSize, 0)
         panel:ControlHelp("Moves the volume up (or down) from where it would rest. The limit is the biggest size above.")
         panel:ControlHelp("The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).")
         updateOffsetRange()
-
         panel:Help("Liquid (also the fluid's physics material)")
         local liquid = panel:ComboBox("")
         liquid:SetSortItems(false)
@@ -175,26 +165,27 @@ if CLIENT then
         panel:ControlHelp("Slime: slime-coloured splashes and ripples, no wading, no water explosion effect.")
         panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid")
         panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.")
-        panel:NumSlider("Damping (drag)", "waterleveler_fluid_damping", 0, MAX_FLUID, 3)
-        panel:NumSlider("Torque factor", "waterleveler_fluid_torque", 0, MAX_FLUID, 3)
-        panel:NumSlider("Viscosity factor", "waterleveler_fluid_viscosity", 0, MAX_FLUID, 3)
+        panel:NumSlider("Damping (drag)", "waterleveler_fluid_damping", 0, maxFluid, 3)
+        panel:NumSlider("Torque factor", "waterleveler_fluid_torque", 0, maxFluid, 3)
+        panel:NumSlider("Viscosity factor", "waterleveler_fluid_viscosity", 0, maxFluid, 3)
         panel:CheckBox("Aerodynamic drag", "waterleveler_fluid_aero")
-        panel:NumSlider("Current X", "waterleveler_fluid_currentx", -MAX_CURRENT, MAX_CURRENT, 0)
-        panel:NumSlider("Current Y", "waterleveler_fluid_currenty", -MAX_CURRENT, MAX_CURRENT, 0)
-        panel:NumSlider("Current Z", "waterleveler_fluid_currentz", -MAX_CURRENT, MAX_CURRENT, 0)
-
+        panel:NumSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0)
+        panel:NumSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0)
+        panel:NumSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0)
         local function materialRow(label, convar)
             panel:Help(label)
             local entry = panel:TextEntry("", convar)
             local combo = panel:ComboBox("")
             combo:SetSortItems(false)
             combo:AddChoice("Presets...", nil, true)
-            for _, m in ipairs(PRESETS) do combo:AddChoice(m) end
-            combo.OnSelect = function(_, _, value)
-                if value ~= "Presets..." then RunConsoleCommand(convar, value) end
+            for _, m in ipairs(presets) do
+                combo:AddChoice(m)
             end
+
+            combo.OnSelect = function(_, _, value) if value ~= "Presets..." then RunConsoleCommand(convar, value) end end
             return entry
         end
+
         materialRow("Material", "waterleveler_material")
     end
 
@@ -209,7 +200,7 @@ if CLIENT then
         local vm = ply:GetViewModel(0)
         if not IsValid(vm) then return false end
         local act = vm:GetSequenceActivity(vm:GetSequence())
-        return act == ACT_VM_HOLSTER or (act == ACT_VM_DRAW and vm:GetCycle() < 0.99)
+        return act == ACT_VM_HOLSTER or act == ACT_VM_DRAW and vm:GetCycle() < 0.99
     end
 
     local function holdingProp(ply, tr)
@@ -230,24 +221,23 @@ if CLIENT then
         local wep = IsValid(ply) and ply:GetActiveWeapon()
         if not IsValid(wep) or wep:GetClass() ~= "gmod_tool" or wep:GetMode() ~= "waterleveler" then return end
         if not WLWater or toolgunBusy(ply) then return end
-
         local tr = ply:GetEyeTrace()
         if not tr.Hit or holdingProp(ply, tr) then return end
-
         local size = readSize(function(name) return convar("waterleveler_" .. name, 128) end)
         local mins, maxs = WLWater.Placement(tr, size, readOffset(function(name) return convar("waterleveler_" .. name, 0) end, size))
-
         if WLWater.DrawVolume then
             local function str(name, default)
                 local cv = GetConVar(name)
                 return cv and cv:GetString() or default
             end
+
             WLWater.DrawVolume({
                 mins = mins,
                 maxs = maxs,
                 material = str("waterleveler_material", ""),
             })
         end
+
         local slime = convarString("waterleveler_liquid", "water"):lower() == "slime"
         local r, g, b = 90, 190, 255
         if slime then r, g, b = 90, 255, 120 end

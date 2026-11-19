@@ -7,6 +7,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  lua:
+    name: Lua
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Install GLuaFixer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          gh release download --repo FPtje/GLuaFixer --pattern '*-x86_64-linux.zip'
+          unzip -q glualint-*-x86_64-linux.zip
+          ./glualint --version
+
+      - name: Lint
+        run: ./glualint --output-format github lint .
+
+      - name: Check formatting
+        run: |-
+          ./glualint --pretty-print-files addon
+          find addon -name '*.lua' -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
+          git diff --exit-code
+
   build:
     name: Windows x64
     runs-on: windows-latest

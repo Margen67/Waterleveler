@@ -1,0 +1,8 @@
+{
+    "lint_profanity": false,
+    "lint_unusedParameters": true,
+    "lint_unusedLoopVars": true,
+    "lint_inconsistentVariableStyle": true,
+    "prettyprint_spaceAfterLabel": true,
+    "prettyprint_minimizeParens": true
+}
