@@ -307,8 +307,7 @@ if CLIENT then
     -- World water drawn by the cheap path (nature/water_movingplane): a LightmappedGeneric with an
     -- animated, translucent base texture and a bump map whose alpha masks an envmap. That is what a
     -- map brush shows, so a VertexLitGeneric (lightmaps do not exist on a mesh) with the same
-    -- parameters is used; both animations are advanced in Lua (a material can only have one
-    -- AnimatedTexture proxy per name).
+    -- parameters is used, with the original's proxies.
     local carried = {"$envmap", "$envmaptint", "$envmapcontrast", "$normalmapalphaenvmapmask", "$color", "$alpha"};
     local function wrapLightmappedWater(m, base, bump)
         unlitCount = unlitCount + 1;
@@ -326,20 +325,24 @@ if CLIENT then
             if own and own ~= "" then params[key] = own; end
         end
 
-        local wrapped = CreateMaterial("wl_water_lit_" .. unlitCount, "VertexLitGeneric", params);
-        local baseTex, bumpTex = m:GetTexture("$basetexture"), m:GetTexture("$bumpmap");
-        local baseFrames = baseTex and baseTex:GetNumAnimationFrames() or 1;
-        local bumpFrames = bumpTex and bumpTex:GetNumAnimationFrames() or 1;
-        local function animate(t)
-            -- 21 frames per second, like the original's proxies
-            if baseFrames > 1 then wrapped:SetInt("$frame", math.floor(t * 21) % baseFrames); end
-            if bumpFrames > 1 then wrapped:SetInt("$bumpframe", math.floor(t * 21) % bumpFrames); end
-        end
+        -- 21 frames per second, like the original's proxies (a material can have only one
+        -- AnimatedTexture proxy, so the bump map's frame counter is a ramp).
+        params.Proxies = {
+            AnimatedTexture = {
+                animatedtexturevar = "$basetexture",
+                animatedtextureframenumvar = "$frame",
+                animatedtextureframerate = 21
+            },
+            LinearRamp = {
+                rate = 21,
+                initialValue = 0,
+                resultVar = "$bumpframe"
+            }
+        };
         return {
-            mat = wrapped,
+            mat = CreateMaterial("wl_water_lit_" .. unlitCount, "VertexLitGeneric", params),
             color = color_white,
-            vcol = false,
-            animate = animate
+            vcol = false
         };
     end
 
@@ -677,6 +680,7 @@ if CLIENT then
     -- Each volume is drawn by a client-side entity in the engine's translucent
     -- sort, so it is ordered against splashes, sprites and shards by distance
     -- like any other translucent thing (origin = the box centre).
+    local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
     local function drawVolume(bx)
         local top = mat(bx.material ~= "" and bx.material or defaultMaterial);
         local body = top;
@@ -690,44 +694,51 @@ if CLIENT then
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
         render.PushFilterMag(TEXFILTER.ANISOTROPIC);
         render.PushFilterMin(TEXFILTER.ANISOTROPIC);
-        if bx.persist then
-            -- Volumes that stay are uploaded once as static meshes. Rebuilding them as
-            -- immediate meshes every frame shares the dynamic vertex buffer with the
-            -- particles and sprites a gunshot creates, which corrupted the faces.
-            local key = bx.material or "";
-            if not bx.built or bx.built.key ~= key then
-                destroyBuilt(bx);
-                local list = {};
-                for _, f in ipairs(boxFaces(bx, top, body)) do
-                    local m = Mesh(f.entry.mat);
-                    mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and 2 or 1);
-                    emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
-                    mesh.End();
-                    list[#list + 1] = {
-                        entry = f.entry,
-                        mesh = m
-                    };
-                end
+        -- Every volume is drawn from static meshes. Rebuilding them as immediate meshes every
+        -- frame shares the dynamic vertex buffer with the particles and sprites a gunshot
+        -- creates, which corrupted the faces (and made the preview flicker). The preview moves
+        -- with the aim point, so its mesh is built around the origin and translated.
+        local owner = bx;
+        local moved = false;
+        if not bx.persist then
+            local centre = (bx.mins + bx.maxs) * 0.5;
+            owner = preview;
+            owner.mins = bx.mins - centre;
+            owner.maxs = bx.maxs - centre;
+            owner.material = bx.material;
+            local translation = Matrix();
+            translation:SetTranslation(centre);
+            cam.PushModelMatrix(translation);
+            moved = true;
+        end
 
-                bx.built = {
-                    key = key,
-                    list = list
+        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins);
+        if not owner.built or owner.built.key ~= key then
+            destroyBuilt(owner);
+            local list = {};
+            for _, f in ipairs(boxFaces(owner, top, body)) do
+                local m = Mesh(f.entry.mat);
+                mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and 2 or 1);
+                emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
+                mesh.End();
+                list[#list + 1] = {
+                    entry = f.entry,
+                    mesh = m
                 };
             end
 
-            for _, f in ipairs(bx.built.list) do
-                setFaceState(f.entry);
-                f.mesh:Draw();
-            end
-        else
-            for _, f in ipairs(boxFaces(bx, top, body)) do
-                setFaceState(f.entry);
-                mesh.Begin(MATERIAL_QUADS, f.entry.cull and 2 or 1);
-                emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
-                mesh.End();
-            end
+            owner.built = {
+                key = key,
+                list = list
+            };
         end
 
+        for _, f in ipairs(owner.built.list) do
+            setFaceState(f.entry);
+            f.mesh:Draw();
+        end
+
+        if moved then cam.PopModelMatrix(); end
         render.PopFilterMin();
         render.PopFilterMag();
         render.CullMode(MATERIAL_CULLMODE_CCW);
