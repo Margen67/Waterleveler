@@ -2601,8 +2601,8 @@ unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        // Seconds since 1970 at compile time: shows which build is really loaded.
-        let status = format!("{status} [build {}]", env!("WL_BUILD_TIME"));
+        // The short commit hash: shows which build is really loaded.
+        let status = format!("{status} [build {}]", env!("WL_BUILD"));
         let text = CString::new(status).unwrap_or_default();
         (api().pushstring)(l, text.as_ptr());
         1

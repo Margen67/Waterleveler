@@ -18,7 +18,7 @@
 -- CONTENTS_WATER for every point inside it. The translucent box you see is
 -- only a client-side placeholder: there is no real water surface shader.
 
-local MIN_SIZE, MAX_SIZE = 1, 16384
+local MIN_SIZE, MAX_SIZE = 1, 32768
 local DEFAULT_MATERIAL = "nature/water_movingplane" -- when a volume names none
 
 WLWater = WLWater or {}
@@ -72,11 +72,13 @@ if SERVER then
             -- is not a solid thing. The fluid controller lives on the physics
             -- object and keeps working.
             self:AddSolidFlags(FSOLID_NOT_SOLID)
-            print(("[wl] fluid controller #%d attached (surface z = %.1f)"):format(id, top))
-            -- State of the fluid object right after the engine made it a fluid.
-            print(("[wl] fluid object: material=%s collisions=%s motion=%s solid=%d group=%d")
-                :format(tostring(phys:GetMaterial()), tostring(phys:IsCollisionEnabled()),
-                    tostring(phys:IsMotionEnabled()), self:GetSolid(), self:GetCollisionGroup()))
+            if GetConVar("developer"):GetInt() > 0 then
+                print(("[wl] fluid controller #%d attached (surface z = %.1f)"):format(id, top))
+                -- State of the fluid object right after the engine made it a fluid.
+                print(("[wl] fluid object: material=%s collisions=%s motion=%s solid=%d group=%d")
+                    :format(tostring(phys:GetMaterial()), tostring(phys:IsCollisionEnabled()),
+                        tostring(phys:IsMotionEnabled()), self:GetSolid(), self:GetCollisionGroup()))
+            end
         end
 
         -- The controller must go before its physics object does.
@@ -196,7 +198,7 @@ if SERVER then
         if not allowed(caller) then return end
         local ply = resolve(caller)
         if not IsValid(ply) then return end
-        local tr = util.TraceLine({ start = ply:EyePos(), endpos = ply:EyePos() + ply:GetAimVector() * 16384, filter = ply })
+        local tr = util.TraceLine({ start = ply:EyePos(), endpos = ply:EyePos() + ply:GetAimVector() * 32768, filter = ply })
         local pos = tr.HitPos + tr.HitNormal * 8
         local e = ents.Create("env_explosion")
         if not IsValid(e) then return end
@@ -256,11 +258,6 @@ if CLIENT then
     -- alpha: pink with holes); anything
     -- else is re-wrapped as UnlitGeneric using the same base texture.
     local passthrough = { refract = true, unlitgeneric = true, spritecard = true, vertexlitgeneric = true }
-
-    local function envmap(m)
-        local e = m:GetString("$envmap")
-        return (e and e ~= "") and e or "env_cubemap"
-    end
 
     local function mat(name)
         local entry = cache[name]
@@ -343,10 +340,6 @@ if CLIENT then
                             animatedtextureframenumvar = "$bumpframe", animatedtextureframerate = 21 } },
                     }), color = color_white, vcol = false, refract = true }
                 elseif passthrough[shader] then
-                    -- Shaders that have an envmap get env_cubemap when the material sets none.
-                    if (shader == "unlitgeneric" or shader == "vertexlitgeneric") and (m:GetString("$envmap") or "") == "" then
-                        m:SetString("$envmap", "env_cubemap")
-                    end
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
                     entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric", refract = shader == "refract" }
                 else
@@ -365,8 +358,6 @@ if CLIENT then
                             ["$vertexalpha"] = 1,
                             ["$translucent"] = 1,
                             ["$nocull"] = 1,
-                            -- Keep the original's envmap; materials without one get env_cubemap.
-                            ["$envmap"] = envmap(m),
                         }
                         local scale = m:GetString("$texscale")
                         local scaled = scale and scale ~= ""
@@ -467,6 +458,11 @@ if CLIENT then
         local p110, p010 = Vector(mx.x, mx.y, mn.z), Vector(mn.x, mx.y, mn.z)
         local p001, p101 = Vector(mn.x, mn.y, mx.z), Vector(mx.x, mn.y, mx.z)
         local p111, p011 = Vector(mx.x, mx.y, mx.z), Vector(mn.x, mx.y, mx.z)
+        local surface = { entry = top, a = p001, b = p101, c = p111, d = p011, uLen = dx, vLen = dy, outward = Vector(0, 0, 1) }
+        -- Refract materials sample a copy of the frame that includes whatever was drawn
+        -- before: refracting through five more refracting faces flickers (models/shadertest/shader3).
+        -- Like a real water brush, only the surface is drawn.
+        if top.refract then return { surface } end
         -- Sides and bottom first, surface last, so the surface blends over them.
         return {
             { entry = body, a = p000, b = p100, c = p110, d = p010, uLen = dx, vLen = dy, outward = Vector(0, 0, -1) }, -- bottom
@@ -474,7 +470,7 @@ if CLIENT then
             { entry = body, a = p010, b = p110, c = p111, d = p011, uLen = dx, vLen = dz, outward = Vector(0, 1, 0) }, -- +Y side
             { entry = body, a = p000, b = p010, c = p011, d = p001, uLen = dy, vLen = dz, outward = Vector(-1, 0, 0) }, -- -X side
             { entry = body, a = p100, b = p110, c = p111, d = p101, uLen = dy, vLen = dz, outward = Vector(1, 0, 0) }, -- +X side
-            { entry = top, a = p001, b = p101, c = p111, d = p011, uLen = dx, vLen = dy, outward = Vector(0, 0, 1) }, -- surface
+            surface,
         }
     end
 

@@ -25,7 +25,7 @@ TOOL.ClientConVar = {
     material = "nature/water_movingplane",
 }
 
-local MIN_SIZE, MAX_SIZE = 1, 16384
+local MIN_SIZE, MAX_SIZE = 1, 32768
 local MAX_FLUID, MAX_CURRENT = 10, 1000
 
 -- The numeric convars have limits: the console can't set a value outside them.
