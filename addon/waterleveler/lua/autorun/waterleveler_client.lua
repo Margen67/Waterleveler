@@ -29,11 +29,12 @@ local function wrapOpenMenu(icon, spawnname)
             DermaMenu = dermaMenu
             local menu = dermaMenu(...)
             local addOption = menu.AddOption
+            local added = false
             menu.AddOption = function(self, name, ...)
                 local option = addOption(self, name, ...)
-                if isstring(name) and name:find("Material Tool", 1, true) then
-                    self.AddOption = nil -- back to the stock method
-                    self:AddOption("Use with Water Volume tool", function() useWithWaterTool(spawnname) end)
+                if not added and isstring(name) and name:find("Material Tool", 1, true) then
+                    added = true
+                    addOption(self, "Use with Water Volume tool", function() useWithWaterTool(spawnname) end)
                         :SetIcon("icon16/wrench.png")
                 end
                 return option

@@ -459,10 +459,6 @@ if CLIENT then
         local p001, p101 = Vector(mn.x, mn.y, mx.z), Vector(mx.x, mn.y, mx.z)
         local p111, p011 = Vector(mx.x, mx.y, mx.z), Vector(mn.x, mx.y, mx.z)
         local surface = { entry = top, a = p001, b = p101, c = p111, d = p011, uLen = dx, vLen = dy, outward = Vector(0, 0, 1) }
-        -- Refract materials sample a copy of the frame that includes whatever was drawn
-        -- before: refracting through five more refracting faces flickers (models/shadertest/shader3).
-        -- Like a real water brush, only the surface is drawn.
-        if top.refract then return { surface } end
         -- Sides and bottom first, surface last, so the surface blends over them.
         return {
             { entry = body, a = p000, b = p100, c = p110, d = p010, uLen = dx, vLen = dy, outward = Vector(0, 0, -1) }, -- bottom
@@ -493,7 +489,9 @@ if CLIENT then
         if top.animate then top.animate(now) end
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
         -- Refract materials sample a copy of the frame, which is only updated when
-        -- asked to (before each of their faces below): a stale copy made them flicker.
+        -- asked to: once per volume, before any face, so no face refracts another one
+        -- (that flickered), and never stale.
+        if top.refract then render.UpdateRefractTexture() end
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
         render.PushFilterMag(TEXFILTER.ANISOTROPIC)
         render.PushFilterMin(TEXFILTER.ANISOTROPIC)
@@ -515,13 +513,11 @@ if CLIENT then
                 bx.built = { key = key, list = list }
             end
             for _, f in ipairs(bx.built.list) do
-                if f.entry.refract then render.UpdateRefractTexture() end
                 setFaceState(f.entry)
                 f.mesh:Draw()
             end
         else
             for _, f in ipairs(boxFaces(bx, top, body)) do
-                if f.entry.refract then render.UpdateRefractTexture() end
                 setFaceState(f.entry)
                 mesh.Begin(MATERIAL_QUADS, f.entry.cull and 2 or 1)
                 emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward)
