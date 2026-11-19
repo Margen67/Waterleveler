@@ -2407,14 +2407,12 @@ mod hook_state {
             let Some((_, fluid, contents)) = taken else {
                 return false;
             };
-            match physenv() {
-                Ok(env) => {
-                    engine_hook::destroy_fluid(env, fluid as *mut _);
-                    engine_hook::fluid_died(fluid, contents);
-                    true
-                }
-                Err(_) => false,
-            }
+            let Ok(env) = physenv() else {
+                return false;
+            };
+            engine_hook::destroy_fluid(env, fluid as *mut _);
+            engine_hook::fluid_died(fluid, contents);
+            true
         }
     }
 
@@ -2446,19 +2444,20 @@ mod hook_state {
                 std::sync::atomic::Ordering::SeqCst,
             );
             engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
-            if let Some(patch) = TE_HOOK
+            let te_patch = TE_HOOK
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-            {
+                .take();
+            if let Some(patch) = te_patch {
                 engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
             }
             engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
-            for patch in std::mem::take(
+            let explosion_patches = std::mem::take(
                 &mut *EXPLOSIONS
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
-            ) {
+            );
+            for patch in explosion_patches {
                 engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
             }
             let patch = FLUID_END_TOUCH

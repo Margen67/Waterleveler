@@ -203,15 +203,35 @@ if CLIENT then
         return cv and cv:GetFloat() or default
     end
 
+    -- The preview is hidden while the toolgun is being drawn or holstered, and while a prop is held.
+    local function toolgunBusy(ply)
+        local vm = ply:GetViewModel(0)
+        if not IsValid(vm) then return false end
+        local act = vm:GetSequenceActivity(vm:GetSequence())
+        return act == ACT_VM_HOLSTER or (act == ACT_VM_DRAW and vm:GetCycle() < 0.99)
+    end
+
+    local function holdingProp(ply, tr)
+        local used = ply:GetEntityInUse()
+        if IsValid(used) and used ~= ply and used:GetClass() ~= "worldspawn" then return true end
+        local ent = tr.Entity
+        return IsValid(ent) and ent.IsPlayerHolding ~= nil and ent:IsPlayerHolding()
+    end
+
+    local function convarString(name, default)
+        local cv = GetConVar(name)
+        return cv and cv:GetString() or default
+    end
+
     hook.Add("PostDrawTranslucentRenderables", "waterleveler_tool_preview", function(_, skybox)
         if skybox then return end
         local ply = LocalPlayer()
         local wep = IsValid(ply) and ply:GetActiveWeapon()
         if not IsValid(wep) or wep:GetClass() ~= "gmod_tool" or wep:GetMode() ~= "waterleveler" then return end
-        if not WLWater then return end
+        if not WLWater or toolgunBusy(ply) then return end
 
         local tr = ply:GetEyeTrace()
-        if not tr.Hit then return end
+        if not tr.Hit or holdingProp(ply, tr) then return end
 
         local size = readSize(function(name) return convar("waterleveler_" .. name, 128) end)
         local mins, maxs = WLWater.Placement(tr, size, readOffset(function(name) return convar("waterleveler_" .. name, 0) end, size))
@@ -228,7 +248,10 @@ if CLIENT then
                 body = str("waterleveler_body", ""),
             })
         end
-        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(90, 190, 255, 255), true)
-        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(90, 190, 255, 60), false)
+        local slime = convarString("waterleveler_liquid", "water"):lower() == "slime"
+        local r, g, b = 90, 190, 255
+        if slime then r, g, b = 90, 255, 120 end
+        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, 255), true)
+        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, 60), false)
     end)
 end
