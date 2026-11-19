@@ -22,8 +22,7 @@ TOOL.ClientConVar = {
     fluid_currentx = "0",
     fluid_currenty = "0",
     fluid_currentz = "0",
-    surface = "nature/water_movingplane",
-    body = "nature/water_movingplane",
+    material = "nature/water_movingplane",
 }
 
 local MIN_SIZE, MAX_SIZE = 1, 16384
@@ -98,8 +97,7 @@ function TOOL:LeftClick(trace)
             currenty = math.Clamp(self:GetClientNumber("fluid_currenty", 0), -MAX_CURRENT, MAX_CURRENT),
             currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -MAX_CURRENT, MAX_CURRENT),
         },
-        surface = self:GetClientInfo("surface"),
-        body = self:GetClientInfo("body"),
+        material = self:GetClientInfo("material"),
     })
     if not id then
         ply:ChatPrint("[waterleveler] could not create the volume: " .. tostring(err))
@@ -193,8 +191,7 @@ if CLIENT then
             end
             return entry
         end
-        materialRow("Surface material (top face)", "waterleveler_surface")
-        materialRow("Body material (bottom and sides)", "waterleveler_body")
+        materialRow("Material", "waterleveler_material")
     end
 
     -- Preview: the volume drawn with the selected materials, plus an outline, where the player is looking.
@@ -244,8 +241,7 @@ if CLIENT then
             WLWater.DrawVolume({
                 mins = mins,
                 maxs = maxs,
-                surface = str("waterleveler_surface", ""),
-                body = str("waterleveler_body", ""),
+                material = str("waterleveler_material", ""),
             })
         end
         local slime = convarString("waterleveler_liquid", "water"):lower() == "slime"

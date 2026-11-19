@@ -111,8 +111,7 @@ if SERVER then
         for _, b in pairs(boxes) do
             net.WriteVector(b.mins)
             net.WriteVector(b.maxs)
-            net.WriteString(b.surface or "") -- "" = the default material
-            net.WriteString(b.body or "")
+            net.WriteString(b.material or "") -- "" = the default material
             net.WriteString(b.liquid or "water")
         end
         if IsValid(ply) then net.Send(ply) else net.Broadcast() end
@@ -120,7 +119,7 @@ if SERVER then
 
     --- Create a volume (engine water + optional buoyancy + undo entry).
     --- opts: liquid ("water" default or "slime"; it also picks the fluid's physics material),
-    --- fluid (default true), surface / body (material names, "" = the default), fluidOptions
+    --- fluid (default true), material (name, "" = the default), fluidOptions
     --- (the options table of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics,
     --- currentx/y/z).
     --- Returns the volume id, or nil, err.
@@ -130,7 +129,7 @@ if SERVER then
         local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid)
         if not id then return nil, err end
 
-        boxes[id] = { mins = mins, maxs = maxs, surface = opts.surface, body = opts.body, liquid = opts.liquid }
+        boxes[id] = { mins = mins, maxs = maxs, material = opts.material, liquid = opts.liquid }
         local fluid
         if opts.fluid ~= false then
             local e = ents.Create("wl_fluid")
@@ -226,8 +225,8 @@ if CLIENT then
     net.Receive("wl_volumes", function()
         boxes = {}
         for i = 1, net.ReadUInt(16) do
-            boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector(), surface = net.ReadString(),
-                body = net.ReadString(), liquid = net.ReadString() }
+            boxes[i] = { mins = net.ReadVector(), maxs = net.ReadVector(), material = net.ReadString(),
+                liquid = net.ReadString() }
         end
         -- The client module (gmcl_waterlevelercore) makes the client's own water queries see the
         -- volumes: ripples and splashes, the underwater sound filter, particles, prediction.
@@ -257,6 +256,11 @@ if CLIENT then
     -- alpha: pink with holes); anything
     -- else is re-wrapped as UnlitGeneric using the same base texture.
     local passthrough = { refract = true, unlitgeneric = true, spritecard = true, vertexlitgeneric = true }
+
+    local function envmap(m)
+        local e = m:GetString("$envmap")
+        return (e and e ~= "") and e or "env_cubemap"
+    end
 
     local function mat(name)
         local entry = cache[name]
@@ -339,6 +343,10 @@ if CLIENT then
                             animatedtextureframenumvar = "$bumpframe", animatedtextureframerate = 21 } },
                     }), color = color_white, vcol = false, refract = true }
                 elseif passthrough[shader] then
+                    -- Shaders that have an envmap get env_cubemap when the material sets none.
+                    if (shader == "unlitgeneric" or shader == "vertexlitgeneric") and (m:GetString("$envmap") or "") == "" then
+                        m:SetString("$envmap", "env_cubemap")
+                    end
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
                     entry = { mat = m, color = color_white, vcol = shader == "unlitgeneric", refract = shader == "refract" }
                 else
@@ -357,6 +365,8 @@ if CLIENT then
                             ["$vertexalpha"] = 1,
                             ["$translucent"] = 1,
                             ["$nocull"] = 1,
+                            -- Keep the original's envmap; materials without one get env_cubemap.
+                            ["$envmap"] = envmap(m),
                         }
                         local scale = m:GetString("$texscale")
                         local scaled = scale and scale ~= ""
@@ -481,11 +491,10 @@ if CLIENT then
     -- sort, so it is ordered against splashes, sprites and shards by distance
     -- like any other translucent thing (origin = the box centre).
     local function drawVolume(bx)
-        local top = mat(bx.surface ~= "" and bx.surface or DEFAULT_MATERIAL)
-        local body = mat(bx.body ~= "" and bx.body or DEFAULT_MATERIAL)
+        local top = mat(bx.material ~= "" and bx.material or DEFAULT_MATERIAL)
+        local body = top
         local now = CurTime()
         if top.animate then top.animate(now) end
-        if body.animate and body ~= top then body.animate(now) end
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
         -- Refract materials sample a copy of the frame, which is only updated when
         -- asked to (before each of their faces below): a stale copy made them flicker.
@@ -496,7 +505,7 @@ if CLIENT then
             -- Volumes that stay are uploaded once as static meshes. Rebuilding them as
             -- immediate meshes every frame shares the dynamic vertex buffer with the
             -- particles and sprites a gunshot creates, which corrupted the faces.
-            local key = (bx.surface or "") .. "|" .. (bx.body or "")
+            local key = bx.material or ""
             if not bx.built or bx.built.key ~= key then
                 destroyBuilt(bx)
                 local list = {}

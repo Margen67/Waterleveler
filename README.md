@@ -145,7 +145,7 @@ Limits (read these):
 
 Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` (loaded automatically as part of the addon).
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
-biggest size, buoyancy, and surface/body materials; an outline previews the volume where you
+biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
 
 Every numeric `waterleveler_*` convar has limits (sizes 1-16384, offset +-16384, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. Underwater sound muffling needs a depth of about 132 units (131-132 is the limit).
