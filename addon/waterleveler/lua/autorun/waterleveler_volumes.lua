@@ -342,7 +342,8 @@ if CLIENT then
         return {
             mat = CreateMaterial("wl_water_lit_" .. unlitCount, "VertexLitGeneric", params),
             color = color_white,
-            vcol = false
+            vcol = false,
+            directional = true
         };
     end
 
@@ -686,7 +687,17 @@ if CLIENT then
         local body = top;
         local now = CurTime();
         if top.animate then top.animate(now); end
-        render.ResetModelLighting(1, 1, 1); -- VertexLitGeneric materials: even, full light
+        if top.directional then
+            -- A bump map only shows under uneven light (a brush gets the map's lightmap): light
+            -- from above, dimmer from the sides. The lighting origin picks the cubemap for $envmap.
+            render.ResetModelLighting(0.45, 0.45, 0.45);
+            render.SetModelLighting(BOX_TOP, 1, 1, 1);
+            render.SetModelLighting(BOX_BOTTOM, 0.2, 0.2, 0.2);
+            render.SetLightingOrigin((bx.mins + bx.maxs) * 0.5);
+        else
+            render.ResetModelLighting(1, 1, 1); -- VertexLitGeneric materials: even, full light
+        end
+
         -- Refract materials sample a copy of the frame, which is only updated when
         -- asked to: once per volume, before any face, so no face refracts another one
         -- (that flickered), and never stale.
