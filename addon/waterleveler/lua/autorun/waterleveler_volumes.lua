@@ -42,7 +42,7 @@ if SERVER then
     -- Buoyancy. Creates the same kind of engine object a map's
     -- water brush uses: a static physics box with the liquid's material that
     -- gets a fluid controller (waterleveler.AttachFluid). vphysics then floats
-    -- props that overlap it. Created with every volume unless the tool's buoyancy option is off.
+    -- props that overlap it. Every volume has one as its handle (undo and cleanup remove it, and the volume with it); the buoyancy is only attached unless the tool's buoyancy option is off.
     do
         local ENT = {}
         ENT.Type = "anim"
@@ -51,6 +51,10 @@ if SERVER then
 
         function ENT:Initialize()
             self:SetModel("models/hunter/blocks/cube025x025x025.mdl")
+            self:SetNoDraw(true)
+            self:DrawShadow(false)
+            -- Without buoyancy this entity is only the volume's handle (undo, cleanup).
+            if not self.WLFluidOptions then return end
             local h = self.WLHalf
             self:PhysicsInitBox(-h, h)
             local phys = self:GetPhysicsObject()
@@ -87,6 +91,8 @@ if SERVER then
         function ENT:OnTakeDamage() end
         function ENT:OnRemove()
             if self.WLFluid then waterleveler.DetachFluid(self.WLFluid) end
+            -- The entity is the volume's handle: removing it (undo, cleanup) removes the volume.
+            if self.WLVolumeId then WLWater.RemoveBox(self.WLVolumeId) end
         end
 
         scripted_ents.Register(ENT, "wl_fluid")
@@ -104,8 +110,6 @@ if SERVER then
 
     local boxes = {} -- id -> { mins = Vector, maxs = Vector }
 
-    local fluids = {}
-
 
     local function sync(ply)
         net.Start("wl_volumes")
@@ -117,6 +121,14 @@ if SERVER then
             net.WriteString(b.liquid or "water")
         end
         if IsValid(ply) then net.Send(ply) else net.Broadcast() end
+    end
+
+    --- Removes a volume (by id) from the module and the clients. Used when its entity goes.
+    function WLWater.RemoveBox(id)
+        if not boxes[id] then return end
+        waterleveler.RemoveVolume(id)
+        boxes[id] = nil
+        sync()
     end
 
     --- Create a volume (engine water + optional buoyancy + undo entry).
@@ -132,38 +144,34 @@ if SERVER then
         if not id then return nil, err end
 
         boxes[id] = { mins = mins, maxs = maxs, material = opts.material, liquid = opts.liquid }
-        local fluid
-        if opts.fluid ~= false then
-            local e = ents.Create("wl_fluid")
-            if IsValid(e) then
-                e.WLHalf = (maxs - mins) / 2
-                local fo = table.Copy(opts.fluidOptions or {}) -- empty = a map water brush's values
-                fo.contents = opts.liquid
-                e.WLFluidOptions = fo
-                e.WLLiquid = opts.liquid
-                e:SetPos((mins + maxs) / 2)
-                e:Spawn()
-                fluids[#fluids + 1] = e
-                fluid = e
-            end
+        -- Every volume has a wl_fluid entity: it is what undo and cleanup remove (the volume
+        -- goes with it), and it carries the buoyancy unless that is switched off.
+        local e = ents.Create("wl_fluid")
+        if not IsValid(e) then
+            waterleveler.RemoveVolume(id)
+            boxes[id] = nil
+            return nil, "could not create the volume's entity"
         end
+        e.WLHalf = (maxs - mins) / 2
+        e.WLLiquid = opts.liquid
+        e.WLVolumeId = id
+        if opts.fluid ~= false then
+            local fo = table.Copy(opts.fluidOptions or {}) -- empty = a map water brush's values
+            fo.contents = opts.liquid
+            e.WLFluidOptions = fo
+        end
+        e:SetPos((mins + maxs) / 2)
+        e:Spawn()
         sync()
 
-        -- Undo (Z / the undo menu) removes this volume and its fluid again.
         if IsValid(ply) then
             local size = maxs - mins
             undo.Create("Water volume")
             undo.SetPlayer(ply)
-            undo.AddFunction(function(_, volume_id, fluid_ent)
-                if IsValid(fluid_ent) then fluid_ent:Remove() end -- detaches the controller
-                if boxes[volume_id] then
-                    waterleveler.RemoveVolume(volume_id)
-                    boxes[volume_id] = nil
-                    sync()
-                end
-            end, id, fluid)
+            undo.AddEntity(e)
             undo.SetCustomUndoText("Undone water volume")
             undo.Finish(("Water volume (%dx%dx%d)"):format(size.x, size.y, size.z))
+            ply:AddCleanup("waterleveler", e)
         end
         return id
     end
@@ -217,7 +225,6 @@ if SERVER then
     hook.Add("PostCleanupMap", "wl_volumes_cleanup", function()
         waterleveler.ClearVolumes()
         boxes = {}
-        fluids = {}
         sync()
     end)
 

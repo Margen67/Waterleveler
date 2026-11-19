@@ -5,6 +5,8 @@
 --               surface you aim at and can be moved up or down with Offset.
 -- Needs the waterleveler addon's autorun script (WLWater) and the binary module.
 
+cleanup.Register("waterleveler")
+
 TOOL.Category = "Construction"
 TOOL.Name = "#tool.waterleveler.name"
 
@@ -64,6 +66,8 @@ if CLIENT then
     language.Add("tool.waterleveler.desc", "Create a water volume that behaves like engine water")
     language.Add("tool.waterleveler.left", "Create a water volume")
     language.Add("Undone_Water volume", "Undone water volume")
+    language.Add("Cleanup_waterleveler", "Water volumes")
+    language.Add("Cleaned_waterleveler", "Cleaned up all water volumes")
 end
 
 TOOL.Information = { { name = "left" } }
