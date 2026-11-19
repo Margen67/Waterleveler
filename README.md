@@ -156,8 +156,8 @@ Every numeric `waterleveler_*` convar has limits (sizes 1-32768, offset +-32768,
 Debugging commands (the volumes themselves come from the Water Volume tool):
 `waterleveler_status` (server: hook status, counters, your water level),
 `waterleveler_explode` (server, superadmin: explode where you look, through the normal explosion path),
-`waterleveler_client_status` (client: module status, counters, your eyes against the volumes) and
-`waterleveler_material_info [material]` (client: how a material is wrapped, its parameters and animation frames, and whether the wrapper's frame counters advance),
+`waterleveler_client_status` (client: module status, counters, your eyes against the volumes),
+`waterleveler_material_info [material]` (client: how a material is wrapped, its parameters and animation frames, and whether the wrapper's frame counters advance) and
 `waterleveler_watch [0|1]` (client: once a second, how many point queries and traces the engine made against the volumes, plus what `util.PointContents` answers at your eyes; for the underwater sound muffling).
 
 ## Engine layout notes
