@@ -563,14 +563,19 @@ if CLIENT then
 
         local original = Material(name);
         local e = mat(name);
+        -- GetString returns nothing at all for a parameter the material does not have.
+        local function param(m, key)
+            return tostring(m:GetString(key) or "(not set)");
+        end
+
         print(("[wl] %s: shader %s, wrapped as %s"):format(name, original:GetShader(), e.mat:GetShader()));
         for _, key in ipairs({"$basetexture", "$bumpmap", "$envmap", "$normalmapalphaenvmapmask", "$translucent", "$frame", "$bumpframe"}) do
-            print(("[wl]   %s: original %s | wrapper %s"):format(key, tostring(original:GetString(key)), tostring(e.mat:GetString(key))));
+            print(("[wl]   %s: original %s | wrapper %s"):format(key, param(original, key), param(e.mat, key)));
         end
 
         if e.info then print(("[wl]   animation frames: base texture %d, bump map %d"):format(e.info.baseFrames, e.info.bumpFrames)); end
         local function frames(label)
-            print(("[wl]   %s: wrapper $frame = %s, $bumpframe = %s"):format(label, tostring(e.mat:GetString("$frame")), tostring(e.mat:GetString("$bumpframe"))));
+            print(("[wl]   %s: wrapper $frame = %s, $bumpframe = %s"):format(label, param(e.mat, "$frame"), param(e.mat, "$bumpframe")));
         end
 
         frames("now");
