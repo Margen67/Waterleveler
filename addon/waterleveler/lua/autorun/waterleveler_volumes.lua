@@ -396,7 +396,7 @@ if CLIENT then
     -- One tiled quad, a -> b -> c -> d. Every vertex carries a colour, a normal
     -- and tangents: leaving them unset makes lit or shader-driven materials
     -- (including water) flicker or render black.
-    local function quad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
+    local function emitQuad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
         local u, v = uLen / TILE, vLen / TILE
         local s = (b - a):GetNormalized()
         local t = (d - a):GetNormalized()
@@ -410,7 +410,6 @@ if CLIENT then
             end
             n = outward -- lighting normal points out of the box
         end
-        mesh.Begin(MATERIAL_QUADS, 1)
         for _, vert in ipairs(verts) do
             mesh.Position(vert[1])
             mesh.Color(cr, cg, cb, ca)
@@ -420,27 +419,62 @@ if CLIENT then
             mesh.TexCoord(0, vert[2], vert[3])
             mesh.AdvanceVertex()
         end
-        mesh.End()
     end
 
-    local function face(entry, a, b, c, d, uLen, vLen, outward)
+    -- A face is a quad, plus a second one facing the other way for culled materials
+    -- (their inside would otherwise be invisible).
+    local function emitFace(entry, a, b, c, d, uLen, vLen, outward)
+        local r, g, b2, a2 = 255, 255, 255, 255
+        if entry.vcol then r, g, b2, a2 = entry.color.r, entry.color.g, entry.color.b, entry.color.a end
+        if not entry.cull then outward = nil end
+        emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward)
+        if outward then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward) end
+        return outward and 2 or 1
+    end
+
+    local function setFaceState(entry)
         render.SetMaterial(entry.mat)
         render.CullMode(entry.cull and MATERIAL_CULLMODE_CCW or MATERIAL_CULLMODE_NONE)
-        if not entry.cull then outward = nil end
         local col = entry.color
-        local r, g, b2, a2 = 255, 255, 255, 255
         if entry.vcol then
             -- Colour and alpha travel in the vertices.
             render.SetColorModulation(1, 1, 1)
             render.SetBlend(1)
-            r, g, b2, a2 = col.r, col.g, col.b, col.a
         else
             render.SetColorModulation(col.r / 255, col.g / 255, col.b / 255)
             render.SetBlend(col.a / 255)
         end
-        quad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward)
-        -- Culled materials are one-sided, so the inside is a second quad facing the other way.
-        if outward then quad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward) end
+    end
+
+    local function boxFaces(bx, top, body)
+        -- Inset the bottom and sides so they are not coplanar with the
+        -- floor or walls the volume rests against (z-fighting).
+        local e = 0.5
+        local mn = Vector(bx.mins.x + e, bx.mins.y + e, bx.mins.z + e)
+        local mx = Vector(bx.maxs.x - e, bx.maxs.y - e, bx.maxs.z)
+        local dx, dy, dz = mx.x - mn.x, mx.y - mn.y, mx.z - mn.z
+        local p000, p100 = Vector(mn.x, mn.y, mn.z), Vector(mx.x, mn.y, mn.z)
+        local p110, p010 = Vector(mx.x, mx.y, mn.z), Vector(mn.x, mx.y, mn.z)
+        local p001, p101 = Vector(mn.x, mn.y, mx.z), Vector(mx.x, mn.y, mx.z)
+        local p111, p011 = Vector(mx.x, mx.y, mx.z), Vector(mn.x, mx.y, mx.z)
+        -- Sides and bottom first, surface last, so the surface blends over them.
+        return {
+            { entry = body, a = p000, b = p100, c = p110, d = p010, uLen = dx, vLen = dy, outward = Vector(0, 0, -1) }, -- bottom
+            { entry = body, a = p000, b = p100, c = p101, d = p001, uLen = dx, vLen = dz, outward = Vector(0, -1, 0) }, -- -Y side
+            { entry = body, a = p010, b = p110, c = p111, d = p011, uLen = dx, vLen = dz, outward = Vector(0, 1, 0) }, -- +Y side
+            { entry = body, a = p000, b = p010, c = p011, d = p001, uLen = dy, vLen = dz, outward = Vector(-1, 0, 0) }, -- -X side
+            { entry = body, a = p100, b = p110, c = p111, d = p101, uLen = dy, vLen = dz, outward = Vector(1, 0, 0) }, -- +X side
+            { entry = top, a = p001, b = p101, c = p111, d = p011, uLen = dx, vLen = dy, outward = Vector(0, 0, 1) }, -- surface
+        }
+    end
+
+    local function destroyBuilt(bx)
+        if bx.built then
+            for _, f in ipairs(bx.built.list) do
+                if f.mesh and f.mesh.Destroy then f.mesh:Destroy() end
+            end
+            bx.built = nil
+        end
     end
 
     -- Each volume is drawn by a client-side entity in the engine's translucent
@@ -454,29 +488,40 @@ if CLIENT then
         if body.animate and body ~= top then body.animate(now) end
         render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
         -- Refract materials sample a copy of the frame, which is only updated when
-        -- asked to: a stale copy is what made their faces flicker.
-        if top.refract or body.refract then render.UpdateRefractTexture() end
+        -- asked to (before each of their faces below): a stale copy made them flicker.
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
         render.PushFilterMag(TEXFILTER.ANISOTROPIC)
         render.PushFilterMin(TEXFILTER.ANISOTROPIC)
-        do
-            -- Inset the bottom and sides so they are not coplanar with the
-            -- floor or walls the volume rests against (z-fighting).
-            local e = 0.5
-            local mn = Vector(bx.mins.x + e, bx.mins.y + e, bx.mins.z + e)
-            local mx = Vector(bx.maxs.x - e, bx.maxs.y - e, bx.maxs.z)
-            local dx, dy, dz = mx.x - mn.x, mx.y - mn.y, mx.z - mn.z
-            local p000, p100 = Vector(mn.x, mn.y, mn.z), Vector(mx.x, mn.y, mn.z)
-            local p110, p010 = Vector(mx.x, mx.y, mn.z), Vector(mn.x, mx.y, mn.z)
-            local p001, p101 = Vector(mn.x, mn.y, mx.z), Vector(mx.x, mn.y, mx.z)
-            local p111, p011 = Vector(mx.x, mx.y, mx.z), Vector(mn.x, mx.y, mx.z)
-            -- Sides and bottom first, surface last, so the surface blends over them.
-            face(body, p000, p100, p110, p010, dx, dy, Vector(0, 0, -1)) -- bottom
-            face(body, p000, p100, p101, p001, dx, dz, Vector(0, -1, 0)) -- -Y side
-            face(body, p010, p110, p111, p011, dx, dz, Vector(0, 1, 0)) -- +Y side
-            face(body, p000, p010, p011, p001, dy, dz, Vector(-1, 0, 0)) -- -X side
-            face(body, p100, p110, p111, p101, dy, dz, Vector(1, 0, 0)) -- +X side
-            face(top, p001, p101, p111, p011, dx, dy, Vector(0, 0, 1))  -- surface
+        if bx.persist then
+            -- Volumes that stay are uploaded once as static meshes. Rebuilding them as
+            -- immediate meshes every frame shares the dynamic vertex buffer with the
+            -- particles and sprites a gunshot creates, which corrupted the faces.
+            local key = (bx.surface or "") .. "|" .. (bx.body or "")
+            if not bx.built or bx.built.key ~= key then
+                destroyBuilt(bx)
+                local list = {}
+                for _, f in ipairs(boxFaces(bx, top, body)) do
+                    local m = Mesh(f.entry.mat)
+                    mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and 2 or 1)
+                    emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward)
+                    mesh.End()
+                    list[#list + 1] = { entry = f.entry, mesh = m }
+                end
+                bx.built = { key = key, list = list }
+            end
+            for _, f in ipairs(bx.built.list) do
+                if f.entry.refract then render.UpdateRefractTexture() end
+                setFaceState(f.entry)
+                f.mesh:Draw()
+            end
+        else
+            for _, f in ipairs(boxFaces(bx, top, body)) do
+                if f.entry.refract then render.UpdateRefractTexture() end
+                setFaceState(f.entry)
+                mesh.Begin(MATERIAL_QUADS, f.entry.cull and 2 or 1)
+                emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward)
+                mesh.End()
+            end
         end
         render.PopFilterMin()
         render.PopFilterMag()
@@ -505,7 +550,10 @@ if CLIENT then
 
     syncVolumeEntities = function()
         for _, e in ipairs(volumeEnts) do
-            if IsValid(e) then e:Remove() end
+            if IsValid(e) then
+                if e.WLBox then destroyBuilt(e.WLBox) end
+                e:Remove()
+            end
         end
         volumeEnts = {}
         for _, bx in ipairs(boxes) do
@@ -515,6 +563,7 @@ if CLIENT then
                 e:SetModel("models/error.mdl")
                 e:SetPos(centre)
                 e:Spawn()
+                bx.persist = true
                 e.WLBox = bx
                 e:SetRenderBounds(bx.mins - centre, bx.maxs - centre)
                 volumeEnts[#volumeEnts + 1] = e
