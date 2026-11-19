@@ -4,5 +4,6 @@
     "lint_unusedLoopVars": true,
     "lint_inconsistentVariableStyle": true,
     "prettyprint_spaceAfterLabel": true,
+    "prettyprint_semicolons": true,
     "prettyprint_minimizeParens": true
 }

@@ -17,117 +17,117 @@
 -- OnEntityWaterLevelChanged) because the module makes the engine report
 -- CONTENTS_WATER for every point inside it. The translucent box you see is
 -- only a client-side placeholder: there is no real water surface shader.
-local defaultMaterial = "nature/water_movingplane" -- when a volume names none
-WLWater = WLWater or {}
+local defaultMaterial = "nature/water_movingplane"; -- when a volume names none
+WLWater = WLWater or {};
 --- Where a volume of `size` (Vector) goes for the trace `tr`: it rests against the surface the
 --- trace hit (floor, wall or ceiling), then moves `offset` units up (down when negative).
 --- Returns mins, maxs. Shared by the tool's preview (client) and the spawn (server).
 function WLWater.Placement(tr, size, offset)
-    local half = size * 0.5
-    local n = tr.HitNormal
-    local center = tr.HitPos + Vector(n.x * half.x, n.y * half.y, n.z * half.z)
-    center.z = center.z + (offset or 0)
-    return center - half, center + half, center
+    local half = size * 0.5;
+    local n = tr.HitNormal;
+    local center = tr.HitPos + Vector(n.x * half.x, n.y * half.y, n.z * half.z);
+    center.z = center.z + (offset or 0);
+    return center - half, center + half, center;
 end
 
 if SERVER then
-    AddCSLuaFile()
-    require("waterleveler")
-    util.AddNetworkString("wl_volumes")
+    AddCSLuaFile();
+    require("waterleveler");
+    util.AddNetworkString("wl_volumes");
     -- Buoyancy. Creates the same kind of engine object a map's
     -- water brush uses: a static physics box with the liquid's material that
     -- gets a fluid controller (waterleveler.AttachFluid). vphysics then floats
     -- props that overlap it. Every volume has one as its handle (undo and cleanup remove it, and the volume with it); the buoyancy is only attached unless the tool's buoyancy option is off.
     do
-        local fluidEnt = {}
-        fluidEnt.Type = "anim"
-        fluidEnt.Base = "base_anim"
-        fluidEnt.Spawnable = false
+        local fluidEnt = {};
+        fluidEnt.Type = "anim";
+        fluidEnt.Base = "base_anim";
+        fluidEnt.Spawnable = false;
         function fluidEnt:Initialize()
-            self:SetModel("models/hunter/blocks/cube025x025x025.mdl")
-            self:SetNoDraw(true)
-            self:DrawShadow(false)
+            self:SetModel("models/hunter/blocks/cube025x025x025.mdl");
+            self:SetNoDraw(true);
+            self:DrawShadow(false);
             -- Without buoyancy this entity is only the volume's handle (undo, cleanup).
-            if not self.WLFluidOptions then return end
-            local h = self.WLHalf
-            self:PhysicsInitBox(-h, h)
-            local phys = self:GetPhysicsObject()
-            if not IsValid(phys) then return print("[wl] fluid: no physics object") end
+            if not self.WLFluidOptions then return; end
+            local h = self.WLHalf;
+            self:PhysicsInitBox(-h, h);
+            local phys = self:GetPhysicsObject();
+            if not IsValid(phys) then return print("[wl] fluid: no physics object"); end
             -- The density (and so how high props float) comes from this material:
             -- "water" is what a map's water brush uses, "slime" is the slime one.
-            phys:SetMaterial(self.WLLiquid or "water")
-            phys:EnableMotion(false)
+            phys:SetMaterial(self.WLLiquid or "water");
+            phys:EnableMotion(false);
             -- Invisible, no shadow, and not solid to players (the engine's
             -- fluid object is a trigger for props; the entity itself isn't).
-            self:SetNoDraw(true)
-            self:DrawShadow(false)
-            self:SetCollisionGroup(COLLISION_GROUP_DEBRIS_TRIGGER)
-            local top = self:GetPos().z + h.z
-            local id, err = waterleveler.AttachFluid(phys, 0, 0, 1, top, self.WLFluidOptions)
-            if not id then return print("[wl] AttachFluid failed: " .. tostring(err)) end
-            self.WLFluid = id
+            self:SetNoDraw(true);
+            self:DrawShadow(false);
+            self:SetCollisionGroup(COLLISION_GROUP_DEBRIS_TRIGGER);
+            local top = self:GetPos().z + h.z;
+            local id, err = waterleveler.AttachFluid(phys, 0, 0, 1, top, self.WLFluidOptions);
+            if not id then return print("[wl] AttachFluid failed: " .. tostring(err)); end
+            self.WLFluid = id;
             -- Rays (crowbar, bullets, the use key) must pass through: the water
             -- is not a solid thing. The fluid controller lives on the physics
             -- object and keeps working.
-            self:AddSolidFlags(FSOLID_NOT_SOLID)
+            self:AddSolidFlags(FSOLID_NOT_SOLID);
             if GetConVar("developer"):GetInt() > 0 then
-                print(("[wl] fluid controller #%d attached (surface z = %.1f)"):format(id, top))
+                print(("[wl] fluid controller #%d attached (surface z = %.1f)"):format(id, top));
                 -- State of the fluid object right after the engine made it a fluid.
-                print(("[wl] fluid object: material=%s collisions=%s motion=%s solid=%d group=%d"):format(tostring(phys:GetMaterial()), tostring(phys:IsCollisionEnabled()), tostring(phys:IsMotionEnabled()), self:GetSolid(), self:GetCollisionGroup()))
+                print(("[wl] fluid object: material=%s collisions=%s motion=%s solid=%d group=%d"):format(tostring(phys:GetMaterial()), tostring(phys:IsCollisionEnabled()), tostring(phys:IsMotionEnabled()), self:GetSolid(), self:GetCollisionGroup()));
             end
         end
 
         -- The controller must go before its physics object does.
-        fluidEnt.PhysgunDisabled = true
-        fluidEnt.DoNotDuplicate = true
+        fluidEnt.PhysgunDisabled = true;
+        fluidEnt.DoNotDuplicate = true;
         function fluidEnt:OnTakeDamage()
         end
 
         function fluidEnt:OnRemove()
-            if self.WLFluid then waterleveler.DetachFluid(self.WLFluid) end
+            if self.WLFluid then waterleveler.DetachFluid(self.WLFluid); end
             -- The entity is the volume's handle: removing it (undo, cleanup) removes the volume.
-            if self.WLVolumeId then WLWater.RemoveBox(self.WLVolumeId) end
+            if self.WLVolumeId then WLWater.RemoveBox(self.WLVolumeId); end
         end
 
-        scripted_ents.Register(fluidEnt, "wl_fluid")
+        scripted_ents.Register(fluidEnt, "wl_fluid");
     end
 
     -- The fluid entity is part of the water, not a prop: nothing may grab,
     -- punt, hit or tool it.
     local function isFluid(ent)
-        return IsValid(ent) and ent:GetClass() == "wl_fluid"
+        return IsValid(ent) and ent:GetClass() == "wl_fluid";
     end
 
-    hook.Add("PhysgunPickup", "wl_fluid_lock", function(_, ent) if isFluid(ent) then return false end end)
-    hook.Add("GravGunPunt", "wl_fluid_lock", function(_, ent) if isFluid(ent) then return false end end)
-    hook.Add("GravGunPickupAllowed", "wl_fluid_lock", function(_, ent) if isFluid(ent) then return false end end)
-    hook.Add("CanTool", "wl_fluid_lock", function(_, tr) if isFluid(tr.Entity) then return false end end)
-    hook.Add("CanProperty", "wl_fluid_lock", function(_, _, ent) if isFluid(ent) then return false end end)
-    hook.Add("EntityTakeDamage", "wl_fluid_lock", function(ent) if isFluid(ent) then return true end end)
-    local boxes = {} -- id -> { mins = Vector, maxs = Vector }
+    hook.Add("PhysgunPickup", "wl_fluid_lock", function(_, ent) if isFluid(ent) then return false; end end);
+    hook.Add("GravGunPunt", "wl_fluid_lock", function(_, ent) if isFluid(ent) then return false; end end);
+    hook.Add("GravGunPickupAllowed", "wl_fluid_lock", function(_, ent) if isFluid(ent) then return false; end end);
+    hook.Add("CanTool", "wl_fluid_lock", function(_, tr) if isFluid(tr.Entity) then return false; end end);
+    hook.Add("CanProperty", "wl_fluid_lock", function(_, _, ent) if isFluid(ent) then return false; end end);
+    hook.Add("EntityTakeDamage", "wl_fluid_lock", function(ent) if isFluid(ent) then return true; end end);
+    local boxes = {}; -- id -> { mins = Vector, maxs = Vector }
     local function sync(ply)
-        net.Start("wl_volumes")
-        net.WriteUInt(table.Count(boxes), 16)
+        net.Start("wl_volumes");
+        net.WriteUInt(table.Count(boxes), 16);
         for _, b in pairs(boxes) do
-            net.WriteVector(b.mins)
-            net.WriteVector(b.maxs)
-            net.WriteString(b.material or "") -- "" = the default material
-            net.WriteString(b.liquid or "water")
+            net.WriteVector(b.mins);
+            net.WriteVector(b.maxs);
+            net.WriteString(b.material or ""); -- "" = the default material
+            net.WriteString(b.liquid or "water");
         end
 
         if IsValid(ply) then
-            net.Send(ply)
+            net.Send(ply);
         else
-            net.Broadcast()
+            net.Broadcast();
         end
     end
 
     --- Removes a volume (by id) from the module and the clients. Used when its entity goes.
     function WLWater.RemoveBox(id)
-        if not boxes[id] then return end
-        waterleveler.RemoveVolume(id)
-        boxes[id] = nil
-        sync()
+        if not boxes[id] then return; end
+        waterleveler.RemoveVolume(id);
+        boxes[id] = nil;
+        sync();
     end
 
     --- Create a volume (engine water + optional buoyancy + undo entry).
@@ -137,103 +137,103 @@ if SERVER then
     --- currentx/y/z).
     --- Returns the volume id, or nil, err.
     function WLWater.Spawn(ply, mins, maxs, opts)
-        opts = opts or {}
-        opts.liquid = tostring(opts.liquid or ""):lower() == "slime" and "slime" or "water"
-        local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid)
-        if not id then return nil, err end
+        opts = opts or {};
+        opts.liquid = tostring(opts.liquid or ""):lower() == "slime" and "slime" or "water";
+        local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid);
+        if not id then return nil, err; end
         boxes[id] = {
             mins = mins,
             maxs = maxs,
             material = opts.material,
             liquid = opts.liquid
-        }
+        };
 
         -- Every volume has a wl_fluid entity: it is what undo and cleanup remove (the volume
         -- goes with it), and it carries the buoyancy unless that is switched off.
-        local e = ents.Create("wl_fluid")
+        local e = ents.Create("wl_fluid");
         if not IsValid(e) then
-            waterleveler.RemoveVolume(id)
-            boxes[id] = nil
-            return nil, "could not create the volume's entity"
+            waterleveler.RemoveVolume(id);
+            boxes[id] = nil;
+            return nil, "could not create the volume's entity";
         end
 
-        e.WLHalf = (maxs - mins) / 2
-        e.WLLiquid = opts.liquid
-        e.WLVolumeId = id
+        e.WLHalf = (maxs - mins) / 2;
+        e.WLLiquid = opts.liquid;
+        e.WLVolumeId = id;
         if opts.fluid ~= false then
-            local fo = table.Copy(opts.fluidOptions or {}) -- empty = a map water brush's values
-            fo.contents = opts.liquid
-            e.WLFluidOptions = fo
+            local fo = table.Copy(opts.fluidOptions or {}); -- empty = a map water brush's values
+            fo.contents = opts.liquid;
+            e.WLFluidOptions = fo;
         end
 
-        e:SetPos((mins + maxs) / 2)
-        e:Spawn()
-        sync()
+        e:SetPos((mins + maxs) / 2);
+        e:Spawn();
+        sync();
         if IsValid(ply) then
-            local size = maxs - mins
-            undo.Create("Water volume")
-            undo.SetPlayer(ply)
-            undo.AddEntity(e)
-            undo.SetCustomUndoText("Undone water volume")
-            undo.Finish(("Water volume (%dx%dx%d)"):format(size.x, size.y, size.z))
-            ply:AddCleanup("waterleveler", e)
+            local size = maxs - mins;
+            undo.Create("Water volume");
+            undo.SetPlayer(ply);
+            undo.AddEntity(e);
+            undo.SetCustomUndoText("Undone water volume");
+            undo.Finish(("Water volume (%dx%dx%d)"):format(size.x, size.y, size.z));
+            ply:AddCleanup("waterleveler", e);
         end
-        return id
+        return id;
     end
 
     function WLWater.Allowed(ply)
-        return not IsValid(ply) or ply:IsSuperAdmin() or game.SinglePlayer() or ply:IsListenServerHost()
+        return not IsValid(ply) or ply:IsSuperAdmin() or game.SinglePlayer() or ply:IsListenServerHost();
     end
 
     local function resolve(ply)
-        if not IsValid(ply) then ply = player.GetAll()[1] end
-        return ply
+        if not IsValid(ply) then ply = player.GetAll()[1]; end
+        return ply;
     end
 
-    local allowed = WLWater.Allowed
+    local allowed = WLWater.Allowed;
     concommand.Add("waterleveler_status", function(caller)
-        print("[wl] " .. waterleveler.HookStatus())
-        print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d"):format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(), waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()))
-        print(("[wl] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()))
-        print(("[wl] fluid controllers: %d"):format(waterleveler.FluidCount()))
-        local ply = resolve(caller)
+        print("[wl] " .. waterleveler.HookStatus());
+        print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d"):format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(), waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()));
+        print(("[wl] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()));
+        print(("[wl] fluid controllers: %d"):format(waterleveler.FluidCount()));
+        local ply = resolve(caller);
         if IsValid(ply) then
-            local p = ply:GetPos()
-            print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))))
+            local p = ply:GetPos();
+            print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))));
         end
-    end)
+    end);
 
     concommand.Add("waterleveler_explode", function(caller)
-        if not allowed(caller) then return end
-        local ply = resolve(caller)
-        if not IsValid(ply) then return end
+        if not allowed(caller) then return; end
+        local ply = resolve(caller);
+        if not IsValid(ply) then return; end
         local tr = util.TraceLine({
             start = ply:EyePos(),
             endpos = ply:EyePos() + ply:GetAimVector() * 32768,
             filter = ply
-        })
+        });
 
-        local pos = tr.HitPos + tr.HitNormal * 8
-        local e = ents.Create("env_explosion")
-        if not IsValid(e) then return end
-        e:SetPos(pos)
-        e:SetKeyValue("iMagnitude", "100")
-        e:SetOwner(ply)
-        e:Spawn()
-        e:Fire("Explode", "", 0)
-        e:Fire("Kill", "", 1)
-        print(("[wl] env_explosion at %s, inside a volume: %s, redirected so far: %d"):format(tostring(pos), tostring(waterleveler.PointInVolume(pos.x, pos.y, pos.z)), waterleveler.ExplosionsRedirected()))
-    end)
+        local pos = tr.HitPos + tr.HitNormal * 8;
+        local e = ents.Create("env_explosion");
+        if not IsValid(e) then return; end
+        e:SetPos(pos);
+        e:SetKeyValue("iMagnitude", "100");
+        e:SetOwner(ply);
+        e:Spawn();
+        e:Fire("Explode", "", 0);
+        e:Fire("Kill", "", 1);
+        print(("[wl] env_explosion at %s, inside a volume: %s, redirected so far: %d"):format(tostring(pos), tostring(waterleveler.PointInVolume(pos.x, pos.y, pos.z)), waterleveler.ExplosionsRedirected()));
+    end);
 
     -- "Clean up everything" (game.CleanUpMap) removes the fluid entities; the volumes
     -- themselves live in the module and the script, so they go too.
     hook.Add("PostCleanupMap", "wl_volumes_cleanup", function()
-        waterleveler.ClearVolumes()
-        boxes = {}
-        sync()
-    end)
+        waterleveler.ClearVolumes();
+        boxes = {};
+        sync();
+    end);
 
-    hook.Add("PlayerInitialSpawn", "wl_volumes_sync", function(ply) timer.Simple(2, function() if IsValid(ply) then sync(ply) end end) end)
+    hook.Add("PlayerInitialSpawn", "wl_volumes_sync", function(ply) timer.Simple(2, function() if IsValid(ply) then sync(ply); end end); end);
 end
 
 if CLIENT then
@@ -243,40 +243,40 @@ if CLIENT then
         Base = "base_anim",
         Spawnable = false,
         Draw = function() end
-    }, "wl_fluid")
+    }, "wl_fluid");
 
-    local boxes = {}
-    local syncVolumeEntities -- defined with the drawing code below
+    local boxes = {};
+    local syncVolumeEntities; -- defined with the drawing code below
     net.Receive("wl_volumes", function()
-        boxes = {}
+        boxes = {};
         for i = 1, net.ReadUInt(16) do
             boxes[i] = {
                 mins = net.ReadVector(),
                 maxs = net.ReadVector(),
                 material = net.ReadString(),
                 liquid = net.ReadString()
-            }
+            };
         end
 
         -- The client module (gmcl_waterlevelercore) makes the client's own water queries see the
         -- volumes: ripples and splashes, the underwater sound filter, particles, prediction.
         if waterlevelercore then
-            waterlevelercore.ClearVolumes()
+            waterlevelercore.ClearVolumes();
             for _, b in ipairs(boxes) do
-                waterlevelercore.AddVolume(b.mins.x, b.mins.y, b.mins.z, b.maxs.x, b.maxs.y, b.maxs.z, b.liquid)
+                waterlevelercore.AddVolume(b.mins.x, b.mins.y, b.mins.z, b.maxs.x, b.maxs.y, b.maxs.z, b.liquid);
             end
         end
 
-        syncVolumeEntities()
-    end)
+        syncVolumeEntities();
+    end);
 
     -- The Water Volume tool picks the materials of the top face and of the
     -- bottom and sides. Any material path works, for example
     -- nature/water_movingplane or models/shadertest/predator. A name that does
     -- not resolve falls back to a translucent blue so the volume never disappears.
-    local fallback = Material("color") -- plain white, tinted by the color below
-    local cache = {}
-    local unlitCount = 0
+    local fallback = Material("color"); -- plain white, tinted by the color below
+    local cache = {};
+    local unlitCount = 0;
     -- World textures (LightmappedGeneric etc.) need lightmap data a dynamic
     -- mesh does not have, which renders as black faces and blocky garbage.
     -- Only shaders that work on plain meshes are used as they are (VertexLitGeneric
@@ -289,7 +289,7 @@ if CLIENT then
         unlitgeneric = true,
         spritecard = true,
         vertexlitgeneric = true
-    }
+    };
 
     -- A re-wrapped material keeps every parameter the original sets ($basetexture,
     -- $nocull, $refractamount, ...); the values written here are only the defaults for
@@ -297,20 +297,20 @@ if CLIENT then
     local function inherit(m, params)
         for key in pairs(params) do
             if key ~= "Proxies" then
-                local own = m:GetString(key)
-                if own and own ~= "" then params[key] = own end
+                local own = m:GetString(key);
+                if own and own ~= "" then params[key] = own; end
             end
         end
-        return params
+        return params;
     end
 
     -- Any other shader (world textures etc.) is re-wrapped as UnlitGeneric with the same base texture,
     -- and the animation its proxies would have given it is redone in Lua.
     local function wrapGeneric(m)
-        local tex = m:GetTexture("$basetexture")
+        local tex = m:GetTexture("$basetexture");
         if tex and not tex:IsError() then
-            unlitCount = unlitCount + 1
-            local animate
+            unlitCount = unlitCount + 1;
+            local animate;
             -- The animation does not come along with the texture: re-create the
             -- proxies water materials use. The frame advances like the original
             -- (about 20 per second); the DX7 water also scrolls and scales its
@@ -322,73 +322,73 @@ if CLIENT then
                 ["$vertexalpha"] = 1,
                 ["$translucent"] = 1,
                 ["$nocull"] = 1,
-            }
+            };
 
-            local scale = m:GetString("$texscale")
-            local scaled = scale and scale ~= ""
-            if scaled then params["$basetexturetransform"] = "center .5 .5 scale 1 1 rotate 0 translate 0 0" end
-            local um = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", inherit(m, params))
-            local frames = tex:GetNumAnimationFrames()
-            local sv = scaled and m:GetVector("$texscale") or Vector(1, 1, 0)
+            local scale = m:GetString("$texscale");
+            local scaled = scale and scale ~= "";
+            if scaled then params["$basetexturetransform"] = "center .5 .5 scale 1 1 rotate 0 translate 0 0"; end
+            local um = CreateMaterial("wl_unlit_" .. unlitCount, "UnlitGeneric", inherit(m, params));
+            local frames = tex:GetNumAnimationFrames();
+            local sv = scaled and m:GetVector("$texscale") or Vector(1, 1, 0);
             animate = function(t)
-                if frames > 1 then um:SetInt("$frame", math.floor(t * 20) % frames) end
+                if frames > 1 then um:SetInt("$frame", math.floor(t * 20) % frames); end
                 if scaled then
-                    local a = math.rad(45)
-                    local m2 = Matrix()
-                    m2:SetScale(Vector(sv.x, sv.y, 1))
-                    m2:SetTranslation(Vector(math.cos(a) * 0.025 * t, math.sin(a) * 0.025 * t, 0))
-                    um:SetMatrix("$basetexturetransform", m2)
+                    local a = math.rad(45);
+                    local m2 = Matrix();
+                    m2:SetScale(Vector(sv.x, sv.y, 1));
+                    m2:SetTranslation(Vector(math.cos(a) * 0.025 * t, math.sin(a) * 0.025 * t, 0));
+                    um:SetMatrix("$basetexturetransform", m2);
                 end
-            end
+            end;
 
-            local color = Color(255, 255, 255, 200)
-            local tintText = m:GetString("$color")
+            local color = Color(255, 255, 255, 200);
+            local tintText = m:GetString("$color");
             if tintText and tintText ~= "" then
-                local tint = m:GetVector("$color")
-                if tint then color = Color(tint.x * 255, tint.y * 255, tint.z * 255, 200) end
+                local tint = m:GetVector("$color");
+                if tint then color = Color(tint.x * 255, tint.y * 255, tint.z * 255, 200); end
             end
             return {
                 mat = um,
                 color = color,
                 vcol = true,
                 animate = animate
-            }
+            };
         end
         return {
             mat = fallback,
             color = Color(40, 120, 220, 90),
             vcol = false
-        }
+        };
     end
 
     local function mat(name)
-        local entry = cache[name]
+        local entry = cache[name];
         if entry == nil then
             -- "smooth mips noclamp" only applies to image files (png/jpg). VMT
             -- materials get their filtering and mipmaps from their VTF, so
             -- they are loaded as-is and the draw call forces filtering below.
-            local lower = name:lower()
-            local isImage = lower:match("%.png$") or lower:match("%.jpe?g$")
-            local m = isImage and Material(name, "smooth mips noclamp") or Material(name)
+            local lower = name:lower();
+            local isImage = lower:match("%.png$") or lower:match("%.jpe?g$");
+            local m = isImage and Material(name, "smooth mips noclamp") or Material(name);
             if m:IsError() then
                 entry = {
                     mat = fallback,
                     color = Color(40, 120, 220, 90),
                     vcol = false
-                }
+                };
             else
                 -- GetShader() reports the DX level too ("Refract_DX90", "Water_DX90").
-                local shader = (m:GetShader() or ""):lower():gsub("_dx%d+$", "")
+                local shader = (m:GetShader() or ""):lower():gsub("_dx%d+$", "");
                 -- Texture parameters are read as strings: GetTexture() warns
                 -- ("not a texture value") for vars a shader does not declare.
-                local nm, dudv = m:GetString("$normalmap"), m:GetString("$dudvmap")
-                local bump = m:GetString("$bumpmap")
+                local nm, dudv = m:GetString("$normalmap"), m:GetString("$dudvmap");
+                local bump = m:GetString("$bumpmap");
                 if shader == "water" and nm and nm ~= "" then
                     -- The Water shader draws its reflection and refraction only for the
                     -- world's own water surfaces; on a mesh the animated normal map
                     -- (dev/water_normal, advanced by $bumpframe) never shows. A Refract
                     -- material with the same normal map and the same animation does.
-                    unlitCount = unlitCount + 1
+                    unlitCount = unlitCount + 1;
                     local params = {
                         ["$normalmap"] = nm,
                         ["$bumpframe"] = 0,
@@ -397,10 +397,10 @@ if CLIENT then
                         ["$scale"] = "[1 1]",
                         ["$nocull"] = 1,
                         ["$refracttint"] = "{190 215 255}",
-                    }
+                    };
 
-                    local dm = m:GetString("$bumpmap")
-                    if dm and dm ~= "" then params["$dudvmap"] = dm end
+                    local dm = m:GetString("$bumpmap");
+                    if dm and dm ~= "" then params["$dudvmap"] = dm; end
                     params.Proxies = {
                         AnimatedTexture = {
                             animatedtexturevar = "$normalmap",
@@ -413,19 +413,19 @@ if CLIENT then
                             texturescrollrate = 0.02,
                             texturescrollangle = 25
                         },
-                    }
+                    };
 
                     entry = {
                         mat = CreateMaterial("wl_water_" .. unlitCount, "Refract", inherit(m, params)),
                         color = color_white,
                         vcol = false,
                         refract = true
-                    }
+                    };
                 elseif shader == "refract" and m:GetInt("$model") == 1 and nm and nm ~= "" then
                     -- Refract materials flagged "$model 1" (models/shadertest/shader3, ...)
                     -- are built for model vertex data and an env_cubemap; on a plain
                     -- mesh they come out pink with holes. Same refraction, minus those.
-                    unlitCount = unlitCount + 1
+                    unlitCount = unlitCount + 1;
                     local params = {
                         ["$normalmap"] = nm,
                         ["$refractamount"] = m:GetFloat("$refractamount") or 0.25,
@@ -439,21 +439,21 @@ if CLIENT then
                                 texturescrollangle = -90
                             }
                         },
-                    }
+                    };
 
-                    if dudv and dudv ~= "" then params["$dudvmap"] = dudv end
-                    local tint = m:GetVector("$refracttint")
-                    if tint then params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255) end
+                    if dudv and dudv ~= "" then params["$dudvmap"] = dudv; end
+                    local tint = m:GetVector("$refracttint");
+                    if tint then params["$refracttint"] = ("{%d %d %d}"):format(tint.x * 255, tint.y * 255, tint.z * 255); end
                     entry = {
                         mat = CreateMaterial("wl_refract_" .. unlitCount, "Refract", inherit(m, params)),
                         color = color_white,
                         vcol = false,
                         refract = true
-                    }
+                    };
                 elseif not passthrough[shader] and bump and bump ~= "" then
                     -- World water such as nature/water_movingplane: its look is the animated
                     -- bump map (dev/water_normal), which only a refracting shader can show.
-                    unlitCount = unlitCount + 1
+                    unlitCount = unlitCount + 1;
                     entry = {
                         mat = CreateMaterial("wl_bump_" .. unlitCount, "Refract", inherit(m, {
                             ["$normalmap"] = bump,
@@ -474,7 +474,7 @@ if CLIENT then
                         color = color_white,
                         vcol = false,
                         refract = true
-                    }
+                    };
                 elseif passthrough[shader] then
                     -- UnlitGeneric (png/jpg) takes its alpha from the vertex colour.
                     entry = {
@@ -482,81 +482,81 @@ if CLIENT then
                         color = color_white,
                         vcol = shader == "unlitgeneric",
                         refract = shader == "refract"
-                    }
+                    };
                 else
-                    entry = wrapGeneric(m)
+                    entry = wrapGeneric(m);
                 end
             end
 
-            cache[name] = entry
+            cache[name] = entry;
         end
-        return entry
+        return entry;
     end
 
-    local tile = 128 -- world units per texture repeat
+    local tile = 128; -- world units per texture repeat
     -- One tiled quad, a -> b -> c -> d. Every vertex carries a colour, a normal
     -- and tangents: leaving them unset makes lit or shader-driven materials
     -- (including water) flicker or render black.
     local function emitQuad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
-        local u, v = uLen / tile, vLen / tile
-        local s = (b - a):GetNormalized()
-        local t = (d - a):GetNormalized()
-        local n = s:Cross(t)
-        local verts = {{a, 0, 0}, {b, u, 0}, {c, u, v}, {d, 0, v}}
+        local u, v = uLen / tile, vLen / tile;
+        local s = (b - a):GetNormalized();
+        local t = (d - a):GetNormalized();
+        local n = s:Cross(t);
+        local verts = {{a, 0, 0}, {b, u, 0}, {c, u, v}, {d, 0, v}};
         if outward then
             -- Culled materials: the engine's front face is the clockwise one,
             -- so wind the quad clockwise as seen from outside the box.
-            if n:Dot(outward) > 0 then verts = {verts[4], verts[3], verts[2], verts[1]} end
-            n = outward -- lighting normal points out of the box
+            if n:Dot(outward) > 0 then verts = {verts[4], verts[3], verts[2], verts[1]}; end
+            n = outward; -- lighting normal points out of the box
         end
 
         for _, vert in ipairs(verts) do
-            mesh.Position(vert[1])
-            mesh.Color(cr, cg, cb, ca)
-            mesh.Normal(n)
-            mesh.TangentS(s)
-            mesh.TangentT(t)
-            mesh.TexCoord(0, vert[2], vert[3])
-            mesh.AdvanceVertex()
+            mesh.Position(vert[1]);
+            mesh.Color(cr, cg, cb, ca);
+            mesh.Normal(n);
+            mesh.TangentS(s);
+            mesh.TangentT(t);
+            mesh.TexCoord(0, vert[2], vert[3]);
+            mesh.AdvanceVertex();
         end
     end
 
     -- A face is a quad, plus a second one facing the other way for culled materials
     -- (their inside would otherwise be invisible).
     local function emitFace(entry, a, b, c, d, uLen, vLen, outward)
-        local r, g, b2, a2 = 255, 255, 255, 255
-        if entry.vcol then r, g, b2, a2 = entry.color.r, entry.color.g, entry.color.b, entry.color.a end
-        if not entry.cull then outward = nil end
-        emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward)
-        if outward then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward) end
-        return outward and 2 or 1
+        local r, g, b2, a2 = 255, 255, 255, 255;
+        if entry.vcol then r, g, b2, a2 = entry.color.r, entry.color.g, entry.color.b, entry.color.a; end
+        if not entry.cull then outward = nil; end
+        emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward);
+        if outward then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward); end
+        return outward and 2 or 1;
     end
 
     local function setFaceState(entry)
-        render.SetMaterial(entry.mat)
-        render.CullMode(entry.cull and MATERIAL_CULLMODE_CCW or MATERIAL_CULLMODE_NONE)
-        local col = entry.color
+        render.SetMaterial(entry.mat);
+        render.CullMode(entry.cull and MATERIAL_CULLMODE_CCW or MATERIAL_CULLMODE_NONE);
+        local col = entry.color;
         if entry.vcol then
             -- Colour and alpha travel in the vertices.
-            render.SetColorModulation(1, 1, 1)
-            render.SetBlend(1)
+            render.SetColorModulation(1, 1, 1);
+            render.SetBlend(1);
         else
-            render.SetColorModulation(col.r / 255, col.g / 255, col.b / 255)
-            render.SetBlend(col.a / 255)
+            render.SetColorModulation(col.r / 255, col.g / 255, col.b / 255);
+            render.SetBlend(col.a / 255);
         end
     end
 
     local function boxFaces(bx, top, body)
         -- Inset the bottom and sides so they are not coplanar with the
         -- floor or walls the volume rests against (z-fighting).
-        local e = 0.5
-        local mn = Vector(bx.mins.x + e, bx.mins.y + e, bx.mins.z + e)
-        local mx = Vector(bx.maxs.x - e, bx.maxs.y - e, bx.maxs.z)
-        local dx, dy, dz = mx.x - mn.x, mx.y - mn.y, mx.z - mn.z
-        local p000, p100 = Vector(mn.x, mn.y, mn.z), Vector(mx.x, mn.y, mn.z)
-        local p110, p010 = Vector(mx.x, mx.y, mn.z), Vector(mn.x, mx.y, mn.z)
-        local p001, p101 = Vector(mn.x, mn.y, mx.z), Vector(mx.x, mn.y, mx.z)
-        local p111, p011 = Vector(mx.x, mx.y, mx.z), Vector(mn.x, mx.y, mx.z)
+        local e = 0.5;
+        local mn = Vector(bx.mins.x + e, bx.mins.y + e, bx.mins.z + e);
+        local mx = Vector(bx.maxs.x - e, bx.maxs.y - e, bx.maxs.z);
+        local dx, dy, dz = mx.x - mn.x, mx.y - mn.y, mx.z - mn.z;
+        local p000, p100 = Vector(mn.x, mn.y, mn.z), Vector(mx.x, mn.y, mn.z);
+        local p110, p010 = Vector(mx.x, mx.y, mn.z), Vector(mn.x, mx.y, mn.z);
+        local p001, p101 = Vector(mn.x, mn.y, mx.z), Vector(mx.x, mn.y, mx.z);
+        local p111, p011 = Vector(mx.x, mx.y, mx.z), Vector(mn.x, mx.y, mx.z);
         local surface = {
             entry = top,
             a = p001,
@@ -566,7 +566,7 @@ if CLIENT then
             uLen = dx,
             vLen = dy,
             outward = Vector(0, 0, 1)
-        }
+        };
         -- Sides and bottom first, surface last, so the surface blends over them.
         return {
             {
@@ -620,16 +620,16 @@ if CLIENT then
                 outward = Vector(1, 0, 0)
             },
             surface,
-        }
+        };
     end
 
     local function destroyBuilt(bx)
         if bx.built then
             for _, f in ipairs(bx.built.list) do
-                if f.mesh and f.mesh.Destroy then f.mesh:Destroy() end
+                if f.mesh and f.mesh.Destroy then f.mesh:Destroy(); end
             end
 
-            bx.built = nil
+            bx.built = nil;
         end
     end
 
@@ -637,154 +637,154 @@ if CLIENT then
     -- sort, so it is ordered against splashes, sprites and shards by distance
     -- like any other translucent thing (origin = the box centre).
     local function drawVolume(bx)
-        local top = mat(bx.material ~= "" and bx.material or defaultMaterial)
-        local body = top
-        local now = CurTime()
-        if top.animate then top.animate(now) end
-        render.ResetModelLighting(1, 1, 1) -- VertexLitGeneric materials: even, full light
+        local top = mat(bx.material ~= "" and bx.material or defaultMaterial);
+        local body = top;
+        local now = CurTime();
+        if top.animate then top.animate(now); end
+        render.ResetModelLighting(1, 1, 1); -- VertexLitGeneric materials: even, full light
         -- Refract materials sample a copy of the frame, which is only updated when
         -- asked to: once per volume, before any face, so no face refracts another one
         -- (that flickered), and never stale.
-        if top.refract then render.UpdateRefractTexture() end
+        if top.refract then render.UpdateRefractTexture(); end
         -- Smooth filtering with mipmaps (anisotropic = trilinear + aniso).
-        render.PushFilterMag(TEXFILTER.ANISOTROPIC)
-        render.PushFilterMin(TEXFILTER.ANISOTROPIC)
+        render.PushFilterMag(TEXFILTER.ANISOTROPIC);
+        render.PushFilterMin(TEXFILTER.ANISOTROPIC);
         if bx.persist then
             -- Volumes that stay are uploaded once as static meshes. Rebuilding them as
             -- immediate meshes every frame shares the dynamic vertex buffer with the
             -- particles and sprites a gunshot creates, which corrupted the faces.
-            local key = bx.material or ""
+            local key = bx.material or "";
             if not bx.built or bx.built.key ~= key then
-                destroyBuilt(bx)
-                local list = {}
+                destroyBuilt(bx);
+                local list = {};
                 for _, f in ipairs(boxFaces(bx, top, body)) do
-                    local m = Mesh(f.entry.mat)
-                    mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and 2 or 1)
-                    emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward)
-                    mesh.End()
+                    local m = Mesh(f.entry.mat);
+                    mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and 2 or 1);
+                    emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
+                    mesh.End();
                     list[#list + 1] = {
                         entry = f.entry,
                         mesh = m
-                    }
+                    };
                 end
 
                 bx.built = {
                     key = key,
                     list = list
-                }
+                };
             end
 
             for _, f in ipairs(bx.built.list) do
-                setFaceState(f.entry)
-                f.mesh:Draw()
+                setFaceState(f.entry);
+                f.mesh:Draw();
             end
         else
             for _, f in ipairs(boxFaces(bx, top, body)) do
-                setFaceState(f.entry)
-                mesh.Begin(MATERIAL_QUADS, f.entry.cull and 2 or 1)
-                emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward)
-                mesh.End()
+                setFaceState(f.entry);
+                mesh.Begin(MATERIAL_QUADS, f.entry.cull and 2 or 1);
+                emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
+                mesh.End();
             end
         end
 
-        render.PopFilterMin()
-        render.PopFilterMag()
-        render.CullMode(MATERIAL_CULLMODE_CCW)
-        render.SetColorModulation(1, 1, 1)
-        render.SetBlend(1)
+        render.PopFilterMin();
+        render.PopFilterMag();
+        render.CullMode(MATERIAL_CULLMODE_CCW);
+        render.SetColorModulation(1, 1, 1);
+        render.SetBlend(1);
     end
 
     -- Also used by the Water Volume tool for its preview.
-    WLWater.DrawVolume = drawVolume
+    WLWater.DrawVolume = drawVolume;
     scripted_ents.Register({
         Type = "anim",
         Base = "base_anim",
         Spawnable = false,
         RenderGroup = RENDERGROUP_TRANSLUCENT,
-        Initialize = function(self) self:SetRenderMode(RENDERMODE_TRANSALPHA) end,
-        Draw = function(self) if self.WLBox then drawVolume(self.WLBox) end end,
-    }, "wl_volume_draw")
+        Initialize = function(self) self:SetRenderMode(RENDERMODE_TRANSALPHA); end,
+        Draw = function(self) if self.WLBox then drawVolume(self.WLBox); end end,
+    }, "wl_volume_draw");
 
-    local volumeEnts = {}
+    local volumeEnts = {};
     syncVolumeEntities = function()
         for _, e in ipairs(volumeEnts) do
             if IsValid(e) then
-                if e.WLBox then destroyBuilt(e.WLBox) end
-                e:Remove()
+                if e.WLBox then destroyBuilt(e.WLBox); end
+                e:Remove();
             end
         end
 
-        volumeEnts = {}
+        volumeEnts = {};
         for _, bx in ipairs(boxes) do
-            local e = ents.CreateClientside("wl_volume_draw")
+            local e = ents.CreateClientside("wl_volume_draw");
             if IsValid(e) then
-                local centre = (bx.mins + bx.maxs) * 0.5
-                e:SetModel("models/error.mdl")
-                e:SetPos(centre)
-                e:Spawn()
-                bx.persist = true
-                e.WLBox = bx
-                e:SetRenderBounds(bx.mins - centre, bx.maxs - centre)
-                volumeEnts[#volumeEnts + 1] = e
+                local centre = (bx.mins + bx.maxs) * 0.5;
+                e:SetModel("models/error.mdl");
+                e:SetPos(centre);
+                e:Spawn();
+                bx.persist = true;
+                e.WLBox = bx;
+                e:SetRenderBounds(bx.mins - centre, bx.maxs - centre);
+                volumeEnts[#volumeEnts + 1] = e;
             end
         end
-    end
+    end;
 
     -- Map cleanups remove client-side entities too.
-    hook.Add("PostCleanupMap", "wl_volumes_entities", function() syncVolumeEntities() end)
+    hook.Add("PostCleanupMap", "wl_volumes_entities", function() syncVolumeEntities(); end);
     -- Debugging: what do the client's own water queries answer?
     local function volumeAt(p)
         for i, b in ipairs(boxes) do
-            if p.x >= b.mins.x and p.x <= b.maxs.x and p.y >= b.mins.y and p.y <= b.maxs.y and p.z >= b.mins.z and p.z <= b.maxs.z then return i, b.maxs.z - p.z end
+            if p.x >= b.mins.x and p.x <= b.maxs.x and p.y >= b.mins.y and p.y <= b.maxs.y and p.z >= b.mins.z and p.z <= b.maxs.z then return i, b.maxs.z - p.z; end
         end
     end
 
     local function describe()
-        local ply = LocalPlayer()
-        if not IsValid(ply) then return "no player" end
-        local eye = ply:EyePos()
-        local idx, depth = volumeAt(eye)
-        local contents = util.PointContents(eye)
-        local line = ("eye %s | in volume: %s | eye depth below its surface: %s | util.PointContents(eye) = 0x%x (water %s, slime %s) | WaterLevel() = %d"):format(tostring(eye), idx and "#" .. idx or "no", depth and ("%.1f"):format(depth) or "-", contents, tostring(bit.band(contents, CONTENTS_WATER) ~= 0), tostring(bit.band(contents, CONTENTS_SLIME) ~= 0), ply:WaterLevel())
-        if waterlevelercore then line = line .. (" | module point-in-volume: %s"):format(tostring(waterlevelercore.PointInVolume(eye.x, eye.y, eye.z))) end
-        return line
+        local ply = LocalPlayer();
+        if not IsValid(ply) then return "no player"; end
+        local eye = ply:EyePos();
+        local idx, depth = volumeAt(eye);
+        local contents = util.PointContents(eye);
+        local line = ("eye %s | in volume: %s | eye depth below its surface: %s | util.PointContents(eye) = 0x%x (water %s, slime %s) | WaterLevel() = %d"):format(tostring(eye), idx and "#" .. idx or "no", depth and ("%.1f"):format(depth) or "-", contents, tostring(bit.band(contents, CONTENTS_WATER) ~= 0), tostring(bit.band(contents, CONTENTS_SLIME) ~= 0), ply:WaterLevel());
+        if waterlevelercore then line = line .. (" | module point-in-volume: %s"):format(tostring(waterlevelercore.PointInVolume(eye.x, eye.y, eye.z))); end
+        return line;
     end
 
     concommand.Add("waterleveler_client_status", function()
-        print("[wl] map: " .. game.GetMap())
-        if not waterlevelercore then return print("[wl] client module not loaded (gmcl_waterlevelercore_win64.dll missing or failed): the client's water queries do not see volumes") end
-        print("[wl] " .. waterlevelercore.HookStatus())
-        print(("[wl] contents hook: %s | volumes: %d (script knows %d) | point queries answered with water: %d | traces stopped at the surface: %d"):format(tostring(waterlevelercore.IsContentsHooked()), waterlevelercore.VolumeCount(), #boxes, waterlevelercore.ContentsHits(), waterlevelercore.TraceHits()))
+        print("[wl] map: " .. game.GetMap());
+        if not waterlevelercore then return print("[wl] client module not loaded (gmcl_waterlevelercore_win64.dll missing or failed): the client's water queries do not see volumes"); end
+        print("[wl] " .. waterlevelercore.HookStatus());
+        print(("[wl] contents hook: %s | volumes: %d (script knows %d) | point queries answered with water: %d | traces stopped at the surface: %d"):format(tostring(waterlevelercore.IsContentsHooked()), waterlevelercore.VolumeCount(), #boxes, waterlevelercore.ContentsHits(), waterlevelercore.TraceHits()));
         for i, b in ipairs(boxes) do
-            print(("[wl] volume #%d %s .. %s (%s) depth %.0f"):format(i, tostring(b.mins), tostring(b.maxs), b.liquid, b.maxs.z - b.mins.z))
+            print(("[wl] volume #%d %s .. %s (%s) depth %.0f"):format(i, tostring(b.mins), tostring(b.maxs), b.liquid, b.maxs.z - b.mins.z));
         end
 
-        print("[wl] " .. describe())
-    end)
+        print("[wl] " .. describe());
+    end);
 
-    local watching, lastContents, lastTraces = false, 0, 0
+    local watching, lastContents, lastTraces = false, 0, 0;
     concommand.Add("waterleveler_watch", function(_, _, args)
-        watching = args[1] ~= nil and args[1] ~= "0" or args[1] == nil and not watching
+        watching = args[1] ~= nil and args[1] ~= "0" or args[1] == nil and not watching;
         if not watching then
-            timer.Remove("wl_watch")
-            return print("[wl] watch off")
+            timer.Remove("wl_watch");
+            return print("[wl] watch off");
         end
 
-        print("[wl] watch on: each line shows how many point queries and traces the engine made against the volumes during the last second")
-        lastContents = waterlevelercore and waterlevelercore.ContentsHits() or 0
-        lastTraces = waterlevelercore and waterlevelercore.TraceHits() or 0
+        print("[wl] watch on: each line shows how many point queries and traces the engine made against the volumes during the last second");
+        lastContents = waterlevelercore and waterlevelercore.ContentsHits() or 0;
+        lastTraces = waterlevelercore and waterlevelercore.TraceHits() or 0;
         timer.Create("wl_watch", 1, 0, function()
-            local c = waterlevelercore and waterlevelercore.ContentsHits() or 0
-            local t = waterlevelercore and waterlevelercore.TraceHits() or 0
-            print(("[wl] +%d point queries, +%d traces | %s"):format(c - lastContents, t - lastTraces, describe()))
-            lastContents, lastTraces = c, t
-        end)
-    end)
+            local c = waterlevelercore and waterlevelercore.ContentsHits() or 0;
+            local t = waterlevelercore and waterlevelercore.TraceHits() or 0;
+            print(("[wl] +%d point queries, +%d traces | %s"):format(c - lastContents, t - lastTraces, describe()));
+            lastContents, lastTraces = c, t;
+        end);
+    end);
 
     -- Fully submerged (water level 3): the engine's water screen overlay.
     hook.Add("RenderScreenspaceEffects", "wl_volumes_overlay", function()
-        local ply = LocalPlayer()
-        if not IsValid(ply) or not ply:Alive() then return end
-        if ply:WaterLevel() >= 3 then DrawMaterialOverlay("effects/water_warp01", 0.1) end
-    end)
+        local ply = LocalPlayer();
+        if not IsValid(ply) or not ply:Alive() then return; end
+        if ply:WaterLevel() >= 3 then DrawMaterialOverlay("effects/water_warp01", 0.1); end
+    end);
 end
