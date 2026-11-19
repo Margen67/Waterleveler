@@ -19,7 +19,8 @@ ADDON="addon/waterleveler"
 cd "$(dirname "${0}")"
 mkdir -p out
 
-cargo build --release
+# Tuned for this machine's CPU; the DLL may not run on older CPUs.
+RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-cpu=native" cargo build --release
 
 case "$(uname -s)" in
     Linux)
