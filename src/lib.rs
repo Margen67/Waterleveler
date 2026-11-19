@@ -1764,8 +1764,7 @@ mod engine_hook {
             ];
             let inside = VOLUMES
                 .try_lock()
-                .ok()
-                .is_some_and(|v| surface_z_at(&v, origin).is_some());
+                .is_ok_and(|v| surface_z_at(&v, origin).is_some());
             if !inside {
                 return false;
             }
