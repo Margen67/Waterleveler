@@ -212,6 +212,15 @@ if SERVER then
             tostring(pos), tostring(waterleveler.PointInVolume(pos.x, pos.y, pos.z)), waterleveler.ExplosionsRedirected()))
     end)
 
+    -- "Clean up everything" (game.CleanUpMap) removes the fluid entities; the volumes
+    -- themselves live in the module and the script, so they go too.
+    hook.Add("PostCleanupMap", "wl_volumes_cleanup", function()
+        waterleveler.ClearVolumes()
+        boxes = {}
+        fluids = {}
+        sync()
+    end)
+
     hook.Add("PlayerInitialSpawn", "wl_volumes_sync", function(ply)
         timer.Simple(2, function() if IsValid(ply) then sync(ply) end end)
     end)
