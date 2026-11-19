@@ -339,11 +339,26 @@ if CLIENT then
                 resultVar = "$bumpframe"
             }
         };
+
+        local baseTex, bumpTex = m:GetTexture("$basetexture"), m:GetTexture("$bumpmap");
+        local baseFrames = baseTex and baseTex:GetNumAnimationFrames() or 1;
+        local bumpFrames = bumpTex and bumpTex:GetNumAnimationFrames() or 1;
+        local wrapped = CreateMaterial("wl_water_lit_" .. unlitCount, "VertexLitGeneric", params);
         return {
-            mat = CreateMaterial("wl_water_lit_" .. unlitCount, "VertexLitGeneric", params),
+            mat = wrapped,
             color = color_white,
             vcol = false,
-            directional = true
+            directional = true,
+            info = {
+                baseFrames = baseFrames,
+                bumpFrames = bumpFrames
+            },
+            -- The same frames the proxies give, set from Lua as well in case a proxy does not run
+            -- for a material drawn like this.
+            animate = function(t)
+                if baseFrames > 1 then wrapped:SetInt("$frame", math.floor(t * 21) % baseFrames); end
+                if bumpFrames > 1 then wrapped:SetInt("$bumpframe", math.floor(t * 21) % bumpFrames); end
+            end
         };
     end
 
@@ -538,6 +553,31 @@ if CLIENT then
         return entry;
     end
 
+    concommand.Add("waterleveler_material_info", function(_, _, args)
+        local name = args[1];
+        if not name or name == "" then
+            local cv = GetConVar("waterleveler_material");
+            name = cv and cv:GetString() or "";
+            if name == "" then name = defaultMaterial; end
+        end
+
+        local original = Material(name);
+        local e = mat(name);
+        print(("[wl] %s: shader %s, wrapped as %s"):format(name, original:GetShader(), e.mat:GetShader()));
+        for _, key in ipairs({"$basetexture", "$bumpmap", "$envmap", "$normalmapalphaenvmapmask", "$translucent", "$frame", "$bumpframe"}) do
+            print(("[wl]   %s: original %s | wrapper %s"):format(key, tostring(original:GetString(key)), tostring(e.mat:GetString(key))));
+        end
+
+        if e.info then print(("[wl]   animation frames: base texture %d, bump map %d"):format(e.info.baseFrames, e.info.bumpFrames)); end
+        local function frames(label)
+            print(("[wl]   %s: wrapper $frame = %s, $bumpframe = %s"):format(label, tostring(e.mat:GetString("$frame")), tostring(e.mat:GetString("$bumpframe"))));
+        end
+
+        frames("now");
+        timer.Simple(0.5, function() frames("after 0.5 s"); end);
+        timer.Simple(1, function() frames("after 1 s"); end);
+    end);
+
     local tile = 128; -- world units per texture repeat
     -- One tiled quad, a -> b -> c -> d. Every vertex carries a colour, a normal
     -- and tangents: leaving them unset makes lit or shader-driven materials
@@ -689,11 +729,10 @@ if CLIENT then
         if top.animate then top.animate(now); end
         if top.directional then
             -- A bump map only shows under uneven light (a brush gets the map's lightmap): light
-            -- from above, dimmer from the sides. The lighting origin picks the cubemap for $envmap.
+            -- from above, dimmer from the sides.
             render.ResetModelLighting(0.45, 0.45, 0.45);
             render.SetModelLighting(BOX_TOP, 1, 1, 1);
             render.SetModelLighting(BOX_BOTTOM, 0.2, 0.2, 0.2);
-            render.SetLightingOrigin((bx.mins + bx.maxs) * 0.5);
         else
             render.ResetModelLighting(1, 1, 1); -- VertexLitGeneric materials: even, full light
         end
