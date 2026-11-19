@@ -146,8 +146,8 @@ Limits (read these):
 Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` (loaded automatically as part of the addon).
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy and material; an outline previews the volume where you
-Material icons in the spawnmenu (the stock one and Extended Spawnmenu's) have a right-click option "Use with Water Volume tool" that sets `waterleveler_material` and switches to the tool. Refract materials (for example `models/shadertest/shader3`) are drawn on the surface only, like a map's water.
 are looking).
+Material icons in the spawnmenu (the stock one and Extended Spawnmenu's) have a right-click option "Use with Water Volume tool" that sets `waterleveler_material` and switches to the tool. Refract materials (for example `models/shadertest/shader3`) are drawn on the surface only, like a map's water.
 
 Every numeric `waterleveler_*` convar has limits (sizes 1-32768, offset +-32768, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).
 
