@@ -882,23 +882,50 @@ if CLIENT then
             moved = true;
         end
 
-        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins) .. (owner.beneath ~= false and "/beneath" or "");
-        if not owner.built or owner.built.key ~= key then
+        -- The meshes are rebuilt only when the material, the size or the _beneath option
+        -- changed: compared as plain numbers, so a frame allocates nothing for the check.
+        -- Rounded to 0.01: the preview's size is a difference of positions that move with the
+        -- aim point, and float noise must not rebuild its meshes every frame.
+        local sizeX, sizeY, sizeZ = math.floor((owner.maxs.x - owner.mins.x) * 100 + 0.5), math.floor((owner.maxs.y - owner.mins.y) * 100 + 0.5), math.floor((owner.maxs.z - owner.mins.z) * 100 + 0.5);
+        local material, beneath = owner.material or "", owner.beneath ~= false;
+        local built = owner.built;
+        if not built or built.material ~= material or built.beneath ~= beneath or built.sizeX ~= sizeX or built.sizeY ~= sizeY or built.sizeZ ~= sizeZ then
             destroyBuilt(owner);
+            -- Neighbouring faces that share a material go into one mesh (one draw call). The
+            -- faces stay in the same order, so the surface still blends over the sides.
             local list = {};
-            for _, f in ipairs(boxFaces(owner, top, body)) do
-                local m = Mesh(f.entry.mat);
-                mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and not f.entry.oneSided and 2 or 1);
-                emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
+            local run, quads;
+            local function flush()
+                if not run then return; end
+                local m = Mesh(run[1].entry.mat);
+                mesh.Begin(m, MATERIAL_QUADS, quads);
+                for _, f in ipairs(run) do
+                    emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
+                end
+
                 mesh.End();
                 list[#list + 1] = {
-                    entry = f.entry,
+                    entry = run[1].entry,
                     mesh = m
                 };
+
+                run = nil;
             end
 
+            for _, f in ipairs(boxFaces(owner, top, body)) do
+                if run and run[1].entry ~= f.entry then flush(); end
+                if not run then run, quads = {}, 0; end
+                run[#run + 1] = f;
+                quads = quads + (f.entry.cull and not f.entry.oneSided and 2 or 1);
+            end
+
+            flush();
             owner.built = {
-                key = key,
+                material = material,
+                beneath = beneath,
+                sizeX = sizeX,
+                sizeY = sizeY,
+                sizeZ = sizeZ,
                 list = list
             };
         end
