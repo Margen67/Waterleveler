@@ -998,61 +998,13 @@ if CLIENT then
         end);
     end);
 
-    -- Fully submerged (water level 3): the engine's water screen overlay.
+    -- Fully submerged (water level 3): the water screen warp. It is drawn here, by this script
+    -- (the engine does not draw one for these volumes); the tool can turn it off.
+    local warpEnabled = CreateClientConVar("waterleveler_underwater_warp", "1", true, false, "0 removes the underwater screen warp", 0, 1);
     hook.Add("RenderScreenspaceEffects", "wl_volumes_overlay", function()
+        if not warpEnabled:GetBool() then return; end
         local ply = LocalPlayer();
         if not IsValid(ply) or not ply:Alive() then return; end
         if ply:WaterLevel() >= 3 then DrawMaterialOverlay("effects/water_warp01", 0.1); end
-    end);
-
-    -- Underwater screen warp. The engine draws the $underwateroverlay of the water the camera is in
-    -- (effects/water_warp01 for the stock water). That material is a global one, so with the option
-    -- off its distortion is zeroed only while the camera is inside one of these volumes, and put
-    -- back when it leaves.
-    local warpEnabled = CreateClientConVar("waterleveler_underwater_warp", "1", true, false, "0 removes the underwater screen warp inside water volumes", 0, 1);
-    local warpMaterialName = "effects/water_warp01";
-    local warpKeys = {"$refractamount", "$warpparam", "$bluramount"};
-    local warpSaved; -- key -> the material's own value, while the warp is off
-    local function setWarpOff(off)
-        local warp = Material(warpMaterialName);
-        if warp:IsError() then return; end
-        if off and not warpSaved then
-            warpSaved = {};
-            for _, key in ipairs(warpKeys) do
-                warpSaved[key] = warp:GetFloat(key) or 0;
-                warp:SetFloat(key, 0);
-            end
-        elseif not off and warpSaved then
-            for key, value in pairs(warpSaved) do
-                warp:SetFloat(key, value);
-            end
-
-            warpSaved = nil;
-        end
-    end
-
-    hook.Add("PreRender", "waterleveler_underwater_warp", function()
-        local off = false;
-        if not warpEnabled:GetBool() then
-            local eyes = EyePos();
-            for _, b in pairs(boxes) do
-                if eyes:WithinAABox(b.mins, b.maxs) then
-                    off = true;
-                    break;
-                end
-            end
-        end
-
-        setWarpOff(off);
-    end);
-
-    concommand.Add("waterleveler_warp_info", function()
-        local warp = Material(warpMaterialName);
-        print(("[wl] %s: %s, shader %s"):format(warpMaterialName, warp:IsError() and "not found" or "found", warp:GetShader()));
-        for _, key in ipairs(warpKeys) do
-            print(("[wl]   %s = %s"):format(key, tostring(warp:GetFloat(key) or "(not set)")));
-        end
-
-        print(("[wl]   option: %s, warp currently removed: %s"):format(warpEnabled:GetBool() and "keep the warp" or "remove it inside volumes", tostring(warpSaved ~= nil)));
     end);
 end

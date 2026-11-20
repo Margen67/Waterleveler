@@ -151,7 +151,7 @@ biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
 The "Inside shows the material's _beneath texture" option (`waterleveler_beneath`, per volume) draws world water single-sided, with `<material>_beneath` on the inside; turned off, the material is drawn on both sides.
 
-The "Underwater screen warp" option (`waterleveler_underwater_warp`, a client setting) can turn off the screen distortion while the camera is inside a water volume. It zeroes the distortion of `effects/water_warp01` from Lua only while you are inside a volume and restores it when you leave, so real map water is untouched.
+The "Underwater screen warp" option (`waterleveler_underwater_warp`, a client setting) turns off the `effects/water_warp01` screen overlay that the script draws while you are fully submerged in a volume.
 
 Material icons in the spawnmenu (the stock one and Extended Spawnmenu's) have a right-click option "Use with Water Volume tool" that sets `waterleveler_material` and switches to the tool.
 
@@ -163,7 +163,6 @@ Debugging commands (the volumes themselves come from the Water Volume tool):
 `waterleveler_explode` (server, superadmin: explode where you look, through the normal explosion path),
 `waterleveler_client_status` (client: module status, counters, your eyes against the volumes),
 `waterleveler_envmap_strength` / `waterleveler_envmap_contrast` (client convars: reflection of `water_movingplane`-style world water),
-`waterleveler_warp_info` (client: the underwater warp material and whether it is currently removed),
 `waterleveler_material_info [material]` (client: how a material is wrapped, its parameters and animation frames, and whether the wrapper's frame counters advance) and
 `waterleveler_watch [0|1]` (client: once a second, how many point queries and traces the engine made against the volumes, plus what `util.PointContents` answers at your eyes; for the underwater sound muffling).
 
