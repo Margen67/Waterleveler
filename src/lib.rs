@@ -61,16 +61,20 @@ type LuaState = *mut c_void;
 type LuaFn = unsafe extern "C-unwind" fn(LuaState) -> c_int;
 
 const LUA_GLOBALSINDEX: c_int = -10002;
+#[cfg(feature = "server")]
 const LUA_MULTRET: c_int = -1;
 const LUA_TNONE: c_int = -1;
 const LUA_TNIL: c_int = 0;
 const LUA_TSTRING: c_int = 4;
 const LUA_TNUMBER: c_int = 3;
+#[cfg(feature = "server")]
 const LUA_TTABLE: c_int = 5;
+#[cfg(feature = "server")]
 const LUA_TUSERDATA: c_int = 7;
 
 #[cfg(feature = "server")]
 const DEFAULT_SAVE_KEY: &str = "m_nWaterLevel";
+#[cfg(feature = "server")]
 const HOOK_ID: &CStr = c"gmsv_waterlevel";
 #[cfg(feature = "server")]
 const ORIG_KEY: &CStr = c"__waterlevel_orig";
@@ -82,6 +86,7 @@ const ORIG_KEY: &CStr = c"__waterlevel_orig";
 struct Api {
     gettop: unsafe extern "C-unwind" fn(LuaState) -> c_int,
     settop: unsafe extern "C-unwind" fn(LuaState, c_int),
+    #[cfg(feature = "server")]
     pushvalue: unsafe extern "C-unwind" fn(LuaState, c_int),
     pushnil: unsafe extern "C-unwind" fn(LuaState),
     pushnumber: unsafe extern "C-unwind" fn(LuaState, f64),
@@ -89,14 +94,19 @@ struct Api {
     pushstring: unsafe extern "C-unwind" fn(LuaState, *const c_char) -> *const c_char,
     pushcclosure: unsafe extern "C-unwind" fn(LuaState, LuaFn, c_int),
     createtable: unsafe extern "C-unwind" fn(LuaState, c_int, c_int),
+    #[cfg(feature = "server")]
     getfield: unsafe extern "C-unwind" fn(LuaState, c_int, *const c_char),
     setfield: unsafe extern "C-unwind" fn(LuaState, c_int, *const c_char),
+    #[cfg(feature = "server")]
     call: unsafe extern "C-unwind" fn(LuaState, c_int, c_int),
+    #[cfg(feature = "server")]
     pcall: unsafe extern "C-unwind" fn(LuaState, c_int, c_int, c_int) -> c_int,
     tonumber: unsafe extern "C-unwind" fn(LuaState, c_int) -> f64,
+    #[cfg(feature = "server")]
     toboolean: unsafe extern "C-unwind" fn(LuaState, c_int) -> c_int,
     tolstring: unsafe extern "C-unwind" fn(LuaState, c_int, *mut usize) -> *const c_char,
     type_: unsafe extern "C-unwind" fn(LuaState, c_int) -> c_int,
+    #[cfg(feature = "server")]
     touserdata: unsafe extern "C-unwind" fn(LuaState, c_int) -> *mut c_void,
 }
 
@@ -181,6 +191,7 @@ unsafe fn load_api() -> Option<Api> {
         Some(Api {
             gettop: load!("lua_gettop"),
             settop: load!("lua_settop"),
+            #[cfg(feature = "server")]
             pushvalue: load!("lua_pushvalue"),
             pushnil: load!("lua_pushnil"),
             pushnumber: load!("lua_pushnumber"),
@@ -188,14 +199,19 @@ unsafe fn load_api() -> Option<Api> {
             pushstring: load!("lua_pushstring"),
             pushcclosure: load!("lua_pushcclosure"),
             createtable: load!("lua_createtable"),
+            #[cfg(feature = "server")]
             getfield: load!("lua_getfield"),
             setfield: load!("lua_setfield"),
+            #[cfg(feature = "server")]
             call: load!("lua_call"),
+            #[cfg(feature = "server")]
             pcall: load!("lua_pcall"),
             tonumber: load!("lua_tonumber"),
+            #[cfg(feature = "server")]
             toboolean: load!("lua_toboolean"),
             tolstring: load!("lua_tolstring"),
             type_: load!("lua_type"),
+            #[cfg(feature = "server")]
             touserdata: load!("lua_touserdata"),
         })
     }
@@ -581,6 +597,7 @@ impl VolumeList {
     }
 
     /// Top (surface height) of the highest water volume containing `p`.
+    #[cfg(feature = "server")]
     fn surface_z(&self, p: [f32; 3]) -> Option<f32> {
         let mut top: Option<f32> = None;
         let mut take = |v: &Volume| {
@@ -669,6 +686,7 @@ fn volumes() -> VolumesGuard {
 
 /// The current volumes for an engine hook, or `None` when there are none. Never waits for an
 /// edit; the lock is only held for the instant it takes to swap the copy.
+#[cfg(all(test, target_os = "linux"))]
 fn snapshot() -> Option<Arc<VolumeList>> {
     match SNAPSHOT.try_read() {
         Ok(copy) => copy.clone(),
@@ -699,7 +717,7 @@ fn bump(counter: &std::sync::atomic::AtomicU64) {
 
 /// Top (surface height) of the highest water volume containing `p` (slime is
 /// not water: the engine's water explosion needs `CONTENTS_WATER`).
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
     vols.iter()
         .filter(|v| {
@@ -711,14 +729,14 @@ fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
 
 /// The contents of every volume containing `p`, or'ed together (0 if none). The reference
 /// the tests hold `VolumeList::contents_at` to.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn contents_at(vols: &[Volume], p: [f32; 3]) -> c_int {
     vols.iter()
         .filter(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
         .fold(0, |c, v| c | v.contents)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn point_in_volumes(vols: &[Volume], p: [f32; 3]) -> bool {
     vols.iter()
         .any(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
@@ -860,10 +878,12 @@ mod engine_hook {
 
     /// The handful of OS services needed to patch code.
     pub(crate) struct Platform {
+        #[cfg(feature = "server")]
         pub alloc_exec: unsafe fn(usize) -> *mut u8,
         /// Makes the range writable; returns the previous protection.
         pub make_writable: unsafe fn(*mut u8, usize) -> Option<u32>,
         pub restore_protect: unsafe fn(*mut u8, usize, u32),
+        #[cfg(feature = "server")]
         pub flush: unsafe fn(*mut u8, usize),
     }
 
@@ -878,6 +898,7 @@ mod engine_hook {
         4C 8D 40 C8 C7 40 C8 00 00 00 00 48 8D 50 D8 C7 40 D8 00 00 00 3F 0F 57 F6 \
         48 C7 40 DC 00 00 00 3F E8 ?? ?? ?? ?? 33 D2 48 8B CB E8 ?? ?? ?? ?? 33 D2 48 8B CB \
         E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 54 24 20 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
+    #[cfg(feature = "server")]
     pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 91;
 
     #[cfg(feature = "client")]
@@ -1545,6 +1566,7 @@ mod engine_hook {
     }
 
     /// Every match of a signature in the executable sections.
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn scan_sig_all(
         base: *const u8,
         sig: &str,
@@ -2483,9 +2505,11 @@ mod engine_hook {
                 -> i32;
             fn GetCurrentProcess() -> *mut c_void;
         }
+        #[cfg(feature = "server")]
         const MEM_COMMIT_RESERVE: u32 = 0x3000;
         const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 
+        #[cfg(feature = "server")]
         unsafe fn alloc_exec(size: usize) -> *mut u8 {
             unsafe {
                 VirtualAlloc(
@@ -2513,6 +2537,7 @@ mod engine_hook {
                 VirtualProtect(p.cast::<c_void>(), n, old, &mut tmp);
             }
         }
+        #[cfg(feature = "server")]
         unsafe fn flush(p: *mut u8, n: usize) {
             unsafe {
                 FlushInstructionCache(GetCurrentProcess(), p as *const c_void, n);
@@ -2520,9 +2545,11 @@ mod engine_hook {
         }
 
         pub(crate) const PLATFORM: Platform = Platform {
+            #[cfg(feature = "server")]
             alloc_exec,
             make_writable,
             restore_protect,
+            #[cfg(feature = "server")]
             flush,
         };
 
@@ -3161,6 +3188,7 @@ unsafe fn fail(l: LuaState, msg: &CStr) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 unsafe fn lua_print(l: LuaState, msg: &str) {
     unsafe {
         let a = api();
@@ -3773,6 +3801,7 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
 /// True when this DLL is the client module. With both features built in that is decided
 /// from the file name (gmcl_*); a build with only one feature has no choice to make.
 #[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+#[cfg_attr(not(feature = "server"), allow(clippy::missing_const_for_fn))] // only const without the name check
 unsafe fn running_as_client() -> bool {
     #[cfg(feature = "server")]
     unsafe {
@@ -3782,8 +3811,8 @@ unsafe fn running_as_client() -> bool {
     true
 }
 
-/// Loaded as gmcl_waterlevelercore: the client's water. The Lua side gives it the
-/// volumes (AddVolume etc.); its engine trace is
+/// Loaded as `gmcl_waterlevelercore`: the client's water. The Lua side gives it the
+/// volumes (`AddVolume` etc.); its engine trace is
 /// patched so the client sees and hears them like the server does.
 #[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
 unsafe fn open_client(l: LuaState) -> c_int {
