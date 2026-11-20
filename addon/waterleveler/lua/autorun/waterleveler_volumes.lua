@@ -309,8 +309,8 @@ if CLIENT then
     -- map brush shows, so a VertexLitGeneric (lightmaps do not exist on a mesh) with the same
     -- parameters is used, with the original's proxies.
     local carried = {"$envmap", "$envmaptint", "$envmapcontrast", "$normalmapalphaenvmapmask", "$color", "$alpha"};
-    local envStrength = CreateClientConVar("waterleveler_envmap_strength", "0.5", true, false, "Reflection strength of world water volumes", 0, 4);
-    local envContrast = CreateClientConVar("waterleveler_envmap_contrast", "1", true, false, "Reflection contrast of world water volumes (0 = normal, 1 = high)", 0, 1);
+    local envStrength = CreateClientConVar("waterleveler_envmap_strength", "0.2", true, false, "Reflection strength of world water volumes", 0, 4);
+    local envContrast = CreateClientConVar("waterleveler_envmap_contrast", "0.9", true, false, "Reflection contrast of world water volumes (0 = normal, 1 = high)", 0, 1);
     local function wrapLightmappedWater(m, base, bump)
         unlitCount = unlitCount + 1;
         local params = inherit(m, {
@@ -561,7 +561,14 @@ if CLIENT then
             end
 
             -- The material water uses when seen from inside (a map brush's $bottommaterial).
+            -- GetString cannot see $bottommaterial of a loaded material (compile-time only), so the
+            -- naming convention is used when it comes back empty: <material>_beneath.
             local beneath = not m:IsError() and m:GetString("$bottommaterial");
+            if not isImage and not m:IsError() and (not beneath or beneath == "") then
+                local guess = name .. "_beneath";
+                if not Material(guess):IsError() then beneath = guess; end
+            end
+
             if beneath and beneath ~= "" then entry.beneath = beneath; end
             cache[name] = entry;
         end
