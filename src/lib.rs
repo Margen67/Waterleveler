@@ -51,7 +51,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 type LuaState = *mut c_void;
 type LuaFn = unsafe extern "C-unwind" fn(LuaState) -> c_int;
@@ -306,11 +306,22 @@ struct Volume {
 /// The volumes plus one box around all of them, so a query far from every volume is
 /// rejected with a single comparison instead of a scan. Only the methods below change the
 /// list, and each one recomputes the box.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct VolumeList {
     list: Vec<Volume>,
     /// The smallest box containing every volume, or `None` while the list is empty.
     bounds: Option<([f32; 3], [f32; 3])>,
+    /// The same boxes as one array per field, so the point test runs over plain slices
+    /// the compiler can vectorize.
+    lanes: Lanes,
+}
+
+/// A struct-of-arrays copy of the volume list: entry `i` of every array is volume `i`.
+#[derive(Clone, Debug, Default)]
+struct Lanes {
+    min: [Vec<f32>; 3],
+    max: [Vec<f32>; 3],
+    contents: Vec<c_int>,
 }
 
 impl VolumeList {
@@ -318,10 +329,20 @@ impl VolumeList {
         Self {
             list: Vec::new(),
             bounds: None,
+            lanes: Lanes {
+                min: [Vec::new(), Vec::new(), Vec::new()],
+                max: [Vec::new(), Vec::new(), Vec::new()],
+                contents: Vec::new(),
+            },
         }
     }
 
     fn refresh_bounds(&mut self) {
+        for axis in 0..3 {
+            self.lanes.min[axis] = self.list.iter().map(|v| v.min[axis]).collect();
+            self.lanes.max[axis] = self.list.iter().map(|v| v.max[axis]).collect();
+        }
+        self.lanes.contents = self.list.iter().map(|v| v.contents).collect();
         self.bounds = self.list.iter().fold(None, |acc, v| {
             Some(acc.map_or((v.min, v.max), |(lo, hi)| {
                 (
@@ -347,7 +368,7 @@ impl VolumeList {
 
     fn clear(&mut self) {
         self.list.clear();
-        self.bounds = None;
+        self.refresh_bounds();
     }
 
     fn retain(&mut self, keep: impl FnMut(&Volume) -> bool) {
@@ -360,6 +381,28 @@ impl VolumeList {
     fn set(&mut self, volumes: Vec<Volume>) {
         self.list = volumes;
         self.refresh_bounds();
+    }
+
+    /// The contents of every volume containing `p`, or'ed together (0 if none). Same result
+    /// as `contents_at` on the plain list, computed without a branch per volume.
+    #[allow(clippy::needless_bitwise_bool)] // `&` on purpose: no early exit, so the loop vectorizes
+    fn contents_at(&self, p: [f32; 3]) -> c_int {
+        let l = &self.lanes;
+        let n = l.contents.len();
+        let (x0, y0, z0) = (&l.min[0][..n], &l.min[1][..n], &l.min[2][..n]);
+        let (x1, y1, z1) = (&l.max[0][..n], &l.max[1][..n], &l.max[2][..n]);
+        let mut contents = 0;
+        for i in 0..n {
+            // `&`, not `&&`: no early exit, so the loop is a straight line of compares.
+            let inside = (p[0] >= x0[i])
+                & (p[0] <= x1[i])
+                & (p[1] >= y0[i])
+                & (p[1] <= y1[i])
+                & (p[2] >= z0[i])
+                & (p[2] <= z1[i]);
+            contents |= l.contents[i] & -c_int::from(inside);
+        }
+        contents
     }
 
     /// False if `p` is certainly in no volume (true means "maybe": scan the list).
@@ -377,14 +420,73 @@ impl std::ops::Deref for VolumeList {
     }
 }
 
+/// The writers' copy of the volumes. Edits go through `volumes()`, which publishes the
+/// result to `SNAPSHOT` when the guard is released.
 static VOLUMES: Mutex<VolumeList> = Mutex::new(VolumeList::new());
+/// What the engine hooks read: an immutable copy of the list, replaced as a whole, so a
+/// hook never waits for (or skips because of) an edit in progress. `None` while empty.
+static SNAPSHOT: RwLock<Option<Arc<VolumeList>>> = RwLock::new(None);
 static NEXT_VOLUME_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static VOLUME_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn volumes() -> std::sync::MutexGuard<'static, VolumeList> {
-    VOLUMES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// The volumes, locked for reading or editing. If the list was changed, the new copy is
+/// published for the hooks when this is released.
+struct VolumesGuard {
+    guard: std::sync::MutexGuard<'static, VolumeList>,
+    changed: bool,
+}
+
+impl std::ops::Deref for VolumesGuard {
+    type Target = VolumeList;
+
+    fn deref(&self) -> &VolumeList {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for VolumesGuard {
+    fn deref_mut(&mut self) -> &mut VolumeList {
+        self.changed = true;
+        &mut self.guard
+    }
+}
+
+impl Drop for VolumesGuard {
+    fn drop(&mut self) {
+        if self.changed {
+            // Runs before the mutex is released, so copies are published in edit order.
+            let copy = (!self.guard.is_empty()).then(|| Arc::new((*self.guard).clone()));
+            *SNAPSHOT
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = copy;
+        }
+    }
+}
+
+fn volumes() -> VolumesGuard {
+    VolumesGuard {
+        guard: VOLUMES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        changed: false,
+    }
+}
+
+/// The current volumes for an engine hook, or `None` when there are none. Never waits for an
+/// edit; the lock is only held for the instant it takes to swap the copy.
+fn snapshot() -> Option<Arc<VolumeList>> {
+    match SNAPSHOT.try_read() {
+        Ok(copy) => copy.clone(),
+        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
+/// Counts one event. A plain load and store, not an atomic add: these diagnostic counters
+/// sit in hot hooks, and a count lost to a race between threads does not matter.
+fn bump(counter: &std::sync::atomic::AtomicU64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    counter.store(counter.load(Relaxed).wrapping_add(1), Relaxed);
 }
 
 /// Top (surface height) of the highest water volume containing `p` (slime is
@@ -398,7 +500,9 @@ fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
         .fold(None, |a, z| Some(a.map_or(z, |a: f32| a.max(z))))
 }
 
-/// The contents of every volume containing `p`, or'ed together (0 if none).
+/// The contents of every volume containing `p`, or'ed together (0 if none). The reference
+/// the tests hold `VolumeList::contents_at` to.
+#[cfg(test)]
 fn contents_at(vols: &[Volume], p: [f32; 3]) -> c_int {
     vols.iter()
         .filter(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
@@ -525,7 +629,7 @@ mod engine_hook {
                     if let Ok(map) = OVERRIDES.try_lock() {
                         if let Some(&o) = map.get(&idx) {
                             level = c_int::from(o);
-                            HITS.fetch_add(1, Ordering::Relaxed);
+                            bump(&HITS);
                         }
                     }
                 }
@@ -604,18 +708,16 @@ mod engine_hook {
             let mut contents = original(this, pos, a3, a4);
             if !pos.is_null() {
                 // Never block inside an engine callback.
-                if let Ok(vols) = VOLUMES.try_lock() {
-                    if !vols.is_empty() {
-                        let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-                        let inside = if vols.may_contain(p) {
-                            contents_at(&vols, p)
-                        } else {
-                            0
-                        };
-                        if inside != 0 {
-                            contents |= inside;
-                            VOLUME_HITS.fetch_add(1, Ordering::Relaxed);
-                        }
+                if let Some(vols) = snapshot() {
+                    let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
+                    let inside = if vols.may_contain(p) {
+                        vols.contents_at(p)
+                    } else {
+                        0
+                    };
+                    if inside != 0 {
+                        contents |= inside;
+                        bump(&VOLUME_HITS);
                     }
                 }
             }
@@ -803,8 +905,119 @@ mod engine_hook {
         }
     }
 
-    /// Same, with the offset of `Ray_t::m_IsSwept` given explicitly.
-    #[allow(clippy::too_many_lines)] // one pass over the trace fields; splitting it would hide the layout
+    /// The fields of a `Ray_t` the water logic needs.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct RayFields {
+        pub(crate) start: [f32; 3],
+        pub(crate) delta: [f32; 3],
+        pub(crate) offset: [f32; 3],
+        pub(crate) extents: [f32; 3],
+    }
+
+    /// What a ray does to a trace result, decided by `plan_trace` and written by
+    /// `apply_water_to_trace_at`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(crate) enum TraceOutcome {
+        /// The ray starts and ends inside a volume: allsolid, fraction 0.
+        Inside { origin: [f32; 3], contents: c_int },
+        /// The ray starts inside a volume and leaves it: startsolid, plus the fraction at
+        /// which it left (when that is earlier than what the trace already has).
+        Leaves { left_at: Option<f32> },
+        /// The ray enters a volume from outside.
+        Enters {
+            origin: [f32; 3],
+            end: [f32; 3],
+            fraction: f32,
+            axis: usize,
+            min_face: bool,
+            plane_dist: f32,
+            contents: c_int,
+        },
+    }
+
+    /// The water logic, on plain values: what `ray` does to a trace whose fraction is
+    /// `current`, counting only the volumes whose contents `mask` asks for. `None` leaves
+    /// the trace alone.
+    pub(crate) fn plan_trace(
+        vols: &[Volume],
+        ray: &RayFields,
+        current: f32,
+        mask: u32,
+    ) -> Option<TraceOutcome> {
+        let RayFields {
+            start: s,
+            delta: d,
+            offset: off,
+            extents: ext,
+        } = *ray;
+        let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
+
+        // Rays that START inside a volume. A real water brush reports these as
+        // startsolid, and when the whole ray stays inside it as allsolid with
+        // fraction 0 and the end point at the start. The engine's water-height
+        // probe (a downward MASK_WATER ray from above the entity)
+        // depends on that: without it a probe starting inside a volume looks
+        // like "no water here" and the computed surface height collapses to
+        // the entity's own height.
+        let mut started_inside = false;
+        let mut left_at = 1.0f32;
+        for v in vols.iter().filter(|v| v.contents as u32 & mask != 0) {
+            let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
+            let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
+            let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
+            if !inside(s) {
+                continue;
+            }
+            started_inside = true;
+            left_at = left_at.min(segment_exit_fraction(s, d, lo, hi));
+            let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
+            if inside(e) {
+                return Some(TraceOutcome::Inside {
+                    origin,
+                    contents: v.contents,
+                });
+            }
+        }
+        if started_inside {
+            // Where it left: the client's water explosion measures the depth from that.
+            return Some(TraceOutcome::Leaves {
+                left_at: (left_at < current).then_some(left_at),
+            });
+        }
+
+        let mut best: Option<(f32, usize, bool, usize)> = None;
+        for (i, v) in vols
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.contents as u32 & mask != 0)
+        {
+            let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
+            let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
+            if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
+                if t < current && best.map_or(true, |b| t < b.0) {
+                    best = Some((t, axis, min_face, i));
+                }
+            }
+        }
+        let (t, axis, min_face, vi) = best?;
+        let v = &vols[vi];
+        let mut end = origin;
+        for i in 0..3 {
+            end[i] = d[i].mul_add(t, origin[i]);
+        }
+        Some(TraceOutcome::Enters {
+            origin,
+            end,
+            fraction: t,
+            axis,
+            min_face,
+            plane_dist: if min_face { -v.min[axis] } else { v.max[axis] },
+            contents: v.contents,
+        })
+    }
+
+    /// Same, with the offset of `Ray_t::m_IsSwept` given explicitly. Only the reads of the
+    /// ray and the writes of the trace are here; `plan_trace` decides what to write.
     pub(crate) unsafe fn apply_water_to_trace_at(
         vols: &[Volume],
         ray: *const u8,
@@ -827,38 +1040,24 @@ mod engine_hook {
             if ent == 0 {
                 return false;
             }
-            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
             if ray.add(swept_offset).read() == 0 {
                 return false; // not swept: nothing travels
             }
-            let s = [rf(0x00), rf(0x04), rf(0x08)];
-            let d = [rf(0x10), rf(0x14), rf(0x18)];
-            let off = [rf(0x20), rf(0x24), rf(0x28)];
-            let ext = [rf(0x30), rf(0x34), rf(0x38)];
-            let current = (trace.add(0x2c) as *const f32).read_unaligned();
+            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+            let fields = RayFields {
+                start: [rf(0x00), rf(0x04), rf(0x08)],
+                delta: [rf(0x10), rf(0x14), rf(0x18)],
+                offset: [rf(0x20), rf(0x24), rf(0x28)],
+                extents: [rf(0x30), rf(0x34), rf(0x38)],
+            };
+            let current = trace.add(0x2c).cast::<f32>().read_unaligned();
+            let Some(outcome) = plan_trace(vols, &fields, current, mask) else {
+                return false;
+            };
 
-            // Rays that START inside a volume. A real water brush reports these as
-            // startsolid, and when the whole ray stays inside it as allsolid with
-            // fraction 0 and the end point at the start. The engine's water-height
-            // probe (a downward MASK_WATER ray from above the entity)
-            // depends on that: without it a probe starting inside a volume looks
-            // like "no water here" and the computed surface height collapses to
-            // the entity's own height.
-            let mut started_inside = false;
-            let mut left_at = 1.0f32;
-            for v in vols.iter().filter(|v| v.contents as u32 & mask != 0) {
-                let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
-                let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
-                let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
-                if !inside(s) {
-                    continue;
-                }
-                started_inside = true;
-                left_at = left_at.min(segment_exit_fraction(s, d, lo, hi));
-                let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
-                if inside(e) {
-                    let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
-                    let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
+            let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
+            match outcome {
+                TraceOutcome::Inside { origin, contents } => {
                     for (i, &component) in origin.iter().enumerate() {
                         wf(i * 4, component);
                         wf(0x0c + i * 4, component);
@@ -868,7 +1067,7 @@ mod engine_hook {
                     trace.add(0x28).write(0);
                     trace.add(0x29).write(0);
                     wf(0x2c, 0.0); // fraction
-                    trace.add(0x30).cast::<i32>().write_unaligned(v.contents);
+                    trace.add(0x30).cast::<i32>().write_unaligned(contents);
                     trace.add(0x34).cast::<u16>().write_unaligned(0);
                     trace.add(0x36).write(1); // allsolid
                     trace.add(0x37).write(1); // startsolid
@@ -878,67 +1077,51 @@ mod engine_hook {
                         .cast::<usize>()
                         .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
                     ent_slot.write_unaligned(ent);
-                    return true;
                 }
-            }
-            if started_inside {
-                // Leaves the volume again: startsolid, plus where it left (the
-                // client's water explosion measures the depth from that).
-                trace.add(0x37).write(1);
-                if left_at < current {
-                    trace.add(0x38).cast::<f32>().write_unaligned(left_at);
-                }
-                return true;
-            }
-
-            let mut best: Option<(f32, usize, bool, usize)> = None;
-            for (i, v) in vols
-                .iter()
-                .enumerate()
-                .filter(|(_, v)| v.contents as u32 & mask != 0)
-            {
-                let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
-                let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
-                if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
-                    if t < current && best.map_or(true, |b| t < b.0) {
-                        best = Some((t, axis, min_face, i));
+                TraceOutcome::Leaves { left_at } => {
+                    trace.add(0x37).write(1);
+                    if let Some(fraction) = left_at {
+                        wf(0x38, fraction);
                     }
                 }
+                TraceOutcome::Enters {
+                    origin,
+                    end,
+                    fraction,
+                    axis,
+                    min_face,
+                    plane_dist,
+                    contents,
+                } => {
+                    for i in 0..3 {
+                        wf(i * 4, origin[i]); // startpos
+                        wf(0x0c + i * 4, end[i]); // endpos
+                        wf(0x18 + i * 4, 0.0); // plane.normal
+                    }
+                    wf(0x18 + axis * 4, if min_face { -1.0 } else { 1.0 });
+                    wf(0x24, plane_dist);
+                    trace.add(0x28).write(axis as u8); // plane.type: axial
+                    trace
+                        .add(0x29)
+                        .write(if min_face { 1u8 << axis } else { 0 }); // signbits
+                    wf(0x2c, fraction);
+                    trace.add(0x30).cast::<i32>().write_unaligned(contents);
+                    trace.add(0x34).cast::<u16>().write_unaligned(0); // dispFlags
+                    trace.add(0x36).write(0); // allsolid
+                    trace.add(0x37).write(0); // startsolid
+                    wf(0x38, 0.0); // fractionleftsolid
+                    trace
+                        .add(0x40)
+                        .cast::<usize>()
+                        .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
+                    trace.add(0x48).cast::<i16>().write_unaligned(0); // surface.surfaceProps
+                    trace.add(0x4a).cast::<u16>().write_unaligned(0); // surface.flags
+                    trace.add(0x50).cast::<i32>().write_unaligned(0); // hitgroup
+                    trace.add(0x54).cast::<i16>().write_unaligned(0); // physicsbone
+                    trace.add(0x60).cast::<i32>().write_unaligned(0); // hitbox
+                    ent_slot.write_unaligned(ent); // m_pEnt
+                }
             }
-            let Some((t, axis, min_face, vi)) = best else {
-                return false;
-            };
-            let v = &vols[vi];
-
-            let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
-            let origin = [s[0] + off[0], s[1] + off[1], s[2] + off[2]];
-            for i in 0..3 {
-                wf(i * 4, origin[i]); // startpos
-                wf(0x0c + i * 4, d[i].mul_add(t, origin[i])); // endpos
-                wf(0x18 + i * 4, 0.0); // plane.normal
-            }
-            wf(0x18 + axis * 4, if min_face { -1.0 } else { 1.0 });
-            wf(0x24, if min_face { -v.min[axis] } else { v.max[axis] }); // plane.dist
-            trace.add(0x28).write(axis as u8); // plane.type: axial
-            trace
-                .add(0x29)
-                .write(if min_face { 1u8 << axis } else { 0 }); // signbits
-            wf(0x2c, t); // fraction
-            trace.add(0x30).cast::<i32>().write_unaligned(v.contents);
-            trace.add(0x34).cast::<u16>().write_unaligned(0); // dispFlags
-            trace.add(0x36).write(0); // allsolid
-            trace.add(0x37).write(0); // startsolid
-            wf(0x38, 0.0); // fractionleftsolid
-            trace
-                .add(0x40)
-                .cast::<usize>()
-                .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
-            trace.add(0x48).cast::<i16>().write_unaligned(0); // surface.surfaceProps
-            trace.add(0x4a).cast::<u16>().write_unaligned(0); // surface.flags
-            trace.add(0x50).cast::<i32>().write_unaligned(0); // hitgroup
-            trace.add(0x54).cast::<i16>().write_unaligned(0); // physicsbone
-            trace.add(0x60).cast::<i32>().write_unaligned(0); // hitbox
-            ent_slot.write_unaligned(ent); // m_pEnt
             true
         }
     }
@@ -990,14 +1173,14 @@ mod engine_hook {
                 return;
             }
             // Never block inside an engine callback.
-            if let Ok(vols) = VOLUMES.try_lock() {
+            if let Some(vols) = snapshot() {
                 // A ray far from every volume changes nothing (and needs no world entity).
                 if ray_misses_bounds(vols.bounds, ray) {
                     return;
                 }
                 // Only the volumes whose contents the trace's mask asks for are considered.
                 if apply_water_to_trace_masked(&vols, ray, trace, world_entity(), mask) {
-                    TRACE_HITS.fetch_add(1, Ordering::Relaxed);
+                    bump(&TRACE_HITS);
                 }
             }
         }
@@ -1644,19 +1827,17 @@ mod engine_hook {
                 ];
                 // The lock must be gone before calling the original: it calls back
                 // into the point-contents hook, which uses try_lock.
-                if let Ok(vols) = VOLUMES.try_lock() {
-                    if !vols.is_empty() {
-                        action = clip_bubble_trail(&vols, f, t);
-                    }
+                if let Some(vols) = snapshot() {
+                    action = clip_bubble_trail(&vols, f, t);
                 }
             }
             match action {
                 BubbleClip::Keep => original(from, to, count),
                 BubbleClip::Skip => {
-                    BUBBLE_CLIPS.fetch_add(1, Ordering::Relaxed);
+                    bump(&BUBBLE_CLIPS);
                 }
                 BubbleClip::Clipped(a, b, frac) => {
-                    BUBBLE_CLIPS.fetch_add(1, Ordering::Relaxed);
+                    bump(&BUBBLE_CLIPS);
                     let n = if count > 0 {
                         ((count as f32 * frac).ceil() as c_int).max(1)
                     } else {
@@ -1735,14 +1916,12 @@ mod engine_hook {
                 o.add(2).read_unaligned(),
             ];
             // try_lock: never wait (the original calls back into the contents hook).
-            let inside = VOLUMES
-                .try_lock()
-                .is_ok_and(|v| !v.is_empty() && point_in_volumes(&v, p));
+            let inside = snapshot().is_some_and(|v| point_in_volumes(&v, p));
             if inside {
                 let level = this.add(ENTITY_WATER_LEVEL_OFFSET);
                 if level.read() < 2 {
                     level.write(2);
-                    EXPLOSION_FIXES.fetch_add(1, Ordering::Relaxed);
+                    bump(&EXPLOSION_FIXES);
                 }
             }
         }
@@ -1916,9 +2095,7 @@ mod engine_hook {
                 o.add(1).read_unaligned(),
                 o.add(2).read_unaligned(),
             ];
-            let inside = VOLUMES
-                .try_lock()
-                .is_ok_and(|v| surface_z_at(&v, origin).is_some());
+            let inside = snapshot().is_some_and(|v| surface_z_at(&v, origin).is_some());
             if !inside {
                 return false;
             }
@@ -1931,7 +2108,7 @@ mod engine_hook {
             let data = water_explosion_effect_data_with(origin, flags, scale, magnitude);
             let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
             f(c"WaterSurfaceExplosion".as_ptr().cast(), data.as_ptr());
-            EXPLOSIONS_REDIRECTED.fetch_add(1, Ordering::Relaxed);
+            bump(&EXPLOSIONS_REDIRECTED);
             true
         }
     }
@@ -3945,7 +4122,7 @@ mod tests {
             BUBBLE_TRAMPOLINE.store(fake_bubble_trail as *const () as usize, Ordering::SeqCst);
             BUBBLE_CALLS.lock().unwrap().clear();
             let clips = BUBBLE_CLIPS.load(Ordering::Relaxed);
-            VOLUMES.lock().unwrap().set(vec![Volume {
+            volumes().set(vec![Volume {
                 id: 1,
                 min: [0.0; 3],
                 max: [128.0; 3],
@@ -3968,8 +4145,8 @@ mod tests {
             // (The fake just proves the lock is free at call time.)
             unsafe extern "win64" fn lock_probe(_: *const f32, _: *const f32, _: c_int) {
                 assert!(
-                    VOLUMES.try_lock().is_ok(),
-                    "VOLUMES held across the original call"
+                    SNAPSHOT.try_write().is_ok(),
+                    "the volume snapshot is held across the original call"
                 );
             }
             BUBBLE_TRAMPOLINE.store(lock_probe as *const () as usize, Ordering::SeqCst);
@@ -3989,7 +4166,7 @@ mod tests {
             hook_bubble_trail(g.as_ptr(), to.as_ptr(), 50);
             assert!(BUBBLE_CALLS.lock().unwrap().is_empty());
 
-            VOLUMES.lock().unwrap().clear();
+            volumes().clear();
         }
     }
 
@@ -5049,6 +5226,75 @@ mod tests {
                 vtable[TRACE_RAY_SLOT], original,
                 "uninstall restores the slot"
             );
+        }
+    }
+
+    #[test]
+    fn lane_scan_agrees_with_the_plain_scan() {
+        let mut state = 0x2545_F491_u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / 16_777_216.0
+        };
+        let mut list = VolumeList::new();
+        for id in 0..40 {
+            let lo = [next() * 800.0, next() * 800.0, next() * 800.0];
+            let size = [next() * 200.0, next() * 200.0, next() * 200.0];
+            list.push(Volume {
+                id,
+                min: lo,
+                max: [lo[0] + size[0], lo[1] + size[1], lo[2] + size[2]],
+                contents: if id % 3 == 0 {
+                    CONTENTS_SLIME
+                } else {
+                    CONTENTS_WATER
+                },
+            });
+        }
+        let mut hits = 0;
+        for _ in 0..20_000 {
+            let p = [next() * 1000.0, next() * 1000.0, next() * 1000.0];
+            let expected = contents_at(&list, p);
+            hits += usize::from(expected != 0);
+            assert_eq!(list.contents_at(p), expected, "{p:?}");
+        }
+        assert!(hits > 0);
+        // Edges are inside, NaN is not.
+        let v = list[0];
+        assert_eq!(list.contents_at(v.min) & v.contents, v.contents);
+        assert_eq!(list.contents_at([f32::NAN, 1.0, 1.0]), 0);
+        list.retain(|v| v.id == 1);
+        assert_eq!(list.contents_at(list[0].min), list[0].contents);
+        list.clear();
+        assert_eq!(list.contents_at([0.0; 3]), 0);
+    }
+
+    #[test]
+    fn hooks_read_the_snapshot_published_by_every_edit() {
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        volumes().clear();
+        assert!(snapshot().is_none());
+        volumes().push(Volume {
+            id: 1,
+            min: [0.0; 3],
+            max: [10.0; 3],
+            contents: CONTENTS_WATER,
+        });
+        assert_eq!(snapshot().map(|v| v.len()), Some(1));
+        {
+            // A read through the guard does not republish; an edit does, once released.
+            let before = snapshot().unwrap();
+            let guard = volumes();
+            assert_eq!(guard.len(), 1);
+            drop(guard);
+            assert!(Arc::ptr_eq(&before, &snapshot().unwrap()));
+            let mut edit = volumes();
+            edit.retain(|v| v.id != 1);
+            assert_eq!(snapshot().map(|v| v.len()), Some(1), "published on release");
+            drop(edit);
+            assert!(snapshot().is_none());
         }
     }
 
