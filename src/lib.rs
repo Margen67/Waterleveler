@@ -233,10 +233,41 @@ impl Default for FluidSettings {
     }
 }
 
-fn overrides() -> std::sync::MutexGuard<'static, BTreeMap<i32, u8>> {
-    OVERRIDES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// How many entries `OVERRIDES` has, kept up to date by `OverridesGuard`, so the
+/// water-level hook (called for every entity) can skip the lock when there are none.
+static OVERRIDE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The overrides map, locked. When it is released the entry count is published.
+struct OverridesGuard(std::sync::MutexGuard<'static, BTreeMap<i32, u8>>);
+
+impl std::ops::Deref for OverridesGuard {
+    type Target = BTreeMap<i32, u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for OverridesGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for OverridesGuard {
+    fn drop(&mut self) {
+        // Runs before the mutex is released, so no reader sees a count that is
+        // older than the map it could then lock.
+        OVERRIDE_COUNT.store(self.0.len(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn overrides() -> OverridesGuard {
+    OverridesGuard(
+        OVERRIDES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 fn save_key() -> Option<CString> {
@@ -485,7 +516,12 @@ mod engine_hook {
                 let pev = *(this as *const u8).add(OFF_PEV).cast::<*const u8>();
                 if !pev.is_null() {
                     let idx = i32::from(*pev.add(OFF_EDICT_INDEX).cast::<i16>());
-                    // Never block inside an engine callback.
+                    // Never block inside an engine callback. No overrides (the usual
+                    // case): nothing to look up, so no lock either.
+                    if OVERRIDE_COUNT.load(Ordering::Relaxed) == 0 {
+                        original(this, level);
+                        return;
+                    }
                     if let Ok(map) = OVERRIDES.try_lock() {
                         if let Some(&o) = map.get(&idx) {
                             level = c_int::from(o);
@@ -907,6 +943,29 @@ mod engine_hook {
         }
     }
 
+    /// True if the ray certainly touches no volume: the box around its segment (grown by
+    /// the ray's extents) is separated from the box around every volume. Anything else,
+    /// NaN included, is "maybe". Reads the same ray fields as `apply_water_to_trace_at`.
+    pub(crate) unsafe fn ray_misses_bounds(
+        bounds: Option<([f32; 3], [f32; 3])>,
+        ray: *const u8,
+    ) -> bool {
+        let Some((lo, hi)) = bounds else {
+            return true; // no volumes
+        };
+        unsafe {
+            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+            let s = [rf(0x00), rf(0x04), rf(0x08)];
+            let d = [rf(0x10), rf(0x14), rf(0x18)];
+            let ext = [rf(0x30), rf(0x34), rf(0x38)];
+            (0..3).any(|i| {
+                let e = s[i] + d[i];
+                let (smin, smax) = if e < s[i] { (e, s[i]) } else { (s[i], e) };
+                smax < lo[i] - ext[i] || smin > hi[i] + ext[i]
+            })
+        }
+    }
+
     /// Replacement for `IEngineTrace::TraceRay`.
     pub(crate) unsafe extern "win64" fn hook_trace_ray(
         this: *mut c_void,
@@ -932,6 +991,10 @@ mod engine_hook {
             }
             // Never block inside an engine callback.
             if let Ok(vols) = VOLUMES.try_lock() {
+                // A ray far from every volume changes nothing (and needs no world entity).
+                if ray_misses_bounds(vols.bounds, ray) {
+                    return;
+                }
                 // Only the volumes whose contents the trace's mask asks for are considered.
                 if apply_water_to_trace_masked(&vols, ray, trace, world_entity(), mask) {
                     TRACE_HITS.fetch_add(1, Ordering::Relaxed);
@@ -4600,6 +4663,67 @@ mod tests {
         list.clear();
         assert_eq!(list.bounds, None);
         assert!(!list.may_contain([0.0; 3]));
+    }
+
+    #[test]
+    fn rays_that_miss_the_bounds_never_touch_a_volume() {
+        unsafe {
+            let mut list = VolumeList::new();
+            assert!(ray_misses_bounds(
+                list.bounds,
+                make_ray([0.0; 3], [0.0, 0.0, -10.0], [0.0; 3], [0.0; 3], true).as_ptr()
+            ));
+            list.push(cube()[0]);
+            list.push(Volume {
+                id: 2,
+                min: [1000.0, -50.0, 20.0],
+                max: [1100.0, 50.0, 60.0],
+                contents: CONTENTS_SLIME,
+            });
+            // A deterministic spread of rays: lines, hulls, long and short, starting in and out.
+            let mut seed = 0x1234_5678_u32;
+            let mut next = |range: f32| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((seed >> 8) as f32 / 16_777_216.0).mul_add(range, -(range / 2.0))
+            };
+            let (mut missed, mut hit) = (0, 0);
+            for _ in 0..20_000 {
+                let start = [next(2600.0) + 500.0, next(600.0), next(600.0) + 60.0];
+                let delta = [next(1500.0), next(400.0), next(400.0)];
+                let ext = if next(2.0) > 0.0 {
+                    [0.0; 3]
+                } else {
+                    [next(60.0).abs(), next(60.0).abs(), next(60.0).abs()]
+                };
+                let ray = make_ray(start, delta, [0.0; 3], ext, true);
+                let mut tr = miss_trace();
+                let touched = apply_water_to_trace(&list, ray.as_ptr(), tr.as_mut_ptr(), 0x1234);
+                if ray_misses_bounds(list.bounds, ray.as_ptr()) {
+                    missed += 1;
+                    assert!(!touched, "start {start:?} delta {delta:?} ext {ext:?}");
+                    assert_eq!(tr, miss_trace());
+                } else {
+                    hit += 1;
+                }
+            }
+            assert!(missed > 1000 && hit > 1000, "{missed} missed, {hit} not");
+        }
+    }
+
+    #[test]
+    fn override_count_follows_the_overrides_map() {
+        let _g = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        overrides().clear();
+        assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 0);
+        overrides().insert(5, 1);
+        overrides().insert(9, 2);
+        assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 2);
+        overrides().remove(&5);
+        assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 1);
+        overrides().clear();
+        assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 0);
     }
 
     #[test]
