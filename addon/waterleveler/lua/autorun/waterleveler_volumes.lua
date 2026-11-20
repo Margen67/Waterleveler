@@ -315,7 +315,6 @@ if CLIENT then
             ["$basetexture"] = base,
             ["$bumpmap"] = bump,
             ["$translucent"] = 1,
-            ["$nocull"] = 1,
             ["$bumpframe"] = 0,
             ["$frame"] = 0
         });
@@ -353,6 +352,8 @@ if CLIENT then
             color = color_white,
             vcol = false,
             directional = true,
+            cull = true, -- single-sided: the inside is drawn with the $bottommaterial (see boxFaces)
+            sided = true,
             info = {
                 baseFrames = baseFrames,
                 bumpFrames = bumpFrames
@@ -626,8 +627,7 @@ if CLIENT then
         if entry.vcol then r, g, b2, a2 = entry.color.r, entry.color.g, entry.color.b, entry.color.a; end
         if not entry.cull then outward = nil; end
         emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward);
-        if outward then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward); end
-        return outward and 2 or 1;
+        if outward and not entry.oneSided then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward); end
     end
 
     local function setFaceState(entry)
@@ -642,6 +642,26 @@ if CLIENT then
             render.SetColorModulation(col.r / 255, col.g / 255, col.b / 255);
             render.SetBlend(col.a / 255);
         end
+    end
+
+    -- A copy of a material entry that draws only the outward quad of a face.
+    local oneSidedCache = setmetatable({}, {
+        __mode = "k"
+    });
+
+    local function oneSided(entry)
+        local copy = oneSidedCache[entry];
+        if not copy then
+            copy = setmetatable({
+                cull = true,
+                oneSided = true
+            }, {
+                __index = entry
+            });
+
+            oneSidedCache[entry] = copy;
+        end
+        return copy;
     end
 
     local function boxFaces(bx, top, body)
@@ -665,8 +685,9 @@ if CLIENT then
             vLen = dy,
             outward = Vector(0, 0, 1)
         };
+
         -- Sides and bottom first, surface last, so the surface blends over them.
-        return {
+        local faces = {
             {
                 entry = body, -- bottom
                 a = p000,
@@ -719,6 +740,36 @@ if CLIENT then
             },
             surface,
         };
+
+        if not (top.sided and top.beneath) then return faces; end
+        -- Single-sided water: the outside of every face shows the water, the inside shows its
+        -- $bottommaterial, like the two sides of a brush.
+        local under = oneSided(mat(top.beneath));
+        local both = {};
+        for _, f in ipairs(faces) do
+            both[#both + 1] = {
+                entry = under,
+                a = f.a,
+                b = f.b,
+                c = f.c,
+                d = f.d,
+                uLen = f.uLen,
+                vLen = f.vLen,
+                outward = -f.outward
+            };
+
+            both[#both + 1] = {
+                entry = oneSided(f.entry),
+                a = f.a,
+                b = f.b,
+                c = f.c,
+                d = f.d,
+                uLen = f.uLen,
+                vLen = f.vLen,
+                outward = f.outward
+            };
+        end
+        return both;
     end
 
     local function destroyBuilt(bx)
@@ -737,9 +788,6 @@ if CLIENT then
     local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
     local function drawVolume(bx)
         local top = mat(bx.material ~= "" and bx.material or defaultMaterial);
-        -- From inside, the faces use the water's $bottommaterial, like the underside of a brush.
-        local inside = top.beneath ~= nil and EyePos():WithinAABox(bx.mins, bx.maxs);
-        if inside then top = mat(top.beneath); end
         local body = top;
         local now = CurTime();
         if top.animate then top.animate(now); end
@@ -778,13 +826,13 @@ if CLIENT then
             moved = true;
         end
 
-        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins) .. (inside and "/inside" or "");
+        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins);
         if not owner.built or owner.built.key ~= key then
             destroyBuilt(owner);
             local list = {};
             for _, f in ipairs(boxFaces(owner, top, body)) do
                 local m = Mesh(f.entry.mat);
-                mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and 2 or 1);
+                mesh.Begin(m, MATERIAL_QUADS, f.entry.cull and not f.entry.oneSided and 2 or 1);
                 emitFace(f.entry, f.a, f.b, f.c, f.d, f.uLen, f.vLen, f.outward);
                 mesh.End();
                 list[#list + 1] = {
