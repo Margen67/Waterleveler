@@ -330,18 +330,13 @@ if CLIENT then
         -- brush reflects the sky: the .vmt has env_cubemap, masked by the bump map's alpha.
         params["$envmap"] = params["$envmap"] or "env_cubemap";
         params["$normalmapalphaenvmapmask"] = params["$normalmapalphaenvmapmask"] or 1;
-        -- 21 frames per second, like the original's proxies (a material can have only one
-        -- AnimatedTexture proxy, so the bump map's frame counter is a ramp).
+        -- 21 frames per second, like the original's proxies (the bump map's frame is set from Lua: a
+        -- LinearRamp proxy counts past the last frame, which the engine clamps, so it stood still).
         params.Proxies = {
             AnimatedTexture = {
                 animatedtexturevar = "$basetexture",
                 animatedtextureframenumvar = "$frame",
                 animatedtextureframerate = 21
-            },
-            LinearRamp = {
-                rate = 21,
-                initialValue = 0,
-                resultVar = "$bumpframe"
             }
         };
 
