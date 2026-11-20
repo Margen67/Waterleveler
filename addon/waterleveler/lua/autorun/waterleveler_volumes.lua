@@ -629,6 +629,9 @@ if CLIENT then
             mesh.Normal(n);
             mesh.TangentS(s);
             mesh.TangentT(t);
+            -- Bump-mapped VertexLitGeneric reads its tangent from the user data (S, then the
+            -- sign of the binormal); without it the bump map has no effect on a mesh.
+            mesh.UserData(s.x, s.y, s.z, 1);
             mesh.TexCoord(0, vert[2], vert[3]);
             mesh.AdvanceVertex();
         end
