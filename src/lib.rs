@@ -325,6 +325,7 @@ impl VolumeList {
     }
 
     /// Replaces every volume.
+    #[cfg(test)]
     fn set(&mut self, volumes: Vec<Volume>) {
         self.list = volumes;
         self.refresh_bounds();
