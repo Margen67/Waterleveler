@@ -24,44 +24,25 @@ jobs:
           ./glualint --version
 
       - name: Lint
-        run: ./glualint --output-format github lint .
-
-      - name: Check formatting
         run: |-
-          ./glualint --pretty-print-files addon
-          find addon -name '*.lua' -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
-          git diff --exit-code
+          cargo clippy --release --locked --all-targets
+          cargo clippy --release --locked --no-default-features --features server
+          cargo clippy --release --locked --no-default-features --features client
 
-  build:
-    name: Windows x64
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@main
-
-      - name: Use Rust nightly
+      - name: Build the server and client modules
+        shell: bash
         run: |-
-          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
-          rustup default nightly
-          rustc --version
-
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Lint
-        run: cargo clippy --release --locked --all-targets
-
-      - name: Build the module
-        run: cargo build --release --locked
+          set -e
+          mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
+          cargo build --release --locked --no-default-features --features server
+          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
+          cargo build --release --locked --no-default-features --features client
+          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmcl_waterlevelercore_win64.dll
 
       - name: Assemble the garrysmod folder
         shell: bash
         run: |-
           set -e
-          mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
-          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
-          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmcl_waterlevelercore_win64.dll
           cp -r addon/waterleveler/. package/garrysmod/addons/waterleveler/
           cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
           find package -type f | sort

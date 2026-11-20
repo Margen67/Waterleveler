@@ -49,6 +49,10 @@
 // code is compiled (and unit-tested) but not called.
 #![cfg_attr(not(windows), allow(dead_code))]
 
+#[cfg(not(any(feature = "server", feature = "client")))]
+compile_error!("enable the `server` or the `client` feature");
+
+#[cfg(feature = "server")]
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -65,8 +69,10 @@ const LUA_TNUMBER: c_int = 3;
 const LUA_TTABLE: c_int = 5;
 const LUA_TUSERDATA: c_int = 7;
 
+#[cfg(feature = "server")]
 const DEFAULT_SAVE_KEY: &str = "m_nWaterLevel";
 const HOOK_ID: &CStr = c"gmsv_waterlevel";
+#[cfg(feature = "server")]
 const ORIG_KEY: &CStr = c"__waterlevel_orig";
 
 // ---------------------------------------------------------------------------
@@ -199,11 +205,14 @@ unsafe fn load_api() -> Option<Api> {
 // State
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "server")]
 /// Entity index -> overridden water level (0..=3).
 static OVERRIDES: Mutex<BTreeMap<i32, u8>> = Mutex::new(BTreeMap::new());
+#[cfg(feature = "server")]
 /// `None` = default key, `Some("")` = engine writes disabled.
 static SAVE_KEY: Mutex<Option<String>> = Mutex::new(None);
 
+#[cfg(feature = "server")]
 /// The settings of a fluid controller (`fluidparams_t`) besides its surface plane.
 ///
 /// A map's water brush has torque, viscosity and aerodynamics at 0 (its fluid
@@ -220,6 +229,7 @@ pub struct FluidSettings {
     pub contents: c_int,
 }
 
+#[cfg(feature = "server")]
 impl Default for FluidSettings {
     fn default() -> Self {
         Self {
@@ -233,13 +243,16 @@ impl Default for FluidSettings {
     }
 }
 
+#[cfg(feature = "server")]
 /// How many entries `OVERRIDES` has, kept up to date by `OverridesGuard`, so the
 /// water-level hook (called for every entity) can skip the lock when there are none.
 static OVERRIDE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(feature = "server")]
 /// The overrides map, locked. When it is released the entry count is published.
 struct OverridesGuard(std::sync::MutexGuard<'static, BTreeMap<i32, u8>>);
 
+#[cfg(feature = "server")]
 impl std::ops::Deref for OverridesGuard {
     type Target = BTreeMap<i32, u8>;
 
@@ -248,12 +261,14 @@ impl std::ops::Deref for OverridesGuard {
     }
 }
 
+#[cfg(feature = "server")]
 impl std::ops::DerefMut for OverridesGuard {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
+#[cfg(feature = "server")]
 impl Drop for OverridesGuard {
     fn drop(&mut self) {
         // Runs before the mutex is released, so no reader sees a count that is
@@ -262,6 +277,7 @@ impl Drop for OverridesGuard {
     }
 }
 
+#[cfg(feature = "server")]
 fn overrides() -> OverridesGuard {
     OverridesGuard(
         OVERRIDES
@@ -270,6 +286,7 @@ fn overrides() -> OverridesGuard {
     )
 }
 
+#[cfg(feature = "server")]
 fn save_key() -> Option<CString> {
     let key = SAVE_KEY
         .lock()
@@ -726,12 +743,17 @@ mod engine_hook {
     use super::*;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+    #[cfg(feature = "server")]
     /// Bytes overwritten at the function entry (14-byte absolute jmp + 1 nop).
     pub(crate) const STOLEN: usize = 15;
+    #[cfg(feature = "server")]
     pub(crate) const TRAMPOLINE_SIZE: usize = STOLEN + 14;
+    #[cfg(feature = "server")]
     pub(crate) const OFF_PEV: usize = 0x30;
+    #[cfg(feature = "server")]
     pub(crate) const OFF_EDICT_INDEX: usize = 6;
 
+    #[cfg(feature = "server")]
     /// Signature of the function. `??` bytes are the vtable displacement of
     /// the `NetworkStateChanged` call. The 0x2ab offsets are deliberately NOT
     /// wildcarded: they double as a check that the datamap layout matches.
@@ -740,7 +762,9 @@ mod engine_hook {
                            38 91 AB 02 00 00 74 17 48 8B 01 48 8D 91 AB 02 \
                            00 00 FF 90 ?? ?? 00 00 40 88 BE AB 02 00 00";
 
+    #[cfg(feature = "server")]
     pub(crate) static TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "server")]
     pub(crate) static HITS: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) fn parse_sig(sig: &str) -> Vec<Option<u8>> {
@@ -780,6 +804,7 @@ mod engine_hook {
         out
     }
 
+    #[cfg(feature = "server")]
     /// `jmp [rip+0]; dq hook; nop` - 15 bytes written over the function entry.
     pub(crate) fn build_detour(hook: u64) -> [u8; STOLEN] {
         let mut b = [0x90u8; STOLEN];
@@ -790,6 +815,7 @@ mod engine_hook {
         b
     }
 
+    #[cfg(feature = "server")]
     /// The stolen instructions followed by `jmp [rip+0]; dq resume`.
     pub(crate) fn build_trampoline(stolen: &[u8], resume: u64) -> [u8; TRAMPOLINE_SIZE] {
         assert_eq!(stolen.len(), STOLEN);
@@ -802,6 +828,7 @@ mod engine_hook {
         b
     }
 
+    #[cfg(feature = "server")]
     /// The replacement for `CBaseEntity::SetWaterLevel`. Windows x64 calling
     /// convention on every OS, because the original is a Windows function.
     pub(crate) unsafe extern "win64" fn hook_set_water_level(this: *mut c_void, level: c_int) {
@@ -840,6 +867,7 @@ mod engine_hook {
         pub flush: unsafe fn(*mut u8, usize),
     }
 
+    #[cfg(feature = "server")]
     /// `CBaseEntity::UpdateWaterState` - used only to locate the engine's
     /// `enginetrace` pointer: the `mov rcx,[rip+disp32]` inside it (disp32 at
     /// byte 91) loads the `IEngineTrace` object whose vtable slot 0 is
@@ -852,6 +880,7 @@ mod engine_hook {
         E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 54 24 20 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
     pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 91;
 
+    #[cfg(feature = "client")]
     /// client.dll: `C_BaseEntity::UpdateWaterState` loads the client's `enginetrace`
     /// the same way (`mov rcx,[rip+disp32]`, `GetPointContents`, test `MASK_WATER`). The
     /// pattern is only the load and the test, so it does not depend on the function's
@@ -859,6 +888,7 @@ mod engine_hook {
     pub(crate) const CLIENT_TRACE_SIG: &str =
         "48 8B 0D ?? ?? ?? ?? 48 8D 54 24 ?? 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
 
+    #[cfg(feature = "client")]
     /// The `enginetrace` pointer variable loaded by the instruction at `at`.
     pub(crate) const unsafe fn trace_global_from_load(at: *const u8) -> *const *mut c_void {
         unsafe {
@@ -867,10 +897,13 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "client")]
     /// `IClientEntityList` (client realm). Its vtable slot 3 is GetClientEntity(int).
     pub(crate) static CLIENT_ENTITY_LIST: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "client")]
     pub(crate) const CLIENT_GET_ENTITY_SLOT: usize = 3;
 
+    #[cfg(feature = "server")]
     /// Address of the `enginetrace` pointer variable referenced by
     /// `UpdateWaterState` (`func` = start of that function).
     pub(crate) const unsafe fn trace_global_from(func: *const u8) -> *const *mut c_void {
@@ -1439,12 +1472,14 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// Walks the executable sections of a loaded PE image (`base` = module
     /// base) and returns the single match of [`SIG`].
     pub(crate) unsafe fn scan_image(base: *const u8) -> Result<*mut u8, &'static str> {
         unsafe { scan_sig(base, SIG) }
     }
 
+    #[cfg(feature = "server")]
     /// `83 F9 FF  74 ??  48 8B 35 <entity array>  8B C1  25 FF 3F 00 00
     /// C1 E9 0E  48 C1 E0 05  39 4C 30 10`: the engine's "entity from handle"
     /// idiom (entries are 32 bytes: pointer at +8, serial at +0x10). It occurs
@@ -1452,8 +1487,10 @@ mod engine_hook {
     pub(crate) const ENTITY_ARRAY_SIG: &str =
         "83 F9 FF 74 ?? 48 8B 35 ?? ?? ?? ?? 8B C1 25 FF 3F 00 00 \
                                         C1 E9 0E 48 C1 E0 05 39 4C 30 10";
+    #[cfg(feature = "server")]
     pub(crate) static ENTITY_ARRAY_GLOBAL: AtomicUsize = AtomicUsize::new(0);
 
+    #[cfg(feature = "server")]
     /// Address of the global holding the entity array, if every match of the
     /// idiom agrees on it.
     pub(crate) unsafe fn entity_array_global(base: *const u8) -> Result<usize, &'static str> {
@@ -1476,25 +1513,34 @@ mod engine_hook {
     }
 
     /// The world entity (entry 0 of the entity array), or 0 if unknown.
+    #[allow(clippy::needless_return)] // the server branch is the tail only when no client branch exists
     pub(crate) unsafe fn world_entity() -> usize {
         unsafe {
-            let list = CLIENT_ENTITY_LIST.load(Ordering::Relaxed);
-            if list != 0 {
-                // Client realm: entity 0 of the client's entity list.
-                let vtable = (list as *const *const usize).read();
-                let get: unsafe extern "win64" fn(usize, c_int) -> usize =
-                    std::mem::transmute(vtable.add(CLIENT_GET_ENTITY_SLOT).read());
-                return get(list, 0);
+            #[cfg(feature = "client")]
+            {
+                let list = CLIENT_ENTITY_LIST.load(Ordering::Relaxed);
+                if list != 0 {
+                    // Client realm: entity 0 of the client's entity list.
+                    let vtable = (list as *const *const usize).read();
+                    let get: unsafe extern "win64" fn(usize, c_int) -> usize =
+                        std::mem::transmute(vtable.add(CLIENT_GET_ENTITY_SLOT).read());
+                    return get(list, 0);
+                }
             }
-            let g = ENTITY_ARRAY_GLOBAL.load(Ordering::Relaxed);
-            if g == 0 {
-                return 0;
+            #[cfg(feature = "server")]
+            {
+                let g = ENTITY_ARRAY_GLOBAL.load(Ordering::Relaxed);
+                if g == 0 {
+                    return 0;
+                }
+                let array = (g as *const usize).read_unaligned();
+                if array == 0 {
+                    return 0;
+                }
+                return ((array + 8) as *const usize).read_unaligned();
             }
-            let array = (g as *const usize).read_unaligned();
-            if array == 0 {
-                return 0;
-            }
-            ((array + 8) as *const usize).read_unaligned()
+            #[cfg(not(feature = "server"))]
+            0
         }
     }
 
@@ -1582,6 +1628,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// Detours `target`. Returns the original bytes for [`uninstall`].
     pub(crate) unsafe fn install(
         target: *mut u8,
@@ -1619,6 +1666,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn uninstall(target: *mut u8, original: &[u8; STOLEN], p: &Platform) {
         unsafe {
             if let Some(old) = (p.make_writable)(target, STOLEN) {
@@ -1643,14 +1691,18 @@ mod engine_hook {
     // then get buoyancy and drag from vphysics. DestroyFluidController is
     // slot 12 (SDK order; slots 8 and 11 were both confirmed).
 
+    #[cfg(feature = "server")]
     /// Finds `mov rcx,[physenv]; lea r8,[..]; mov rdx,rsi; mov r9,[rcx];
     /// call [r9+0x58]` in the world-setup code. The rip displacement of the
     /// first instruction is the `physenv` global.
     pub(crate) const PHYSENV_SIG: &str =
         "48 8B 0D ?? ?? ?? ?? 4C 8D 85 ?? ?? ?? ?? 48 8B D6 4C 8B 09 41 FF 51 58";
+    #[cfg(feature = "server")]
     pub(crate) const CREATE_FLUID_SLOT: usize = 11;
+    #[cfg(feature = "server")]
     pub(crate) const DESTROY_FLUID_SLOT: usize = 12;
 
+    #[cfg(feature = "server")]
     /// Address of the engine's `physenv` variable.
     pub(crate) const unsafe fn physenv_global_from(func: *const u8) -> *const *mut c_void {
         unsafe {
@@ -1659,6 +1711,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// `fluidparams_t` (x64 layout).
     #[repr(C)]
     pub(crate) struct FluidParams {
@@ -1672,10 +1725,13 @@ mod engine_hook {
         pub contents: i32,
     }
 
+    #[cfg(feature = "server")]
     type CreateFluidFn =
         unsafe extern "win64" fn(*mut c_void, *mut c_void, *const FluidParams) -> *mut c_void;
+    #[cfg(feature = "server")]
     type DestroyFluidFn = unsafe extern "win64" fn(*mut c_void, *mut c_void);
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn create_fluid(
         env: *mut c_void,
         object: *mut c_void,
@@ -1688,17 +1744,23 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// `IPhysicsObject` vtable slots (confirmed in the world water setup:
     /// `call [rbx+0xb8]`, `or ax,0x200`, `call [rbx+0xb0]`).
     pub(crate) const OBJ_SET_CALLBACK_FLAGS_SLOT: usize = 0xb0 / 8;
+    #[cfg(feature = "server")]
     pub(crate) const OBJ_GET_CALLBACK_FLAGS_SLOT: usize = 0xb8 / 8;
+    #[cfg(feature = "server")]
     /// The engine ORs this into the world water object before creating its
     /// fluid controller (`CALLBACK_GLOBAL_TOUCH_STATIC`, unconfirmed name).
     pub(crate) const FLUID_OBJECT_CALLBACK_FLAG: u16 = 0x200;
 
+    #[cfg(feature = "server")]
     type GetFlagsFn = unsafe extern "win64" fn(*mut c_void) -> u16;
+    #[cfg(feature = "server")]
     type SetFlagsFn = unsafe extern "win64" fn(*mut c_void, u16);
 
+    #[cfg(feature = "server")]
     /// Mirrors the engine's setup of a water object. Returns the old flags.
     pub(crate) unsafe fn add_fluid_callback_flag(object: *mut c_void) -> u16 {
         unsafe {
@@ -1713,6 +1775,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn destroy_fluid(env: *mut c_void, fluid: *mut c_void) {
         unsafe {
             let vtable = (env as *const *const usize).read();
@@ -1733,29 +1796,40 @@ mod engine_hook {
     // EFL_TOUCHING_FLUID and sends ENTITY_EVENT_WATER_UNTOUCH, no splash.
     // (The signature covers the entity offsets and slots used here.)
 
+    #[cfg(feature = "server")]
     pub(crate) const FLUID_END_TOUCH_SIG: &str = "48 89 5C 24 10 48 89 7C 24 18 41 56 48 83 EC 20 \
         FF 81 F0 01 00 00 4D 8B F0 48 8B DA 48 8B F9 48 85 D2 0F 84 ?? ?? ?? ?? 4D 85 C0 74 ?? \
         48 8B 02 48 8B CA 48 89 74 24 30 FF 90 88 00 00 00 48 8B F0 48 85 C0 74 ?? \
         48 8B D0 48 8B CF E8 ?? ?? ?? ?? 0F 2F 05 ?? ?? ?? ?? 72 ?? 4C 8B C6 48 8B D3 49 8B CE \
         E8 ?? ?? ?? ?? 81 A6 90 01 00 00 FF FF F7 FF 49 8B CE 49 8B 06 48 8B 1E FF 50 30 \
         4C 63 C0 BA 01 00 00 00 48 8B CE FF 93 E8 02 00 00 FF 8F F0 01 00 00";
+    #[cfg(feature = "server")]
     /// Whole instructions covered by the 14-byte jump.
     pub(crate) const FLUID_END_TOUCH_STOLEN: usize = 16;
+    #[cfg(feature = "server")]
     pub(crate) static FLUID_END_TOUCH_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "server")]
     /// `IPhysicsObject::GetGameData` (the entity), vtable offset 0x88.
     pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x88 / 8;
+    #[cfg(feature = "server")]
     /// `CBaseEntity::m_iEFlags` and its `EFL_TOUCHING_FLUID` bit.
     pub(crate) const ENTITY_EFLAGS_OFFSET: usize = 0x190;
+    #[cfg(feature = "server")]
     pub(crate) const EFL_TOUCHING_FLUID: u32 = 0x80000;
+    #[cfg(feature = "server")]
     /// `CBaseEntity::OnEntityEvent(event`, data), vtable offset 0x2e8.
     pub(crate) const ENTITY_EVENT_SLOT: usize = 0x2e8 / 8;
+    #[cfg(feature = "server")]
     pub(crate) const ENTITY_EVENT_WATER_UNTOUCH: c_int = 1;
 
+    #[cfg(feature = "server")]
     /// Controllers destroyed by this module (address, contents) that
     /// vphysics objects may still point at.
     static DEAD_FLUIDS: Mutex<Vec<(usize, c_int)>> = Mutex::new(Vec::new());
+    #[cfg(feature = "server")]
     const DEAD_FLUIDS_MAX: usize = 256;
 
+    #[cfg(feature = "server")]
     pub(crate) fn fluid_died(controller: usize, contents: c_int) {
         let mut dead = DEAD_FLUIDS
             .lock()
@@ -1767,6 +1841,7 @@ mod engine_hook {
         dead.push((controller, contents));
     }
 
+    #[cfg(feature = "server")]
     /// A new controller may reuse a dead one's address.
     pub(crate) fn fluid_born(controller: usize) {
         DEAD_FLUIDS
@@ -1775,6 +1850,7 @@ mod engine_hook {
             .retain(|d| d.0 != controller);
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn forget_dead_fluids() {
         DEAD_FLUIDS
             .lock()
@@ -1782,6 +1858,7 @@ mod engine_hook {
             .clear();
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe extern "win64" fn hook_fluid_end_touch(
         this: *mut c_void,
         object: *mut c_void,
@@ -1836,16 +1913,21 @@ mod engine_hook {
     // The hook clips the segment to the volume it is in (or enters) first and
     // scales `count` by the kept fraction; everything else is left alone.
 
+    #[cfg(feature = "server")]
     pub(crate) const BUBBLE_TRAIL_SIG: &str =
         "48 8B C4 48 89 58 08 48 89 70 10 57 48 81 EC E0 00 00 00 \
                                         F3 0F 10 49 08 41 8B F0 0F 29 70 E8 0F 28 D1 \
                                         F3 0F 58 15 ?? ?? ?? ?? 0F 29 78 D8 48 8B FA \
                                         44 0F 29 48 B8 48 8B D9 E8";
+    #[cfg(feature = "server")]
     /// Whole instructions covered by the 14-byte jump.
     pub(crate) const BUBBLE_TRAIL_STOLEN: usize = 19;
+    #[cfg(feature = "server")]
     pub(crate) static BUBBLE_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "server")]
     pub(crate) static BUBBLE_CLIPS: AtomicU64 = AtomicU64::new(0);
 
+    #[cfg(feature = "server")]
     /// A detour of arbitrary stolen length.
     pub(crate) struct Patch {
         pub target: usize,
@@ -1853,6 +1935,7 @@ mod engine_hook {
         pub trampoline: usize,
     }
 
+    #[cfg(feature = "server")]
     /// Detours `target` (first `stolen` bytes must be whole, position
     /// independent instructions and match `sig`). The trampoline address is
     /// returned in the patch.
@@ -1903,6 +1986,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn uninstall_patch(patch: &Patch, p: &Platform) {
         unsafe {
             let target = patch.target as *mut u8;
@@ -1918,6 +2002,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// Parameter interval `[t0, t1]` (clamped to 0..1) in which the segment
     /// `s + t*d` lies inside the box. `None` if it never does.
     pub(crate) fn clip_segment_to_box(
@@ -1947,6 +2032,7 @@ mod engine_hook {
         Some((t0, t1))
     }
 
+    #[cfg(feature = "server")]
     #[derive(Debug, PartialEq)]
     pub(crate) enum BubbleClip {
         /// Call the engine function unchanged.
@@ -1957,6 +2043,7 @@ mod engine_hook {
         Clipped([f32; 3], [f32; 3], f32),
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn clip_bubble_trail(vols: &[Volume], from: [f32; 3], to: [f32; 3]) -> BubbleClip {
         let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
         let len = d[2].mul_add(d[2], d[1].mul_add(d[1], d[0] * d[0])).sqrt();
@@ -2007,6 +2094,7 @@ mod engine_hook {
         BubbleClip::Clipped(at(a), at(b), b - a)
     }
 
+    #[cfg(feature = "server")]
     /// Replacement for `UTIL_BubbleTrail` (Windows x64 convention).
     pub(crate) unsafe extern "win64" fn hook_bubble_trail(
         from: *const f32,
@@ -2068,6 +2156,7 @@ mod engine_hook {
     // (+0x33c is the entity's absolute origin.) An entity whose origin is in a
     // volume gets its water level raised to 2 before the original runs.
 
+    #[cfg(feature = "server")]
     /// Per function: the prologue of each known build (tried in order).
     /// Newer builds store rbx at [rsp+0x10] and reshuffle the pushes.
     pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
@@ -2085,6 +2174,7 @@ mod engine_hook {
         ],
     ];
 
+    #[cfg(feature = "server")]
     /// The first alternative of target `i` that matches exactly once.
     pub(crate) unsafe fn find_explosion_target(
         base: *const u8,
@@ -2101,15 +2191,20 @@ mod engine_hook {
             Err(last)
         }
     }
+    #[cfg(feature = "server")]
     pub(crate) static EXPLOSION_TRAMPOLINES: [AtomicUsize; 3] = [
         AtomicUsize::new(0),
         AtomicUsize::new(0),
         AtomicUsize::new(0),
     ];
+    #[cfg(feature = "server")]
     pub(crate) static EXPLOSION_FIXES: AtomicU64 = AtomicU64::new(0);
+    #[cfg(feature = "server")]
     pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2ab;
+    #[cfg(feature = "server")]
     pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x33c;
 
+    #[cfg(feature = "server")]
     /// Raises `this`'s water level to 2 if its origin is in a volume.
     pub(crate) unsafe fn raise_water_level_in_volume(this: *mut u8) {
         unsafe {
@@ -2134,8 +2229,10 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     type ExplosionFn = unsafe extern "win64" fn(*mut u8, usize, usize, usize) -> usize;
 
+    #[cfg(feature = "server")]
     unsafe fn explosion_hook(i: usize, this: *mut u8, a: usize, b: usize, c: usize) -> usize {
         unsafe {
             raise_water_level_in_volume(this);
@@ -2144,6 +2241,7 @@ mod engine_hook {
             original(this, a, b, c)
         }
     }
+    #[cfg(feature = "server")]
     pub(crate) unsafe extern "win64" fn hook_explosion0(
         t: *mut u8,
         a: usize,
@@ -2152,6 +2250,7 @@ mod engine_hook {
     ) -> usize {
         unsafe { explosion_hook(0, t, a, b, c) }
     }
+    #[cfg(feature = "server")]
     pub(crate) unsafe extern "win64" fn hook_explosion1(
         t: *mut u8,
         a: usize,
@@ -2160,6 +2259,7 @@ mod engine_hook {
     ) -> usize {
         unsafe { explosion_hook(1, t, a, b, c) }
     }
+    #[cfg(feature = "server")]
     pub(crate) unsafe extern "win64" fn hook_explosion2(
         t: *mut u8,
         a: usize,
@@ -2168,13 +2268,16 @@ mod engine_hook {
     ) -> usize {
         unsafe { explosion_hook(2, t, a, b, c) }
     }
+    #[cfg(feature = "server")]
     pub(crate) const EXPLOSION_HOOKS: [ExplosionFn; 3] =
         [hook_explosion0, hook_explosion1, hook_explosion2];
 
+    #[cfg(feature = "server")]
     /// DispatchEffect(const char *name, const `CEffectData` &data).
     /// Only its address is used (to send the water explosion effect), nothing is patched.
     pub(crate) const DISPATCH_EFFECT_SIG: &str = "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 48 8B FA \
                                            48 8D 4C 24 30 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 8B D7";
+    #[cfg(feature = "server")]
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) const DISPATCH_EFFECT_STOLEN: usize = 16;
 
@@ -2190,11 +2293,16 @@ mod engine_hook {
     // origin (this+0x18) is in a volume is sent as that effect, and the event
     // is dropped.
 
+    #[cfg(feature = "server")]
     pub(crate) const TE_ORIGIN_OFFSET: usize = 0x18;
+    #[cfg(feature = "server")]
     pub(crate) static ORIGINAL_TE_CREATE: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "server")]
     pub(crate) static DISPATCH_EFFECT_ADDR: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "server")]
     pub(crate) static EXPLOSIONS_REDIRECTED: AtomicU64 = AtomicU64::new(0);
 
+    #[cfg(feature = "server")]
     /// Address of `CTEExplosion`'s vtable, found through RTTI only: the type
     /// descriptor name, the complete object locator that names it, and the
     /// pointer to that locator just before the vtable. No code bytes are
@@ -2204,6 +2312,7 @@ mod engine_hook {
         unsafe { rtti_vtable(base, b".?AVCTEExplosion@@\0") }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn rtti_vtable(base: *const u8, name: &[u8]) -> Result<usize, &'static str> {
         unsafe {
             let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
@@ -2262,6 +2371,7 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// Fills a `CEffectData` the way the engine does for the water explosion
     /// (flags 0x428, scale 128, magnitude 50; byte at +0x88 set).
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
@@ -2269,6 +2379,7 @@ mod engine_hook {
         water_explosion_effect_data_with(origin, 0x428, 128.0, 50.0)
     }
 
+    #[cfg(feature = "server")]
     /// Same layout the client's own in-water path hands to the water explosion
     /// (flags, scale and magnitude are the temp entity's). The client plays
     /// WaterExplosionEffect.Sound only when scale > 128, else the base sound.
@@ -2289,6 +2400,7 @@ mod engine_hook {
         d
     }
 
+    #[cfg(feature = "server")]
     /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
     pub(crate) unsafe fn redirect_explosion(this: *const u8) -> bool {
         unsafe {
@@ -2321,15 +2433,19 @@ mod engine_hook {
         }
     }
 
+    #[cfg(feature = "server")]
     /// `CBaseTempEntity::Create(this`, filter, delay): every temp entity goes
     /// through it (`CTempEnts::Explosion` jumps straight to it, so the vtable
     /// slot is never used). Only `CTEExplosion` objects are looked at.
     pub(crate) const TE_CREATE_SIG: &str =
         "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 \
                                      48 8B 05 ?? ?? ?? ?? 48 8B EA 0F 29 74 24 30";
+    #[cfg(feature = "server")]
     pub(crate) const TE_CREATE_STOLEN: usize = 20;
+    #[cfg(feature = "server")]
     pub(crate) static TE_EXPLOSION_VTABLE: AtomicUsize = AtomicUsize::new(0);
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe extern "win64" fn hook_te_create(
         this: *mut u8,
         filter: *mut c_void,
@@ -2410,14 +2526,17 @@ mod engine_hook {
             flush,
         };
 
+        #[cfg(feature = "server")]
         pub(crate) unsafe fn server_base() -> *const u8 {
             unsafe { GetModuleHandleA(c"server.dll".as_ptr()) as *const u8 }
         }
 
+        #[cfg(feature = "client")]
         pub(crate) unsafe fn client_base() -> *const u8 {
             unsafe { GetModuleHandleA(c"client.dll".as_ptr()) as *const u8 }
         }
 
+        #[cfg(feature = "client")]
         /// An interface of client.dll (`CreateInterface("VClientEntityList003")`).
         pub(crate) unsafe fn client_interface(name: &CStr) -> usize {
             unsafe {
@@ -2450,7 +2569,12 @@ mod engine_hook {
 // underwater sound from that distance, so the client's hooked trace (see `engine_hook`)
 // is all it needs.
 
-#[cfg(all(windows, target_arch = "x86_64"))]
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "server",
+    feature = "client"
+))]
 mod client_module {
     #[allow(clippy::wildcard_imports)]
     // the Windows-only code needs more names than the Linux build uses
@@ -2489,13 +2613,17 @@ mod client_module {
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod hook_state {
-    use super::engine_hook::{self, STOLEN};
+    use super::engine_hook;
+    #[cfg(feature = "server")]
+    use super::engine_hook::STOLEN;
     #[allow(clippy::wildcard_imports)]
     // the Windows-only code needs more names than the Linux build uses
     use super::*;
 
+    #[cfg(feature = "server")]
     pub(crate) static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn install() -> Result<usize, &'static str> {
         unsafe {
             let base = engine_hook::win::server_base();
@@ -2512,6 +2640,7 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn uninstall() {
         unsafe {
             let taken = TARGET
@@ -2524,6 +2653,7 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn active() -> bool {
         TARGET
             .lock()
@@ -2534,6 +2664,7 @@ mod hook_state {
     /// (vtable slot address, original function pointer)
     pub(crate) static CONTENTS: Mutex<Vec<(usize, usize, usize)>> = Mutex::new(Vec::new());
 
+    #[cfg(feature = "server")]
     /// Hooks `IEngineTrace::GetPointContents` via the engine object that
     /// `server.dll` itself uses (found through `UpdateWaterState`).
     #[allow(clippy::too_many_lines)]
@@ -2706,16 +2837,23 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) static EXPLOSIONS: Mutex<Vec<engine_hook::Patch>> = Mutex::new(Vec::new());
+    #[cfg(feature = "server")]
     pub(crate) static TE_HOOK: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
+    #[cfg(feature = "server")]
     pub(crate) static BUBBLE: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
+    #[cfg(feature = "server")]
     pub(crate) static FLUID_END_TOUCH: Mutex<Option<engine_hook::Patch>> = Mutex::new(None);
 
+    #[cfg(feature = "server")]
     /// (id, controller pointer, contents) for every fluid this module created.
     pub(crate) static FLUIDS: Mutex<Vec<(u32, usize, c_int)>> = Mutex::new(Vec::new());
+    #[cfg(feature = "server")]
     static NEXT_FLUID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+    #[cfg(feature = "server")]
     unsafe fn physenv() -> Result<*mut c_void, &'static str> {
         unsafe {
             let base = engine_hook::win::server_base();
@@ -2732,6 +2870,7 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn fluid_attach(
         object: usize,
         plane: [f32; 4],
@@ -2769,6 +2908,7 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn fluid_detach(id: u32) -> bool {
         unsafe {
             let taken = {
@@ -2789,6 +2929,7 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn fluid_detach_all() {
         unsafe {
             let ids: Vec<u32> = FLUIDS
@@ -2803,6 +2944,7 @@ mod hook_state {
         }
     }
 
+    #[cfg(feature = "server")]
     pub(crate) fn fluid_count() -> usize {
         FLUIDS
             .lock()
@@ -2816,38 +2958,41 @@ mod hook_state {
                 engine_hook::RAY_SWEPT_OFFSET_OLD,
                 std::sync::atomic::Ordering::SeqCst,
             );
-            engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
-            let te_patch = TE_HOOK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(patch) = te_patch {
-                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
-            }
-            engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
-            let explosion_patches = std::mem::take(
-                &mut *EXPLOSIONS
+            #[cfg(feature = "server")]
+            {
+                engine_hook::DISPATCH_EFFECT_ADDR.store(0, std::sync::atomic::Ordering::SeqCst);
+                let te_patch = TE_HOOK
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
-            for patch in explosion_patches {
-                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
-            }
-            let patch = FLUID_END_TOUCH
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(patch) = patch {
-                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
-            }
-            engine_hook::forget_dead_fluids();
-            // Bubble detour first: it calls through the trampoline, not the slots.
-            let patch = BUBBLE
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(patch) = patch {
-                engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(patch) = te_patch {
+                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                }
+                engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
+                let explosion_patches = std::mem::take(
+                    &mut *EXPLOSIONS
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
+                for patch in explosion_patches {
+                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                }
+                let patch = FLUID_END_TOUCH
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(patch) = patch {
+                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                }
+                engine_hook::forget_dead_fluids();
+                // Bubble detour first: it calls through the trampoline, not the slots.
+                let patch = BUBBLE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(patch) = patch {
+                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                }
             }
             let taken = std::mem::take(
                 &mut *CONTENTS
@@ -2872,6 +3017,7 @@ mod hook_state {
             .is_empty()
     }
 
+    #[cfg(feature = "client")]
     /// Client realm: the same two hooks on the client's own `IEngineTrace`, so what the
     /// client does with water (ripples and splashes, the underwater sound filter,
     /// prediction) sees the volumes the Lua side gave it.
@@ -2927,13 +3073,17 @@ mod hook_state {
 
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 mod hook_state {
+    #[cfg(feature = "server")]
     pub(crate) const unsafe fn install() -> Result<usize, &'static str> {
         Err("engine hook is only available for the Windows x64 server.dll")
     }
+    #[cfg(feature = "server")]
     pub(crate) const unsafe fn uninstall() {}
+    #[cfg(feature = "server")]
     pub(crate) const fn active() -> bool {
         false
     }
+    #[cfg(feature = "server")]
     pub(crate) const unsafe fn install_contents() -> Result<String, &'static str> {
         Err("engine hook is only available for the Windows x64 server.dll")
     }
@@ -2941,6 +3091,7 @@ mod hook_state {
     pub(crate) const fn contents_active() -> bool {
         false
     }
+    #[cfg(feature = "server")]
     pub(crate) const unsafe fn fluid_attach(
         _: usize,
         _: [f32; 4],
@@ -2948,10 +3099,13 @@ mod hook_state {
     ) -> Result<u32, &'static str> {
         Err("fluids are only available for the Windows x64 server.dll")
     }
+    #[cfg(feature = "server")]
     pub(crate) const unsafe fn fluid_detach(_: u32) -> bool {
         false
     }
+    #[cfg(feature = "server")]
     pub(crate) const unsafe fn fluid_detach_all() {}
+    #[cfg(feature = "server")]
     pub(crate) const fn fluid_count() -> usize {
         0
     }
@@ -2959,6 +3113,7 @@ mod hook_state {
 
 static HOOK_STATUS: Mutex<String> = Mutex::new(String::new());
 
+#[cfg(feature = "server")]
 fn hook_hits() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -2974,6 +3129,7 @@ fn hook_hits() -> u64 {
 // Lua helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "server")]
 /// Returns the entity index of the Entity userdata at absolute stack index `idx`.
 /// Rejects non-userdata, NULL entities and the world.
 unsafe fn ent_index(l: LuaState, idx: c_int) -> Option<i32> {
@@ -3017,6 +3173,7 @@ unsafe fn lua_print(l: LuaState, msg: &str) {
     }
 }
 
+#[cfg(feature = "server")]
 /// Looks the entity up by index and, if still valid, writes the level into its
 /// datamap (when `key` is set). Returns false if the entity no longer exists.
 unsafe fn apply_level(l: LuaState, idx: i32, level: u8, key: Option<&CStr>) -> bool {
@@ -3057,6 +3214,7 @@ unsafe fn apply_level(l: LuaState, idx: i32, level: u8, key: Option<&CStr>) -> b
 // Lua-callable functions
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "server")]
 /// waterlevel.Set(ent, level) / ent:SetWaterLevelOverride(level)
 unsafe extern "C-unwind" fn l_set(l: LuaState) -> c_int {
     unsafe {
@@ -3079,6 +3237,7 @@ unsafe extern "C-unwind" fn l_set(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// waterlevel.Get(ent) / `ent:GetWaterLevelOverride()`
 unsafe extern "C-unwind" fn l_get(l: LuaState) -> c_int {
     unsafe {
@@ -3092,6 +3251,7 @@ unsafe extern "C-unwind" fn l_get(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// waterlevel.Clear(ent) / `ent:ClearWaterLevelOverride()`
 unsafe extern "C-unwind" fn l_clear(l: LuaState) -> c_int {
     unsafe {
@@ -3102,12 +3262,14 @@ unsafe extern "C-unwind" fn l_clear(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.ClearAll()`
 unsafe extern "C-unwind" fn l_clear_all(_l: LuaState) -> c_int {
     overrides().clear();
     0
 }
 
+#[cfg(feature = "server")]
 /// waterlevel.SetSaveKey(key) - "" disables the per-tick datamap write.
 unsafe extern "C-unwind" fn l_set_save_key(l: LuaState) -> c_int {
     unsafe {
@@ -3125,6 +3287,7 @@ unsafe extern "C-unwind" fn l_set_save_key(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.IsHooked()`
 unsafe extern "C-unwind" fn l_is_hooked(l: LuaState) -> c_int {
     unsafe {
@@ -3148,6 +3311,7 @@ unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.HookHits()`
 unsafe extern "C-unwind" fn l_hook_hits(l: LuaState) -> c_int {
     unsafe {
@@ -3309,6 +3473,7 @@ unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -> id | nil, err
 /// Makes `physobj` an engine fluid (buoyancy + drag for props inside it).
 /// The plane is in world space with the normal pointing out of the fluid;
@@ -3403,6 +3568,7 @@ unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// waterlevel.DetachFluid(id) -> bool. Call before removing the entity.
 unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int {
     unsafe {
@@ -3414,6 +3580,7 @@ unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.FluidCount()`
 unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
     unsafe {
@@ -3422,6 +3589,7 @@ unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.BubbleClips()` - bullet bubble trails clipped to a volume
 unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
     unsafe {
@@ -3434,6 +3602,7 @@ unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.ExplosionFixes()` - explosives whose water level was raised
 unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
     unsafe {
@@ -3446,6 +3615,7 @@ unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// `waterlevel.ExplosionsRedirected()` - explosion events sent as the water explosion
 unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
     unsafe {
@@ -3458,6 +3628,7 @@ unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// Replacement for `Entity:WaterLevel()`. Upvalue 1 is the original function.
 unsafe extern "C-unwind" fn l_wrapped_water_level(l: LuaState) -> c_int {
     unsafe {
@@ -3479,6 +3650,7 @@ unsafe extern "C-unwind" fn l_wrapped_water_level(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// Hook "Tick": re-apply every override, drop entities that are gone.
 unsafe extern "C-unwind" fn l_tick(l: LuaState) -> c_int {
     unsafe {
@@ -3496,6 +3668,7 @@ unsafe extern "C-unwind" fn l_tick(l: LuaState) -> c_int {
     }
 }
 
+#[cfg(feature = "server")]
 /// Hook "EntityRemoved"(ent, fullUpdate): forget the override immediately so a
 /// new entity reusing the index never inherits it.
 unsafe extern "C-unwind" fn l_entity_removed(l: LuaState) -> c_int {
@@ -3519,6 +3692,7 @@ unsafe fn set_fn(l: LuaState, table: c_int, name: &CStr, f: LuaFn) {
     }
 }
 
+#[cfg(feature = "server")]
 unsafe fn set_nil(l: LuaState, table: c_int, name: &CStr) {
     unsafe {
         let a = api();
@@ -3527,6 +3701,7 @@ unsafe fn set_nil(l: LuaState, table: c_int, name: &CStr) {
     }
 }
 
+#[cfg(feature = "server")]
 unsafe fn hook_add(l: LuaState, event: &CStr, f: LuaFn) {
     unsafe {
         let a = api();
@@ -3541,6 +3716,7 @@ unsafe fn hook_add(l: LuaState, event: &CStr, f: LuaFn) {
     }
 }
 
+#[cfg(feature = "server")]
 unsafe fn hook_remove(l: LuaState, event: &CStr) {
     unsafe {
         let a = api();
@@ -3554,6 +3730,7 @@ unsafe fn hook_remove(l: LuaState, event: &CStr) {
     }
 }
 
+#[cfg(feature = "server")]
 /// Pushes the Entity metatable and returns true, or leaves the stack unchanged.
 unsafe fn push_entity_meta(l: LuaState) -> bool {
     unsafe {
@@ -3577,14 +3754,43 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
             return 0;
         };
         let _ = API.set(loaded);
+        #[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+        if running_as_client() {
+            return open_client(l);
+        }
+        #[cfg(feature = "server")]
+        {
+            open_server(l)
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            let _ = l;
+            0
+        }
+    }
+}
+
+/// True when this DLL is the client module. With both features built in that is decided
+/// from the file name (gmcl_*); a build with only one feature has no choice to make.
+#[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+unsafe fn running_as_client() -> bool {
+    #[cfg(feature = "server")]
+    unsafe {
+        client_module::is_client_module()
+    }
+    #[cfg(not(feature = "server"))]
+    true
+}
+
+/// Loaded as gmcl_waterlevelercore: the client's water. The Lua side gives it the
+/// volumes (AddVolume etc.); its engine trace is
+/// patched so the client sees and hears them like the server does.
+#[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+unsafe fn open_client(l: LuaState) -> c_int {
+    unsafe {
         let a = api();
         let base = (a.gettop)(l);
-
-        // Loaded as gmcl_waterlevelercore: the client's water. The Lua side gives it the
-        // volumes (AddVolume etc.); its engine trace is
-        // patched so the client sees and hears them like the server does.
-        #[cfg(all(windows, target_arch = "x86_64"))]
-        if client_module::is_client_module() {
+        {
             let trace = match hook_state::install_client_contents() {
                 Ok(note) => note,
                 Err(why) => format!("trace hook failed: {why}"),
@@ -3605,8 +3811,17 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
             set_fn(l, t, c"HookStatus", l_hook_status);
             (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
             (a.settop)(l, base);
-            return 0;
+            0
         }
+    }
+}
+
+/// Loaded as `gmsv_waterlevelercore`: the server's water, the overrides and the fluids.
+#[cfg(feature = "server")]
+unsafe fn open_server(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
 
         // Global `waterleveler` table.
         (a.createtable)(l, 0, 16);
@@ -3681,24 +3896,51 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
 }
 
 #[no_mangle]
+#[cfg_attr(
+    not(any(feature = "server", windows)),
+    allow(unused_unsafe) // a client-only build has nothing unsafe to do off Windows
+)]
 pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
     unsafe {
         if API.get().is_none() {
             return 0;
         }
+        #[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+        if running_as_client() {
+            return close_client(l);
+        }
+        #[cfg(feature = "server")]
+        {
+            close_server(l)
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            let _ = l;
+            0
+        }
+    }
+}
+
+#[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+unsafe fn close_client(l: LuaState) -> c_int {
+    unsafe {
         let a = api();
         let base = (a.gettop)(l);
+        hook_state::uninstall_contents();
+        engine_hook::CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
+        volumes().clear();
+        (a.pushnil)(l);
+        (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
+        (a.settop)(l, base);
+        0
+    }
+}
 
-        #[cfg(all(windows, target_arch = "x86_64"))]
-        if client_module::is_client_module() {
-            hook_state::uninstall_contents();
-            engine_hook::CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
-            volumes().clear();
-            (a.pushnil)(l);
-            (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
-            (a.settop)(l, base);
-            return 0;
-        }
+#[cfg(feature = "server")]
+unsafe fn close_server(l: LuaState) -> c_int {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
 
         // Fluid controllers hold engine objects; free them while the module is still loaded.
         hook_state::fluid_detach_all();
@@ -3740,7 +3982,13 @@ pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
 //   SERVER_DLL_X64=/path/to/server.dll cargo test --release
 // ---------------------------------------------------------------------------
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    test,
+    target_os = "linux",
+    target_arch = "x86_64",
+    feature = "server",
+    feature = "client"
+))]
 mod tests {
     // Exact float comparisons are on values the code copies or sets, items sit next to the
     // test that uses them.
