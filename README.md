@@ -198,6 +198,12 @@ Not verified, because it needs the actual game:
 fetched. Cross-compiling Windows from Linux is described at the top of
 `build.sh`. Needs Rust 1.77+.
 
+The server and the client module are separate builds of the same crate: the `server`
+and `client` cargo features (both on by default, which is what `cargo test` uses). The
+release builds enable one each, so `gmsv_` has only the server code (overrides, fluids,
+bubble and explosion patches) and `gmcl_` only the client code; the volume store and the
+trace hooks are in both.
+
 Tests: `SERVER_DLL_X64=/path/to/server.dll cargo test --release`
 
 ## Removing a volume with props in it
