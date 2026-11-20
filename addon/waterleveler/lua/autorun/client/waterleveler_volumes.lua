@@ -517,10 +517,11 @@ local function shell(mn, mx, top, body)
 end
 
 local function boxFaces(bx, top, body)
-    -- The outer layer is exactly the collision box. Only the inner layer (the _beneath
-    -- faces seen from inside) is inset, from the bottom and sides, so it does not
-    -- z-fight with the floor or walls the volume rests against.
-    local outer = shell(bx.mins, bx.maxs, top, body);
+    -- The outer layer is the collision box, except that its bottom starts ContactDepth up
+    -- (the box reaches that far into the floor it rests on). Only the inner layer (the
+    -- _beneath faces seen from inside) is inset further, from the bottom and sides, so it
+    -- does not z-fight with the floor or walls the volume rests against.
+    local outer = shell(Vector(bx.mins.x, bx.mins.y, bx.mins.z + (WLWater.ContactDepth or 0)), bx.maxs, top, body);
     if not (bx.beneath ~= false and top.sided and top.beneath) then return outer; end
     -- Single-sided water: the outside of every face shows the water, the inside shows its
     -- $bottommaterial, like the two sides of a brush.

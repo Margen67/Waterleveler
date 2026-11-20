@@ -175,6 +175,23 @@ concommand.Add("waterleveler_status", function(caller)
     end
 end);
 
+concommand.Add("waterleveler_debug", function(caller, _, args)
+    local ply = resolve(caller);
+    if IsValid(ply) and not ply:IsSuperAdmin() then return; end
+    local on = args[1] ~= "0";
+    waterleveler.SetDebug(on and 1 or 0);
+    if on then
+        timer.Create("wl_debug", 0.25, 0, function()
+            local lines = waterleveler.TakeDebugLog();
+            if lines ~= "" then print(lines); end
+        end);
+    else
+        timer.Remove("wl_debug");
+    end
+
+    print(on and "[wl] debug log on: every water trace near a volume and every point just outside one is printed (waterleveler_debug 0 stops it)" or "[wl] debug log off");
+end);
+
 concommand.Add("waterleveler_probe", function(caller)
     local ply = resolve(caller);
     if not IsValid(ply) then return; end

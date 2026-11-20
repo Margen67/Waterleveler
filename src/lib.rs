@@ -622,6 +622,14 @@ impl VolumeList {
         self.bounds
             .is_some_and(|(lo, hi)| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]))
     }
+
+    /// True if `p` is inside the box around every volume grown by `margin` (the debug log
+    /// uses it to catch queries that land just outside a volume).
+    fn near(&self, p: [f32; 3], margin: f32) -> bool {
+        self.bounds.is_some_and(|(lo, hi)| {
+            (0..3).all(|i| p[i] >= lo[i] - margin && p[i] <= hi[i] + margin)
+        })
+    }
 }
 
 impl std::ops::Deref for VolumeList {
@@ -759,7 +767,7 @@ mod engine_hook {
     // The Windows-only code below needs more of the parent's names than the Linux build uses.
     #[allow(clippy::wildcard_imports)]
     use super::*;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     #[cfg(feature = "server")]
     /// Bytes overwritten at the function entry (14-byte absolute jmp + 1 nop).
@@ -963,6 +971,18 @@ mod engine_hook {
                         bump(&VOLUME_HITS);
                     }
                 }
+                if DEBUG.load(Ordering::Relaxed) {
+                    // A point just outside every volume: a bullet's impact point that lands
+                    // here is not "in the water", so it gets no splash.
+                    if let Some(vols) = snapshot_if(|v| v.near(p, 2.0)) {
+                        if vols.contents_at(p) == 0 {
+                            debug_log(format!(
+                                "point ({:.4}, {:.4}, {:.4}) is just outside a volume: not water",
+                                p[0], p[1], p[2]
+                            ));
+                        }
+                    }
+                }
             }
             contents
         }
@@ -1027,6 +1047,29 @@ mod engine_hook {
     pub(crate) const TRACE_RAY_SLOT: usize = 4;
     pub(crate) static ORIGINAL_TRACE_RAY: AtomicUsize = AtomicUsize::new(0);
     pub(crate) static TRACE_HITS: AtomicU64 = AtomicU64::new(0);
+
+    /// While set, the hooks log what they answered near a volume (`waterleveler_debug 1`).
+    pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
+    static DEBUG_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Adds a line to the debug log (kept to the latest 512; never blocks).
+    fn debug_log(line: String) {
+        if let Ok(mut log) = DEBUG_LOG.try_lock() {
+            if log.len() < 512 {
+                log.push(line);
+            }
+        }
+    }
+
+    /// The debug log so far, one line per entry; empties it.
+    pub(crate) fn take_debug_log() -> String {
+        let mut log = DEBUG_LOG
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let text = log.join("\n");
+        log.clear();
+        text
+    }
 
     /// Offset of `Ray_t::m_IsSwept`. The older 64-bit builds have it at +0x41
     /// (`m_IsRay` +0x40); the x86-64 branch inserted an 8-byte member (the world
@@ -1435,11 +1478,42 @@ mod engine_hook {
             // Never block inside an engine callback.
             // A ray far from every volume changes nothing (and needs no world entity).
             if let Some(vols) = snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)) {
+                let debug = DEBUG.load(Ordering::Relaxed);
+                let before = if debug {
+                    Some(trace_summary(trace))
+                } else {
+                    None
+                };
                 // Only the volumes whose contents the trace's mask asks for are considered.
-                if apply_water_to_trace_masked(&vols, ray, trace, world_entity(), mask) {
+                let world = world_entity();
+                let hit = apply_water_to_trace_masked(&vols, ray, trace, world, mask);
+                if hit {
                     bump(&TRACE_HITS);
                 }
+                if let Some((fraction, ent)) = before {
+                    let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+                    let (after, _) = trace_summary(trace);
+                    debug_log(format!(
+                        "trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.3}, {:.3}, {:.3}): swept {}, engine fraction {fraction:.5} entity {ent:#x}, world {world:#x} -> {} (fraction {after:.5}, startsolid {}, allsolid {})",
+                        rf(0x00), rf(0x04), rf(0x08), rf(0x10), rf(0x14), rf(0x18),
+                        rf(0x30), rf(0x34), rf(0x38),
+                        ray.add(RAY_SWEPT_OFFSET.load(Ordering::Relaxed)).read(),
+                        if hit { "rewritten" } else { "left alone" },
+                        trace.add(0x37).read(),
+                        trace.add(0x36).read(),
+                    ));
+                }
             }
+        }
+    }
+
+    /// (fraction, hit entity) of a trace result.
+    const unsafe fn trace_summary(trace: *const u8) -> (f32, usize) {
+        unsafe {
+            (
+                trace.add(0x2c).cast::<f32>().read_unaligned(),
+                trace.add(0x58).cast::<usize>().read_unaligned(),
+            )
         }
     }
 
@@ -3492,6 +3566,33 @@ unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int {
     }
 }
 
+/// `waterlevel.SetDebug(1|0)` - log what the hooks answer near a volume (read it with `TakeDebugLog`)
+unsafe extern "C-unwind" fn l_set_debug(l: LuaState) -> c_int {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        engine_hook::DEBUG.store(
+            (api().tonumber)(l, 1) != 0.0,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = l;
+        0
+    }
+}
+
+/// `waterlevel.TakeDebugLog()` -> string: the log lines since the last call, empties the log
+unsafe extern "C-unwind" fn l_take_debug_log(l: LuaState) -> c_int {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        let text = engine_hook::take_debug_log();
+        #[cfg(not(target_arch = "x86_64"))]
+        let text = String::new();
+        let text = CString::new(text.replace('\0', "")).unwrap_or_default();
+        (api().pushstring)(l, text.as_ptr());
+        1
+    }
+}
+
 /// `waterlevel.TraceHits()` - engine traces rewritten as water-surface hits
 unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
     unsafe {
@@ -3840,6 +3941,8 @@ unsafe fn open_client(l: LuaState) -> c_int {
             set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
             set_fn(l, t, c"ContentsHits", l_contents_hits);
             set_fn(l, t, c"TraceHits", l_trace_hits);
+            set_fn(l, t, c"SetDebug", l_set_debug);
+            set_fn(l, t, c"TakeDebugLog", l_take_debug_log);
             set_fn(l, t, c"HookStatus", l_hook_status);
             (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
             (a.settop)(l, base);
@@ -3866,6 +3969,8 @@ unsafe fn open_server(l: LuaState) -> c_int {
         set_fn(l, t, c"IsContentsHooked", l_is_contents_hooked);
         set_fn(l, t, c"ContentsHits", l_contents_hits);
         set_fn(l, t, c"TraceHits", l_trace_hits);
+        set_fn(l, t, c"SetDebug", l_set_debug);
+        set_fn(l, t, c"TakeDebugLog", l_take_debug_log);
         set_fn(l, t, c"BubbleClips", l_bubble_clips);
         set_fn(l, t, c"ExplosionFixes", l_explosion_fixes);
         set_fn(l, t, c"ExplosionsRedirected", l_explosions_redirected);
