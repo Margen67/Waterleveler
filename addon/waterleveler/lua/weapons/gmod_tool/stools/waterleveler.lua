@@ -165,6 +165,7 @@ if CLIENT then
         liquid:AddChoice("Slime", "slime", isSlime);
         liquid.OnSelect = function(_, _, _, data) RunConsoleCommand("waterleveler_liquid", data); end;
         panel:ControlHelp("Slime: slime-coloured splashes and ripples, slower wading, no water explosion effect.");
+        panel:CheckBox("Underwater screen warp (off: no distortion inside water volumes)", "waterleveler_underwater_warp");
         panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid");
         panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.");
         panel:NumSlider("Damping (drag)", "waterleveler_fluid_damping", 0, maxFluid, 3);
