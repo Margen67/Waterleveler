@@ -800,20 +800,6 @@ if CLIENT then
     -- Each volume is drawn by a client-side entity in the engine's translucent
     -- sort, so it is ordered against splashes, sprites and shards by distance
     -- like any other translucent thing (origin = the box centre).
-    -- A tiny invisible model, drawn to make the engine bind the local cubemap of a position.
-    local probe;
-    local function bindCubemapAt(pos)
-        if not IsValid(probe) then
-            probe = ClientsideModel("models/hunter/blocks/cube025x025x025.mdl", RENDERGROUP_OTHER);
-            if not IsValid(probe) then return; end
-            probe:SetNoDraw(true);
-            probe:SetModelScale(0.01);
-        end
-
-        probe:SetPos(pos);
-        probe:DrawModel();
-    end
-
     local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
     local function drawVolume(bx)
         local top = mat(bx.material ~= "" and bx.material or defaultMaterial);
@@ -821,10 +807,6 @@ if CLIENT then
         local now = CurTime();
         if top.animate then top.animate(now); end
         if top.directional then
-            -- env_cubemap is whichever cubemap the engine bound last, which changes with what is in
-            -- view (the reflection brightened and dimmed as most of the volume left the screen).
-            -- Drawing a model at the volume's centre makes the engine bind the cubemap for that spot.
-            bindCubemapAt((bx.mins + bx.maxs) * 0.5);
             -- A bump map only shows under uneven light (a brush gets the map's lightmap): light
             -- from above, dimmer from the sides.
             render.ResetModelLighting(0.45, 0.45, 0.45);
