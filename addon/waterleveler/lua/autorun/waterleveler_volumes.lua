@@ -28,7 +28,12 @@ WLWater = WLWater or {};
 function WLWater.Placement(tr, size, offset)
     local half = size * 0.5;
     local n = tr.HitNormal;
-    local center = tr.HitPos + Vector(n.x * half.x, n.y * half.y, n.z * half.z);
+    -- A trace stops DIST_EPSILON (1/32) short of the surface it hit, on the open side. A volume
+    -- starting exactly there would put a bullet's impact point (the same 1/32 off the surface)
+    -- on its very edge, where rounding decides whether it is "in the water" and so whether
+    -- there is a splash; it would also leave a gap under the player's feet. The volume is
+    -- pushed back into the surface instead, so it starts at the surface itself, like a brush.
+    local center = tr.HitPos + Vector(n.x * half.x, n.y * half.y, n.z * half.z) - n * 0.0625;
     center.z = center.z + (offset or 0);
     return center - half, center + half, center;
 end
