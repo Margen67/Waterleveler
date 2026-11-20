@@ -309,6 +309,8 @@ if CLIENT then
     -- map brush shows, so a VertexLitGeneric (lightmaps do not exist on a mesh) with the same
     -- parameters is used, with the original's proxies.
     local carried = {"$envmap", "$envmaptint", "$envmapcontrast", "$normalmapalphaenvmapmask", "$color", "$alpha"};
+    local envStrength = CreateClientConVar("waterleveler_envmap_strength", "0.5", true, false, "Reflection strength of world water volumes", 0, 4);
+    local envContrast = CreateClientConVar("waterleveler_envmap_contrast", "1", true, false, "Reflection contrast of world water volumes (0 = normal, 1 = high)", 0, 1);
     local function wrapLightmappedWater(m, base, bump)
         unlitCount = unlitCount + 1;
         local params = inherit(m, {
@@ -361,6 +363,11 @@ if CLIENT then
             -- The same frames the proxies give, set from Lua as well in case a proxy does not run
             -- for a material drawn like this.
             animate = function(t)
+                -- Tunable while looking at it: the brush's reflection is sparse and contrasty, a
+                -- plain envmap on a mesh is a flat wash.
+                local strength = envStrength:GetFloat();
+                wrapped:SetVector("$envmaptint", Vector(strength, strength, strength));
+                wrapped:SetFloat("$envmapcontrast", envContrast:GetFloat());
                 if baseFrames > 1 then wrapped:SetInt("$frame", math.floor(t * 21) % baseFrames); end
                 if bumpFrames > 1 then wrapped:SetInt("$bumpframe", math.floor(t * 21) % bumpFrames); end
             end
