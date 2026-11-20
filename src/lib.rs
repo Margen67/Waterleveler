@@ -1322,20 +1322,37 @@ mod engine_hook {
         bounds: Option<([f32; 3], [f32; 3])>,
         ray: *const u8,
     ) -> bool {
+        unsafe {
+            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+            segment_misses_bounds(
+                bounds,
+                [rf(0x00), rf(0x04), rf(0x08)],
+                [rf(0x10), rf(0x14), rf(0x18)],
+                [rf(0x30), rf(0x34), rf(0x38)],
+            )
+        }
+    }
+
+    /// True if the segment from `start` along `delta`, grown by `extents`, certainly stays
+    /// outside `bounds` (no bounds: no volumes). NaN counts as "maybe".
+    pub(crate) fn segment_misses_bounds(
+        bounds: Option<([f32; 3], [f32; 3])>,
+        start: [f32; 3],
+        delta: [f32; 3],
+        extents: [f32; 3],
+    ) -> bool {
         let Some((lo, hi)) = bounds else {
             return true; // no volumes
         };
-        unsafe {
-            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
-            let s = [rf(0x00), rf(0x04), rf(0x08)];
-            let d = [rf(0x10), rf(0x14), rf(0x18)];
-            let ext = [rf(0x30), rf(0x34), rf(0x38)];
-            (0..3).any(|i| {
-                let e = s[i] + d[i];
-                let (smin, smax) = if e < s[i] { (e, s[i]) } else { (s[i], e) };
-                smax < lo[i] - ext[i] || smin > hi[i] + ext[i]
-            })
-        }
+        (0..3).any(|i| {
+            let e = start[i] + delta[i];
+            let (smin, smax) = if e < start[i] {
+                (e, start[i])
+            } else {
+                (start[i], e)
+            };
+            smax < lo[i] - extents[i] || smin > hi[i] + extents[i]
+        })
     }
 
     /// Replacement for `IEngineTrace::TraceRay`.
@@ -2011,9 +2028,13 @@ mod engine_hook {
                     to.add(1).read_unaligned(),
                     to.add(2).read_unaligned(),
                 ];
-                // The lock must be gone before calling the original: it calls back
-                // into the point-contents hook, which uses try_lock.
-                if let Some(vols) = snapshot() {
+                // A trail that stays clear of every volume is kept as it is, without a copy
+                // of the snapshot. No lock is held when the original is called (it calls
+                // back into the point-contents hook).
+                let d = [t[0] - f[0], t[1] - f[1], t[2] - f[2]];
+                if let Some(vols) =
+                    snapshot_if(|v| !segment_misses_bounds(v.bounds, f, d, [0.0; 3]))
+                {
                     action = clip_bubble_trail(&vols, f, t);
                 }
             }
@@ -5508,6 +5529,49 @@ mod tests {
             }
             assert!(!list.contains([f32::NAN; 3]));
         }
+    }
+
+    #[test]
+    fn trails_that_miss_the_bounds_are_never_clipped() {
+        let mut state = 0x1234_5678_u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / 16_777_216.0
+        };
+        let mut list = VolumeList::new();
+        for id in 0..6 {
+            let lo = [next() * 500.0, next() * 500.0, next() * 500.0];
+            list.push(Volume {
+                id,
+                min: lo,
+                max: [lo[0] + 90.0, lo[1] + 90.0, lo[2] + 90.0],
+                contents: CONTENTS_WATER,
+            });
+        }
+        let mut misses = 0;
+        for _ in 0..20_000 {
+            let f = [
+                next() * 900.0 - 150.0,
+                next() * 900.0 - 150.0,
+                next() * 900.0 - 150.0,
+            ];
+            let t = [
+                next() * 900.0 - 150.0,
+                next() * 900.0 - 150.0,
+                next() * 900.0 - 150.0,
+            ];
+            let d = [t[0] - f[0], t[1] - f[1], t[2] - f[2]];
+            if segment_misses_bounds(list.bounds, f, d, [0.0; 3]) {
+                misses += 1;
+                assert_eq!(
+                    clip_bubble_trail(&list, f, t),
+                    BubbleClip::Keep,
+                    "{f:?} {t:?}"
+                );
+            }
+        }
+        assert!(misses > 0);
+        assert!(segment_misses_bounds(None, [0.0; 3], [1.0; 3], [0.0; 3]));
     }
 
     #[test]
