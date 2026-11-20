@@ -314,6 +314,133 @@ struct VolumeList {
     /// The same boxes as one array per field, so the point test runs over plain slices
     /// the compiler can vectorize.
     lanes: Lanes,
+    /// A tree over the boxes, for lists too long to scan.
+    tree: Bvh,
+}
+
+/// Lists up to this long are scanned (the array copy); longer ones go through the tree.
+const TREE_MIN_VOLUMES: usize = 16;
+/// Volumes per leaf of the tree.
+const TREE_LEAF: usize = 4;
+
+/// One node of the tree: a box around everything below it. A leaf (`count > 0`) holds
+/// `order[a..a + count]`; any other node has children `a` and `b`.
+#[derive(Clone, Copy, Debug)]
+struct TreeNode {
+    lo: [f32; 3],
+    hi: [f32; 3],
+    a: u32,
+    b: u32,
+    count: u32,
+}
+
+/// A bounding-volume hierarchy over the volume boxes (median split on the longest axis),
+/// so a point far from most volumes only visits the few boxes near it.
+#[derive(Clone, Debug, Default)]
+struct Bvh {
+    nodes: Vec<TreeNode>,
+    /// Volume indices, grouped so every leaf is a contiguous run.
+    order: Vec<u32>,
+}
+
+impl Bvh {
+    const fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            order: Vec::new(),
+        }
+    }
+
+    fn build(vols: &[Volume]) -> Self {
+        let mut tree = Self::new();
+        if vols.len() > TREE_MIN_VOLUMES {
+            tree.order = (0..vols.len() as u32).collect();
+            tree.split(vols, 0, vols.len());
+        }
+        tree
+    }
+
+    /// Builds the node for `order[from..to]` and returns its index.
+    fn split(&mut self, vols: &[Volume], from: usize, to: usize) -> u32 {
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        let mut centre_lo = [f32::INFINITY; 3];
+        let mut centre_hi = [f32::NEG_INFINITY; 3];
+        for &i in &self.order[from..to] {
+            let v = &vols[i as usize];
+            for axis in 0..3 {
+                lo[axis] = lo[axis].min(v.min[axis]);
+                hi[axis] = hi[axis].max(v.max[axis]);
+                let c = v.min[axis] + v.max[axis];
+                centre_lo[axis] = centre_lo[axis].min(c);
+                centre_hi[axis] = centre_hi[axis].max(c);
+            }
+        }
+        let index = self.nodes.len() as u32;
+        if to - from <= TREE_LEAF {
+            self.nodes.push(TreeNode {
+                lo,
+                hi,
+                a: from as u32,
+                b: 0,
+                count: (to - from) as u32,
+            });
+            return index;
+        }
+        self.nodes.push(TreeNode {
+            lo,
+            hi,
+            a: 0,
+            b: 0,
+            count: 0,
+        });
+        let axis = (0..3)
+            .max_by(|&x, &y| {
+                (centre_hi[x] - centre_lo[x]).total_cmp(&(centre_hi[y] - centre_lo[y]))
+            })
+            .unwrap_or(0);
+        self.order[from..to].sort_unstable_by(|&x, &y| {
+            let cx = vols[x as usize].min[axis] + vols[x as usize].max[axis];
+            let cy = vols[y as usize].min[axis] + vols[y as usize].max[axis];
+            cx.total_cmp(&cy)
+        });
+        let mid = from + (to - from) / 2;
+        let a = self.split(vols, from, mid);
+        let b = self.split(vols, mid, to);
+        let node = &mut self.nodes[index as usize];
+        node.a = a;
+        node.b = b;
+        index
+    }
+
+    /// Calls `f` for every volume that contains `p`.
+    fn visit(&self, vols: &[Volume], p: [f32; 3], mut f: impl FnMut(&Volume)) {
+        // Median splits keep the tree shallow: the stack never holds more than depth + 1.
+        let mut stack = [0u32; 64];
+        let mut top = 1;
+        if self.nodes.is_empty() {
+            return;
+        }
+        while top > 0 {
+            top -= 1;
+            let node = &self.nodes[stack[top] as usize];
+            if !(0..3).all(|i| p[i] >= node.lo[i] && p[i] <= node.hi[i]) {
+                continue;
+            }
+            if node.count > 0 {
+                for &i in &self.order[node.a as usize..(node.a + node.count) as usize] {
+                    let v = &vols[i as usize];
+                    if (0..3).all(|k| p[k] >= v.min[k] && p[k] <= v.max[k]) {
+                        f(v);
+                    }
+                }
+            } else {
+                stack[top] = node.a;
+                stack[top + 1] = node.b;
+                top += 2;
+            }
+        }
+    }
 }
 
 /// A struct-of-arrays copy of the volume list: entry `i` of every array is volume `i`.
@@ -334,6 +461,7 @@ impl VolumeList {
                 max: [Vec::new(), Vec::new(), Vec::new()],
                 contents: Vec::new(),
             },
+            tree: Bvh::new(),
         }
     }
 
@@ -343,6 +471,7 @@ impl VolumeList {
             self.lanes.max[axis] = self.list.iter().map(|v| v.max[axis]).collect();
         }
         self.lanes.contents = self.list.iter().map(|v| v.contents).collect();
+        self.tree = Bvh::build(&self.list);
         self.bounds = self.list.iter().fold(None, |acc, v| {
             Some(acc.map_or((v.min, v.max), |(lo, hi)| {
                 (
@@ -387,6 +516,11 @@ impl VolumeList {
     /// as `contents_at` on the plain list, computed without a branch per volume.
     #[allow(clippy::needless_bitwise_bool)] // `&` on purpose: no early exit, so the loop vectorizes
     fn contents_at(&self, p: [f32; 3]) -> c_int {
+        if self.list.len() > TREE_MIN_VOLUMES {
+            let mut contents = 0;
+            self.tree.visit(&self.list, p, |v| contents |= v.contents);
+            return contents;
+        }
         let l = &self.lanes;
         let n = l.contents.len();
         let (x0, y0, z0) = (&l.min[0][..n], &l.min[1][..n], &l.min[2][..n]);
@@ -403,6 +537,50 @@ impl VolumeList {
             contents |= l.contents[i] & -c_int::from(inside);
         }
         contents
+    }
+
+    /// True if `p` is inside any volume.
+    #[allow(clippy::needless_bitwise_bool)] // `&` on purpose: no early exit, so the loop vectorizes
+    fn contains(&self, p: [f32; 3]) -> bool {
+        if self.list.len() > TREE_MIN_VOLUMES {
+            let mut inside = false;
+            self.tree.visit(&self.list, p, |_| inside = true);
+            return inside;
+        }
+        let l = &self.lanes;
+        let n = l.contents.len();
+        let (x0, y0, z0) = (&l.min[0][..n], &l.min[1][..n], &l.min[2][..n]);
+        let (x1, y1, z1) = (&l.max[0][..n], &l.max[1][..n], &l.max[2][..n]);
+        let mut inside = false;
+        for i in 0..n {
+            inside |= (p[0] >= x0[i])
+                & (p[0] <= x1[i])
+                & (p[1] >= y0[i])
+                & (p[1] <= y1[i])
+                & (p[2] >= z0[i])
+                & (p[2] <= z1[i]);
+        }
+        inside
+    }
+
+    /// Top (surface height) of the highest water volume containing `p`.
+    fn surface_z(&self, p: [f32; 3]) -> Option<f32> {
+        let mut top: Option<f32> = None;
+        let mut take = |v: &Volume| {
+            if v.contents & CONTENTS_WATER != 0 {
+                top = Some(top.map_or(v.max[2], |t| t.max(v.max[2])));
+            }
+        };
+        if self.list.len() > TREE_MIN_VOLUMES {
+            self.tree.visit(&self.list, p, take);
+        } else {
+            for v in &self.list {
+                if (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]) {
+                    take(v);
+                }
+            }
+        }
+        top
     }
 
     /// False if `p` is certainly in no volume (true means "maybe": scan the list).
@@ -482,6 +660,19 @@ fn snapshot() -> Option<Arc<VolumeList>> {
     }
 }
 
+/// Like `snapshot`, but the copy is only taken (a pointer clone, two atomic operations) when
+/// `maybe` says the query could touch a volume, which is rare: `maybe` runs on the shared
+/// copy, so the common case costs one read lock and a comparison.
+fn snapshot_if(maybe: impl FnOnce(&VolumeList) -> bool) -> Option<Arc<VolumeList>> {
+    match SNAPSHOT.try_read() {
+        Ok(copy) => copy.as_ref().filter(|v| maybe(v)).cloned(),
+        Err(std::sync::TryLockError::Poisoned(e)) => {
+            e.into_inner().as_ref().filter(|v| maybe(v)).cloned()
+        }
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 /// Counts one event. A plain load and store, not an atomic add: these diagnostic counters
 /// sit in hot hooks, and a count lost to a race between threads does not matter.
 fn bump(counter: &std::sync::atomic::AtomicU64) {
@@ -491,6 +682,7 @@ fn bump(counter: &std::sync::atomic::AtomicU64) {
 
 /// Top (surface height) of the highest water volume containing `p` (slime is
 /// not water: the engine's water explosion needs `CONTENTS_WATER`).
+#[cfg(test)]
 fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
     vols.iter()
         .filter(|v| {
@@ -509,6 +701,7 @@ fn contents_at(vols: &[Volume], p: [f32; 3]) -> c_int {
         .fold(0, |c, v| c | v.contents)
 }
 
+#[cfg(test)]
 fn point_in_volumes(vols: &[Volume], p: [f32; 3]) -> bool {
     vols.iter()
         .any(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
@@ -708,13 +901,9 @@ mod engine_hook {
             let mut contents = original(this, pos, a3, a4);
             if !pos.is_null() {
                 // Never block inside an engine callback.
-                if let Some(vols) = snapshot() {
-                    let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-                    let inside = if vols.may_contain(p) {
-                        vols.contents_at(p)
-                    } else {
-                        0
-                    };
+                let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
+                if let Some(vols) = snapshot_if(|v| v.may_contain(p)) {
+                    let inside = vols.contents_at(p);
                     if inside != 0 {
                         contents |= inside;
                         bump(&VOLUME_HITS);
@@ -1173,11 +1362,8 @@ mod engine_hook {
                 return;
             }
             // Never block inside an engine callback.
-            if let Some(vols) = snapshot() {
-                // A ray far from every volume changes nothing (and needs no world entity).
-                if ray_misses_bounds(vols.bounds, ray) {
-                    return;
-                }
+            // A ray far from every volume changes nothing (and needs no world entity).
+            if let Some(vols) = snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)) {
                 // Only the volumes whose contents the trace's mask asks for are considered.
                 if apply_water_to_trace_masked(&vols, ray, trace, world_entity(), mask) {
                     bump(&TRACE_HITS);
@@ -1916,7 +2102,7 @@ mod engine_hook {
                 o.add(2).read_unaligned(),
             ];
             // try_lock: never wait (the original calls back into the contents hook).
-            let inside = snapshot().is_some_and(|v| point_in_volumes(&v, p));
+            let inside = snapshot_if(|v| v.may_contain(p)).is_some_and(|v| v.contains(p));
             if inside {
                 let level = this.add(ENTITY_WATER_LEVEL_OFFSET);
                 if level.read() < 2 {
@@ -2095,7 +2281,8 @@ mod engine_hook {
                 o.add(1).read_unaligned(),
                 o.add(2).read_unaligned(),
             ];
-            let inside = snapshot().is_some_and(|v| surface_z_at(&v, origin).is_some());
+            let inside = snapshot_if(|v| v.may_contain(origin))
+                .is_some_and(|v| v.surface_z(origin).is_some());
             if !inside {
                 return false;
             }
@@ -3066,7 +3253,7 @@ unsafe extern "C-unwind" fn l_point_in_volume(l: LuaState) -> c_int {
             (a.tonumber)(l, 2) as f32,
             (a.tonumber)(l, 3) as f32,
         ];
-        let inside = point_in_volumes(&volumes(), p);
+        let inside = volumes().contains(p);
         (a.pushboolean)(l, c_int::from(inside));
         1
     }
@@ -5267,6 +5454,60 @@ mod tests {
         assert_eq!(list.contents_at(list[0].min), list[0].contents);
         list.clear();
         assert_eq!(list.contents_at([0.0; 3]), 0);
+    }
+
+    #[test]
+    fn every_point_query_agrees_with_the_plain_scan_at_every_size() {
+        let mut state = 0x9E37_79B9_u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 8) as f32 / 16_777_216.0
+        };
+        for count in [0usize, 1, 5, 16, 17, 40, 256, 300] {
+            let mut list = VolumeList::new();
+            for id in 0..count {
+                let lo = [next() * 4000.0, next() * 4000.0, next() * 4000.0];
+                let size = [next() * 300.0, next() * 300.0, next() * 300.0];
+                list.push(Volume {
+                    id: id as u32,
+                    min: lo,
+                    max: [lo[0] + size[0], lo[1] + size[1], lo[2] + size[2]],
+                    contents: if id % 4 == 0 {
+                        CONTENTS_SLIME
+                    } else {
+                        CONTENTS_WATER
+                    },
+                });
+            }
+            let mut inside = 0;
+            for round in 0..5_000 {
+                // Half the points are inside some volume, half anywhere.
+                let p = if round % 2 == 0 && count > 0 {
+                    let v = list[round % count];
+                    [
+                        (v.max[0] - v.min[0]).mul_add(next(), v.min[0]),
+                        (v.max[1] - v.min[1]).mul_add(next(), v.min[1]),
+                        (v.max[2] - v.min[2]).mul_add(next(), v.min[2]),
+                    ]
+                } else {
+                    [next() * 4300.0, next() * 4300.0, next() * 4300.0]
+                };
+                assert_eq!(list.contents_at(p), contents_at(&list, p), "{count} {p:?}");
+                assert_eq!(
+                    list.contains(p),
+                    point_in_volumes(&list, p),
+                    "{count} {p:?}"
+                );
+                assert_eq!(list.surface_z(p), surface_z_at(&list, p), "{count} {p:?}");
+                inside += usize::from(list.contains(p));
+            }
+            assert!(count == 0 || inside > 0, "{count}");
+            // Corners are inside, NaN is not.
+            for v in list.iter().take(8) {
+                assert!(list.contains(v.min) && list.contains(v.max));
+            }
+            assert!(!list.contains([f32::NAN; 3]));
+        }
     }
 
     #[test]
