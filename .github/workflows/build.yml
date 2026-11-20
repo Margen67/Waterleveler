@@ -24,6 +24,32 @@ jobs:
           ./glualint --version
 
       - name: Lint
+        run: ./glualint --output-format github lint .
+
+      - name: Check formatting
+        run: |-
+          ./glualint --pretty-print-files addon
+          find addon -name '*.lua' -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
+          git diff --exit-code
+
+  build:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Use Rust nightly
+        run: |-
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+          rustup default nightly
+          rustc --version
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
         run: |-
           cargo clippy --release --locked --all-targets
           cargo clippy --release --locked --no-default-features --features server
