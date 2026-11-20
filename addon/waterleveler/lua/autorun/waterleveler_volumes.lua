@@ -810,6 +810,9 @@ if CLIENT then
             -- A bump map only shows under uneven light (a brush gets the map's lightmap): light
             -- from above, dimmer from the sides.
             render.ResetModelLighting(0.45, 0.45, 0.45);
+            -- Local lights are left over from whichever model was drawn last (they change with
+            -- the view); only the ambient light set here should count.
+            render.SetLocalModelLights({});
             render.SetModelLighting(BOX_TOP, 1, 1, 1);
             render.SetModelLighting(BOX_BOTTOM, 0.2, 0.2, 0.2);
         else
