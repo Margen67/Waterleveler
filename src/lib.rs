@@ -325,7 +325,7 @@ impl VolumeList {
     }
 
     /// Replaces every volume.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     fn set(&mut self, volumes: Vec<Volume>) {
         self.list = volumes;
         self.refresh_bounds();
@@ -737,7 +737,7 @@ mod engine_hook {
 
     /// If the ray enters a water volume before `trace` currently ends, rewrites
     /// `trace` as a water-surface hit. Returns true if it did.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) unsafe fn apply_water_to_trace(
         vols: &[Volume],
         ray: *const u8,
