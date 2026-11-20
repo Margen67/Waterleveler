@@ -7,6 +7,8 @@
 -- Volumes are created with the Water Volume tool (Tools > Construction) or
 -- the waterleveler library. Debugging commands:
 --   waterleveler_status         (server) hook status, counters, your water level
+--   waterleveler_probe          (server) where your feet, waist and eyes are against the nearest
+--                               volume (its box, its surface) and your water level
 --   waterleveler_explode        (server) explode where you look, through the normal
 --                               explosion path (water explosion, sound, particles)
 --   waterleveler_client_status  (client) client hook status, counters, where your eyes are
@@ -202,6 +204,36 @@ if SERVER then
         if IsValid(ply) then
             local p = ply:GetPos();
             print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))));
+        end
+    end);
+
+    concommand.Add("waterleveler_probe", function(caller)
+        local ply = resolve(caller);
+        if not IsValid(ply) then return; end
+        local mins, maxs = ply:GetHull();
+        local origin = ply:GetPos();
+        local points = {{"feet", origin + Vector(0, 0, mins.z + 1)}, {"waist", origin + (mins + maxs) * 0.5}, {"eyes", ply:EyePos()}};
+        -- The volume the player is in, else the one whose box is nearest to the eyes.
+        local best, bestDistance;
+        for _, b in pairs(boxes) do
+            local eyes = points[3][2];
+            local dx = math.max(b.mins.x - eyes.x, 0, eyes.x - b.maxs.x);
+            local dy = math.max(b.mins.y - eyes.y, 0, eyes.y - b.maxs.y);
+            local dz = math.max(b.mins.z - eyes.z, 0, eyes.z - b.maxs.z);
+            local distance = dx * dx + dy * dy + dz * dz;
+            if not bestDistance or distance < bestDistance then best, bestDistance = b, distance; end
+        end
+
+        print(("[wl] %s: WaterLevel() = %d, hull %s to %s, ducking: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(mins), tostring(maxs), tostring(ply:Crouching())));
+        if not best then
+            print("[wl] no volumes");
+            return;
+        end
+
+        print(("[wl] nearest volume: mins %s, maxs %s (surface z = %.2f)"):format(tostring(best.mins), tostring(best.maxs), best.maxs.z));
+        for _, point in ipairs(points) do
+            local p = point[2];
+            print(("[wl]   %-5s z = %.2f, %.2f below the surface, inside a volume (module): %s, inside this box (script): %s"):format(point[1], p.z, best.maxs.z - p.z, tostring(waterleveler.PointInVolume(p.x, p.y, p.z)), tostring(p:WithinAABox(best.mins, best.maxs))));
         end
     end);
 

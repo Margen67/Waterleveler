@@ -157,6 +157,7 @@ Every numeric `waterleveler_*` convar has limits (sizes 1-32768, offset +-32768,
 
 Debugging commands (the volumes themselves come from the Water Volume tool):
 `waterleveler_status` (server: hook status, counters, your water level),
+`waterleveler_probe` (server: your feet, waist and eyes against the nearest volume, and your water level),
 `waterleveler_explode` (server, superadmin: explode where you look, through the normal explosion path),
 `waterleveler_client_status` (client: module status, counters, your eyes against the volumes),
 `waterleveler_envmap_strength` / `waterleveler_envmap_contrast` (client convars: reflection of `water_movingplane`-style world water),
@@ -218,7 +219,7 @@ Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the clie
 `AddVolume`, `AddBox` and `CreateVolume` take an optional liquid, `"water"` (default) or `"slime"`, and
 `AttachFluid` takes `contents = "water"|"slime"` in its options (keep it equal to the volume's liquid). The
 engine derives the water type from the point contents, so slime volumes get slime-coloured splashes and
-ripples and a different swim sound value, players cannot wade in them, and underwater explosions do not
+ripples and a different swim sound value, players can wade in them, only more slowly, and underwater explosions do not
 use the water explosion effect (the engine only does that for water). The Water Volume tool has a Liquid
 dropdown, and the liquid also picks the fluid object's physics material (`water` or `slime`).
 
