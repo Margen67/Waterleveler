@@ -149,6 +149,8 @@ Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.l
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
+The "Inside shows the material's _beneath texture" option (`waterleveler_beneath`, per volume) draws world water single-sided, with `<material>_beneath` on the inside; turned off, the material is drawn on both sides.
+
 Material icons in the spawnmenu (the stock one and Extended Spawnmenu's) have a right-click option "Use with Water Volume tool" that sets `waterleveler_material` and switches to the tool.
 
 Every numeric `waterleveler_*` convar has limits (sizes 1-32768, offset +-32768, damping/torque/viscosity 0-10, current +-1000), and the server clamps what it receives. The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).

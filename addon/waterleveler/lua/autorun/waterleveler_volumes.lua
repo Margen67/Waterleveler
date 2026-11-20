@@ -113,6 +113,7 @@ if SERVER then
             net.WriteVector(b.maxs);
             net.WriteString(b.material or ""); -- "" = the default material
             net.WriteString(b.liquid or "water");
+            net.WriteBool(b.beneath ~= false);
         end
 
         if IsValid(ply) then
@@ -145,6 +146,7 @@ if SERVER then
             mins = mins,
             maxs = maxs,
             material = opts.material,
+            beneath = opts.beneath ~= false,
             liquid = opts.liquid
         };
 
@@ -254,7 +256,8 @@ if CLIENT then
                 mins = net.ReadVector(),
                 maxs = net.ReadVector(),
                 material = net.ReadString(),
-                liquid = net.ReadString()
+                liquid = net.ReadString(),
+                beneath = net.ReadBool()
             };
         end
 
@@ -753,7 +756,7 @@ if CLIENT then
             surface,
         };
 
-        if not (top.sided and top.beneath) then return faces; end
+        if not (bx.beneath ~= false and top.sided and top.beneath) then return faces; end
         -- Single-sided water: the outside of every face shows the water, the inside shows its
         -- $bottommaterial, like the two sides of a brush.
         local under = oneSided(mat(top.beneath));
@@ -832,13 +835,14 @@ if CLIENT then
             owner.mins = bx.mins - centre;
             owner.maxs = bx.maxs - centre;
             owner.material = bx.material;
+            owner.beneath = bx.beneath;
             local translation = Matrix();
             translation:SetTranslation(centre);
             cam.PushModelMatrix(translation);
             moved = true;
         end
 
-        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins);
+        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins) .. (owner.beneath ~= false and "/beneath" or "");
         if not owner.built or owner.built.key ~= key then
             destroyBuilt(owner);
             local list = {};

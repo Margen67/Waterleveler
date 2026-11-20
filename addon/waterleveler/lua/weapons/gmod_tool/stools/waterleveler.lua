@@ -22,6 +22,7 @@ TOOL.ClientConVar = {
     fluid_currenty = "0",
     fluid_currentz = "0",
     material = "nature/water_movingplane",
+    beneath = "1", -- the inside shows the material's _beneath texture; off: the material, double-sided
 };
 
 local minSize, maxSize = 1, 32768;
@@ -108,6 +109,7 @@ function TOOL:LeftClick(trace)
             currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -maxCurrent, maxCurrent),
         },
         material = self:GetClientInfo("material"),
+        beneath = self:GetClientNumber("beneath", 1) ~= 0,
     });
 
     if not id then
@@ -187,6 +189,7 @@ if CLIENT then
         end
 
         materialRow("Material", "waterleveler_material");
+        panel:CheckBox("Inside shows the material's _beneath texture (off: double-sided)", "waterleveler_beneath");
     end
 
     -- Preview: the volume drawn with the selected materials, plus an outline, where the player is looking.
@@ -235,6 +238,7 @@ if CLIENT then
                 mins = mins,
                 maxs = maxs,
                 material = str("waterleveler_material", ""),
+                beneath = convar("waterleveler_beneath", 1) ~= 0,
             });
         end
 
