@@ -2499,10 +2499,13 @@ mod engine_hook {
         #[link(name = "kernel32")]
         extern "system" {
             fn GetModuleHandleA(name: *const c_char) -> *mut c_void;
+            #[cfg(feature = "server")]
             fn VirtualAlloc(addr: *mut c_void, size: usize, ty: u32, prot: u32) -> *mut c_void;
             fn VirtualProtect(addr: *mut c_void, size: usize, new: u32, old: *mut u32) -> i32;
+            #[cfg(feature = "server")]
             fn FlushInstructionCache(process: *mut c_void, addr: *const c_void, size: usize)
                 -> i32;
+            #[cfg(feature = "server")]
             fn GetCurrentProcess() -> *mut c_void;
         }
         #[cfg(feature = "server")]
