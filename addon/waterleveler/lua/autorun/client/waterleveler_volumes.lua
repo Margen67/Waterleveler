@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 -- Copyright (C) 2026 Margen67
--- waterleveler_volumes_cl.lua: the client half of the Water Volume script (drawing, materials,
+-- The client half of the Water Volume script (drawing, materials,
 -- the debug commands). Shared parts: autorun/waterleveler_volumes.lua.
 local defaultMaterial = "nature/water_movingplane"; -- when a volume names none
 -- Client half of the networked fluid entity (invisible; the volume is drawn below).

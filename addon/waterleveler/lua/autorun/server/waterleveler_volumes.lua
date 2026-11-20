@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 -- Copyright (C) 2026 Margen67
--- waterleveler_server.lua: the server half of the Water Volume script (volume entities, undo and
+-- The server half of the Water Volume script (volume entities, undo and
 -- cleanup, networking, the debug commands). Shared parts: autorun/waterleveler_volumes.lua.
 require("waterleveler");
 util.AddNetworkString("wl_volumes");

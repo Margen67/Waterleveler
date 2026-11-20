@@ -2,8 +2,8 @@
 -- Copyright (C) 2026 Margen67
 -- waterleveler_volumes.lua (shared)
 -- The part of the script both realms need: the WLWater table and WLWater.Placement. The
--- server half is autorun/server/waterleveler_server.lua and the client half
--- (drawing) autorun/client/waterleveler_volumes_cl.lua.
+-- server half is autorun/server/waterleveler_volumes.lua and the client half
+-- (drawing) autorun/client/waterleveler_volumes.lua.
 --
 -- Volumes are created with the Water Volume tool (Tools > Construction) or
 -- the waterleveler library. Debugging commands:
