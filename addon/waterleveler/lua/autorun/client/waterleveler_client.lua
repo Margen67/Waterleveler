@@ -6,7 +6,6 @@
 --    sound) see the volumes;
 --  * adds "Use with Water Volume tool" to the right-click menu of material icons in the
 --    spawnmenu (the stock menu and Extended Spawnmenu's), next to "Use with Material Tool".
-if not CLIENT then return; end
 pcall(require, "waterlevelercore");
 local wrapped = {}; -- content type functions this file made, so they are not wrapped twice
 local function useWithWaterTool(spawnname)

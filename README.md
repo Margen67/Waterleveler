@@ -103,7 +103,7 @@ and server-side player movement.
 
 Limits (read these):
 - **No real water surface.** Rendering water needs map data compiled into the
-  BSP; this cannot create it. `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` draws a translucent
+  BSP; this cannot create it. `addon/waterleveler/lua/autorun/client/waterleveler_volumes_cl.lua` draws a translucent
   box client-side as a placeholder.
 - **Player prediction.** The client predicts swimming with its own trace object. With the client module it knows the volumes too (see below); without it a player inside one may see prediction corrections (stutter).
 - **Buoyancy.** Props float only if a vphysics
@@ -145,7 +145,11 @@ Limits (read these):
 
 Lua is linted and formatted with [GLuaFixer](https://github.com/FPtje/GLuaFixer) (`glualint.json`; CI checks both; `glualint --pretty-print-files addon` formats).
 
-Server and client script: `addon/waterleveler/lua/autorun/waterleveler_volumes.lua` (loaded automatically as part of the addon).
+Scripts (all loaded automatically as part of the addon), one file per realm so each side only gets the code it needs:
+`autorun/waterleveler_volumes.lua` (shared: the `WLWater` table and placement),
+`autorun/server/waterleveler_server.lua` (volume entities, undo and cleanup, networking) and
+`autorun/client/waterleveler_volumes_cl.lua` (materials and drawing), plus
+`autorun/client/waterleveler_client.lua` (the client module loader and the spawnmenu option), all under `addon/waterleveler/lua/`.
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
