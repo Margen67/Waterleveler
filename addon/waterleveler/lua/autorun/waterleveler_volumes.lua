@@ -711,12 +711,8 @@ if CLIENT then
         return copy;
     end
 
-    local function boxFaces(bx, top, body)
-        -- Inset the bottom and sides so they are not coplanar with the
-        -- floor or walls the volume rests against (z-fighting).
-        local e = 0.5;
-        local mn = Vector(bx.mins.x + e, bx.mins.y + e, bx.mins.z + e);
-        local mx = Vector(bx.maxs.x - e, bx.maxs.y - e, bx.maxs.z);
+    -- The six faces of the box from mn to mx; the surface (top) is last so it blends over the rest.
+    local function shell(mn, mx, top, body)
         local dx, dy, dz = mx.x - mn.x, mx.y - mn.y, mx.z - mn.z;
         local p000, p100 = Vector(mn.x, mn.y, mn.z), Vector(mx.x, mn.y, mn.z);
         local p110, p010 = Vector(mx.x, mx.y, mn.z), Vector(mn.x, mx.y, mn.z);
@@ -732,9 +728,8 @@ if CLIENT then
             vLen = dy,
             outward = Vector(0, 0, 1)
         };
-
         -- Sides and bottom first, surface last, so the surface blends over them.
-        local faces = {
+        return {
             {
                 entry = body, -- bottom
                 a = p000,
@@ -787,13 +782,21 @@ if CLIENT then
             },
             surface,
         };
+    end
 
-        if not (bx.beneath ~= false and top.sided and top.beneath) then return faces; end
+    local function boxFaces(bx, top, body)
+        -- The outer layer is exactly the collision box. Only the inner layer (the _beneath
+        -- faces seen from inside) is inset, from the bottom and sides, so it does not
+        -- z-fight with the floor or walls the volume rests against.
+        local outer = shell(bx.mins, bx.maxs, top, body);
+        if not (bx.beneath ~= false and top.sided and top.beneath) then return outer; end
         -- Single-sided water: the outside of every face shows the water, the inside shows its
         -- $bottommaterial, like the two sides of a brush.
         local under = oneSided(mat(top.beneath));
+        local e = 0.5;
+        local inner = shell(Vector(bx.mins.x + e, bx.mins.y + e, bx.mins.z + e), Vector(bx.maxs.x - e, bx.maxs.y - e, bx.maxs.z), top, body);
         local both = {};
-        for _, f in ipairs(faces) do
+        for _, f in ipairs(inner) do
             both[#both + 1] = {
                 entry = under,
                 a = f.a,
@@ -804,7 +807,9 @@ if CLIENT then
                 vLen = f.vLen,
                 outward = -f.outward
             };
+        end
 
+        for _, f in ipairs(outer) do
             both[#both + 1] = {
                 entry = oneSided(f.entry),
                 a = f.a,
