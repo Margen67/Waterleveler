@@ -272,11 +272,84 @@ struct Volume {
     contents: c_int,
 }
 
-static VOLUMES: Mutex<Vec<Volume>> = Mutex::new(Vec::new());
+/// The volumes plus one box around all of them, so a query far from every volume is
+/// rejected with a single comparison instead of a scan. Only the methods below change the
+/// list, and each one recomputes the box.
+#[derive(Debug, Default)]
+struct VolumeList {
+    list: Vec<Volume>,
+    /// The smallest box containing every volume, or `None` while the list is empty.
+    bounds: Option<([f32; 3], [f32; 3])>,
+}
+
+impl VolumeList {
+    const fn new() -> Self {
+        Self {
+            list: Vec::new(),
+            bounds: None,
+        }
+    }
+
+    fn refresh_bounds(&mut self) {
+        self.bounds = self.list.iter().fold(None, |acc, v| {
+            Some(acc.map_or((v.min, v.max), |(lo, hi)| {
+                (
+                    [
+                        lo[0].min(v.min[0]),
+                        lo[1].min(v.min[1]),
+                        lo[2].min(v.min[2]),
+                    ],
+                    [
+                        hi[0].max(v.max[0]),
+                        hi[1].max(v.max[1]),
+                        hi[2].max(v.max[2]),
+                    ],
+                )
+            }))
+        });
+    }
+
+    fn push(&mut self, volume: Volume) {
+        self.list.push(volume);
+        self.refresh_bounds();
+    }
+
+    fn clear(&mut self) {
+        self.list.clear();
+        self.bounds = None;
+    }
+
+    fn retain(&mut self, keep: impl FnMut(&Volume) -> bool) {
+        self.list.retain(keep);
+        self.refresh_bounds();
+    }
+
+    /// Replaces every volume.
+    fn set(&mut self, volumes: Vec<Volume>) {
+        self.list = volumes;
+        self.refresh_bounds();
+    }
+
+    /// False if `p` is certainly in no volume (true means "maybe": scan the list).
+    fn may_contain(&self, p: [f32; 3]) -> bool {
+        self.bounds
+            .is_some_and(|(lo, hi)| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]))
+    }
+}
+
+impl std::ops::Deref for VolumeList {
+    type Target = [Volume];
+
+    fn deref(&self) -> &[Volume] {
+        &self.list
+    }
+}
+
+static VOLUMES: Mutex<VolumeList> = Mutex::new(VolumeList::new());
 static NEXT_VOLUME_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static VOLUME_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn volumes() -> std::sync::MutexGuard<'static, Vec<Volume>> {
+fn volumes() -> std::sync::MutexGuard<'static, VolumeList> {
     VOLUMES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -497,7 +570,11 @@ mod engine_hook {
                 if let Ok(vols) = VOLUMES.try_lock() {
                     if !vols.is_empty() {
                         let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-                        let inside = contents_at(&vols, p);
+                        let inside = if vols.may_contain(p) {
+                            contents_at(&vols, p)
+                        } else {
+                            0
+                        };
                         if inside != 0 {
                             contents |= inside;
                             VOLUME_HITS.fetch_add(1, Ordering::Relaxed);
@@ -659,11 +736,23 @@ mod engine_hook {
 
     /// If the ray enters a water volume before `trace` currently ends, rewrites
     /// `trace` as a water-surface hit. Returns true if it did.
+    #[cfg(test)]
     pub(crate) unsafe fn apply_water_to_trace(
         vols: &[Volume],
         ray: *const u8,
         trace: *mut u8,
         world: usize,
+    ) -> bool {
+        unsafe { apply_water_to_trace_masked(vols, ray, trace, world, u32::MAX) }
+    }
+
+    /// Same, only for the volumes whose contents `mask` asks for.
+    pub(crate) unsafe fn apply_water_to_trace_masked(
+        vols: &[Volume],
+        ray: *const u8,
+        trace: *mut u8,
+        world: usize,
+        mask: u32,
     ) -> bool {
         unsafe {
             apply_water_to_trace_at(
@@ -672,6 +761,7 @@ mod engine_hook {
                 trace,
                 world,
                 RAY_SWEPT_OFFSET.load(Ordering::Relaxed),
+                mask,
             )
         }
     }
@@ -684,6 +774,7 @@ mod engine_hook {
         trace: *mut u8,
         world: usize,
         swept_offset: usize,
+        mask: u32,
     ) -> bool {
         unsafe {
             // A trace that reports a hit must name the entity it hit: callers
@@ -718,7 +809,7 @@ mod engine_hook {
             // the entity's own height.
             let mut started_inside = false;
             let mut left_at = 1.0f32;
-            for v in vols {
+            for v in vols.iter().filter(|v| v.contents as u32 & mask != 0) {
                 let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
                 let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
                 let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
@@ -764,7 +855,11 @@ mod engine_hook {
             }
 
             let mut best: Option<(f32, usize, bool, usize)> = None;
-            for (i, v) in vols.iter().enumerate() {
+            for (i, v) in vols
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.contents as u32 & mask != 0)
+            {
                 let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
                 let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
                 if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
@@ -836,13 +931,8 @@ mod engine_hook {
             }
             // Never block inside an engine callback.
             if let Ok(vols) = VOLUMES.try_lock() {
-                // Only the volumes whose contents the trace's mask asks for.
-                let wanted: Vec<Volume> = vols
-                    .iter()
-                    .copied()
-                    .filter(|v| v.contents as u32 & mask != 0)
-                    .collect();
-                if !wanted.is_empty() && apply_water_to_trace(&wanted, ray, trace, world_entity()) {
+                // Only the volumes whose contents the trace's mask asks for are considered.
+                if apply_water_to_trace_masked(&vols, ray, trace, world_entity(), mask) {
                     TRACE_HITS.fetch_add(1, Ordering::Relaxed);
                 }
             }
@@ -3791,12 +3881,12 @@ mod tests {
             BUBBLE_TRAMPOLINE.store(fake_bubble_trail as *const () as usize, Ordering::SeqCst);
             BUBBLE_CALLS.lock().unwrap().clear();
             let clips = BUBBLE_CLIPS.load(Ordering::Relaxed);
-            *VOLUMES.lock().unwrap() = vec![Volume {
+            VOLUMES.lock().unwrap().set(vec![Volume {
                 id: 1,
                 min: [0.0; 3],
                 max: [128.0; 3],
                 contents: CONTENTS_WATER,
-            }];
+            }]);
 
             let from = [64.0f32, 64.0, 64.0];
             let to = [1064.0f32, 64.0, 64.0];
@@ -4422,6 +4512,96 @@ mod tests {
     }
 
     #[test]
+    fn trace_mask_selects_the_volumes_it_asks_for() {
+        unsafe {
+            // A water volume and a slime volume side by side along the ray.
+            let vols = [
+                cube()[0],
+                Volume {
+                    id: 2,
+                    min: [200.0, 0.0, 0.0],
+                    max: [328.0, 128.0, 128.0],
+                    contents: CONTENTS_SLIME,
+                },
+            ];
+            let ray = make_ray(
+                [264.0, 64.0, 300.0],
+                [0.0, 0.0, -300.0],
+                [0.0; 3],
+                [0.0; 3],
+                true,
+            );
+            // Only the slime volume is under the ray: a water-only mask must leave it alone.
+            let mut tr = miss_trace();
+            assert!(!apply_water_to_trace_masked(
+                &vols,
+                ray.as_ptr(),
+                tr.as_mut_ptr(),
+                0x1234,
+                CONTENTS_WATER as u32
+            ));
+            assert_eq!(tr, miss_trace());
+            // A slime mask, and a mask with both, see it.
+            for mask in [
+                CONTENTS_SLIME as u32,
+                (CONTENTS_WATER | CONTENTS_SLIME) as u32,
+            ] {
+                let mut tr = miss_trace();
+                assert!(apply_water_to_trace_masked(
+                    &vols,
+                    ray.as_ptr(),
+                    tr.as_mut_ptr(),
+                    0x1234,
+                    mask
+                ));
+                assert_eq!(
+                    i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
+                    CONTENTS_SLIME
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn volume_bounds_follow_every_change_and_never_reject_a_point_inside() {
+        let a = cube()[0];
+        let b = Volume {
+            id: 2,
+            min: [1000.0, -50.0, 20.0],
+            max: [1100.0, 50.0, 60.0],
+            contents: CONTENTS_SLIME,
+        };
+        let mut list = VolumeList::new();
+        assert!(!list.may_contain([0.0; 3]), "empty list");
+        list.push(a);
+        list.push(b);
+        assert_eq!(
+            list.bounds,
+            Some(([0.0, -50.0, 0.0], [1100.0, 128.0, 128.0]))
+        );
+        // Every point inside a volume must pass the box.
+        let mut inside_count = 0;
+        for x in (-200..1300).step_by(37) {
+            for y in (-200..300).step_by(41) {
+                for z in (-100..300).step_by(43) {
+                    let p = [x as f32, y as f32, z as f32];
+                    let inside = contents_at(&list, p) != 0;
+                    inside_count += usize::from(inside);
+                    assert!(!inside || list.may_contain(p), "{p:?}");
+                }
+            }
+        }
+        assert!(inside_count > 0);
+        list.retain(|v| v.id != 2);
+        assert_eq!(list.bounds, Some(([0.0; 3], [128.0; 3])));
+        list.set(vec![b]);
+        assert_eq!(list.bounds, Some((b.min, b.max)));
+        list.clear();
+        assert_eq!(list.bounds, None);
+        assert!(!list.may_contain([0.0; 3]));
+    }
+
+    #[test]
     fn segment_box_entry_math() {
         let lo = [0.0; 3];
         let hi = [128.0; 3];
@@ -4466,7 +4646,8 @@ mod tests {
                 ray.as_ptr(),
                 tr.as_mut_ptr(),
                 0x1234,
-                0x49
+                0x49,
+                u32::MAX
             ));
             // Reading the old position (0x41, zero here) would call it "not swept".
             let mut tr = miss_trace();
@@ -4475,7 +4656,8 @@ mod tests {
                 ray.as_ptr(),
                 tr.as_mut_ptr(),
                 0x1234,
-                0x41
+                0x41,
+                u32::MAX
             ));
         }
     }
@@ -4670,7 +4852,7 @@ mod tests {
             let mut object: [usize; 2] = [vtable.as_mut_ptr() as usize, 0];
             let trace_obj = object.as_mut_ptr().cast::<c_void>();
 
-            *volumes() = cube().to_vec();
+            volumes().set(cube().to_vec());
             TRACE_ARGS.lock().unwrap().clear();
             let hits_before = TRACE_HITS.load(Ordering::Relaxed);
 
