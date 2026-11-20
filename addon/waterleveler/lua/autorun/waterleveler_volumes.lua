@@ -325,6 +325,10 @@ if CLIENT then
             if own and own ~= "" then params[key] = own; end
         end
 
+        -- The loaded material reports no $envmap (GetString and GetTexture cannot see it), but its
+        -- brush reflects the sky: the .vmt has env_cubemap, masked by the bump map's alpha.
+        params["$envmap"] = params["$envmap"] or "env_cubemap";
+        params["$normalmapalphaenvmapmask"] = params["$normalmapalphaenvmapmask"] or 1;
         -- 21 frames per second, like the original's proxies (a material can have only one
         -- AnimatedTexture proxy, so the bump map's frame counter is a ramp).
         params.Proxies = {
@@ -548,6 +552,9 @@ if CLIENT then
                 end
             end
 
+            -- The material water uses when seen from inside (a map brush's $bottommaterial).
+            local beneath = not m:IsError() and m:GetString("$bottommaterial");
+            if beneath and beneath ~= "" then entry.beneath = beneath; end
             cache[name] = entry;
         end
         return entry;
@@ -730,6 +737,9 @@ if CLIENT then
     local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
     local function drawVolume(bx)
         local top = mat(bx.material ~= "" and bx.material or defaultMaterial);
+        -- From inside, the faces use the water's $bottommaterial, like the underside of a brush.
+        local inside = top.beneath ~= nil and EyePos():WithinAABox(bx.mins, bx.maxs);
+        if inside then top = mat(top.beneath); end
         local body = top;
         local now = CurTime();
         if top.animate then top.animate(now); end
@@ -768,7 +778,7 @@ if CLIENT then
             moved = true;
         end
 
-        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins);
+        local key = (owner.material or "") .. tostring(owner.maxs - owner.mins) .. (inside and "/inside" or "");
         if not owner.built or owner.built.key ~= key then
             destroyBuilt(owner);
             local list = {};
