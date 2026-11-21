@@ -1538,7 +1538,15 @@ mod engine_hook {
                 if hit {
                     bump(&TRACE_HITS);
                 }
-                if let Some((fraction, ent)) = before {
+                // A trace that changed nothing and started far from every volume (the sun's
+                // line to the player, say) is not worth a log line.
+                let start = [
+                    ray.cast::<f32>().read_unaligned(),
+                    ray.add(4).cast::<f32>().read_unaligned(),
+                    ray.add(8).cast::<f32>().read_unaligned(),
+                ];
+                let worth_logging = hit || vols.near(start, 2048.0);
+                if let (Some((fraction, ent)), true) = (before, worth_logging) {
                     let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
                     let (after, _) = trace_summary(trace);
                     debug_log(format!(
