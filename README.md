@@ -1,7 +1,7 @@
 # waterleveler (gmsv_waterlevelercore)
 
 Per-entity water level overrides for Garry's Mod, as a dependency-free Rust
-binary module. 64-bit (x86-64 branch) on Windows and Linux. Server realm only.
+binary module. 64-bit (x86-64 branch) on Windows and Linux. A server module (`gmsv_`) and a client module (`gmcl_`) are built separately.
 
 ## Install
 
@@ -54,6 +54,31 @@ ent:ClearWaterLevelOverride()
 
 Levels follow `Entity:WaterLevel()`: 0 none, 1 feet, 2 waist, 3 submerged.
 Overrides are dropped when the entity is removed and when the module unloads.
+
+## Making volumes from a script
+
+Two levels, both server side:
+
+```lua
+-- Everything the Water Volume tool does: engine water, buoyancy, the translucent box on every
+-- client, clients that join later, undo and cleanup. Returns the volume id, or nil, err.
+local id, err = WLWater.Spawn(ply, mins, maxs, {
+    liquid = "water",          -- or "slime"
+    fluid = true,              -- buoyancy for props (default true)
+    material = "",             -- "" = the default drawn material
+    fluidOptions = { damping = 0.01 },   -- the options table of waterleveler.AttachFluid
+})
+WLWater.RemoveBox(id)          -- removes it from the module and the clients
+-- ply may be NULL for a script-made volume that no player's undo list owns.
+
+-- Only the engine side (point contents, traces, swimming, splashes). Clients are not told:
+-- nothing is drawn and a player's client-side prediction does not know the volume.
+local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2)
+```
+
+`WLWater.Placement(tr, size, offset)` (shared) gives the mins, maxs and center for a volume that
+rests against what a trace hit. Volumes are cleared on map cleanup and when the module unloads.
+Windows x64 only: elsewhere the module loads but volumes do nothing.
 
 ## How it works
 
