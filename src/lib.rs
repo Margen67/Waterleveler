@@ -979,10 +979,11 @@ mod engine_hook {
                             if let Some(vols) = snapshot_if(|v| v.may_contain(probe)) {
                                 inside = vols.contents_at(probe);
                             }
-                            if inside != 0 && DEBUG.load(Ordering::Relaxed) {
+                            if DEBUG.load(Ordering::Relaxed) {
                                 debug_log(format!(
-                                    "point ({:.4}, {:.4}, {:.4}) answered as water through the hull probe ({:.4}, {:.4}, {:.4})",
-                                    p[0], p[1], p[2], probe[0], probe[1], probe[2]
+                                    "hull pellet end ({:.4}, {:.4}, {:.4}): its line reaches the surface at ({:.4}, {:.4}, {:.4}) -> {}",
+                                    p[0], p[1], p[2], probe[0], probe[1], probe[2],
+                                    if inside != 0 { "water" } else { "not water" }
                                 ));
                             }
                         }

@@ -10,8 +10,10 @@
 --   waterleveler_status         (server) hook status, counters, your water level
 --   waterleveler_probe          (server) where your feet, waist and eyes are against the nearest
 --                               volume (its box, its surface) and your water level
---   waterleveler_debug [0|1]    (server) print every water trace near a volume and every
---                               point query just outside one, as the hooks answered them
+--   waterleveler_debug [0|1]    (server) prints the status of both realms, then every water trace
+--                               near a volume, every small hull trace (shotgun pellets) and every
+--                               point query just outside one, as the hooks answered them; runs the
+--                               status again when stopped
 --   waterleveler_explode        (server) explode where you look, through the normal
 --                               explosion path (water explosion, sound, particles)
 --   waterleveler_client_status  (client) client hook status, counters, where your eyes are

@@ -164,7 +164,7 @@ Every numeric `waterleveler_*` convar has limits (sizes 1-32768, offset +-32768,
 Debugging commands (the volumes themselves come from the Water Volume tool):
 `waterleveler_status` (server: hook status, counters, your water level),
 `waterleveler_probe` (server: your feet, waist and eyes against the nearest volume, and your water level),
-`waterleveler_debug [0|1]` (server, superadmin: print every water trace near a volume and every point query just outside one, as the hooks answered them),
+`waterleveler_debug [0|1]` (server, superadmin: prints the status of both realms, then every water trace near a volume, every small hull trace (shotgun pellets) and every point query just outside one, as the hooks answered them; the status again when stopped),
 `waterleveler_explode` (server, superadmin: explode where you look, through the normal explosion path),
 `waterleveler_client_status` (client: module status, counters, your eyes against the volumes),
 `waterleveler_envmap_strength` / `waterleveler_envmap_contrast` (client convars: reflection of `water_movingplane`-style world water),

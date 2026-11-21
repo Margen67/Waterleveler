@@ -163,7 +163,8 @@ local function resolve(ply)
 end
 
 local allowed = WLWater.Allowed;
-concommand.Add("waterleveler_status", function(caller)
+--- Prints the server's status, and asks the caller's client to print its own.
+local function printStatus(caller)
     print("[wl] " .. waterleveler.HookStatus());
     print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d"):format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(), waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()));
     print(("[wl] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()));
@@ -173,23 +174,36 @@ concommand.Add("waterleveler_status", function(caller)
         local p = ply:GetPos();
         print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))));
     end
-end);
+end
 
+concommand.Add("waterleveler_status", printStatus);
 concommand.Add("waterleveler_debug", function(caller, _, args)
     local ply = resolve(caller);
     if IsValid(ply) and not ply:IsSuperAdmin() then return; end
     local on = args[1] ~= "0";
-    waterleveler.SetDebug(on and 1 or 0);
+    -- The status, from both realms, before the log starts and after it ends.
+    local function status()
+        printStatus(caller);
+        if IsValid(ply) then ply:ConCommand("waterleveler_client_status"); end
+    end
+
     if on then
+        status();
+        waterleveler.SetDebug(1);
         timer.Create("wl_debug", 0.25, 0, function()
             local lines = waterleveler.TakeDebugLog();
             if lines ~= "" then print(lines); end
         end);
-    else
-        timer.Remove("wl_debug");
-    end
 
-    print(on and "[wl] debug log on: every water trace near a volume and every point just outside one is printed (waterleveler_debug 0 stops it)" or "[wl] debug log off");
+        print("[wl] debug log on: every water trace near a volume, every small hull trace (shotgun pellets) and every point just outside one is printed (waterleveler_debug 0 stops it)");
+    else
+        waterleveler.SetDebug(0);
+        timer.Remove("wl_debug");
+        local lines = waterleveler.TakeDebugLog();
+        if lines ~= "" then print(lines); end
+        print("[wl] debug log off");
+        status();
+    end
 end);
 
 concommand.Add("waterleveler_probe", function(caller)
