@@ -81,7 +81,7 @@ local function sync(ply)
     for _, b in pairs(boxes) do
         net.WriteVector(b.mins);
         net.WriteVector(b.maxs);
-        net.WriteString(b.material or ""); -- "" = the default material
+        net.WriteString(b.material or ""); -- "" = none: the client draws nothing
         net.WriteString(b.liquid or "water");
         net.WriteBool(b.beneath ~= false);
     end
@@ -106,7 +106,7 @@ end
 --- field of `opts`; the defaults are what a map's water brush has:
 ---   liquid        "water" ("slime" picks slime contents and the fluid's physics material)
 ---   fluid         true (buoyancy for props; false = engine water only)
----   material      "" (the default drawn material, nature/water_movingplane)
+---   material      "" (none: the volume is real to the engine but nothing is drawn)
 ---   beneath       true (the inside shows the material's _beneath texture)
 ---   fluidOptions  {} (the options of waterleveler.AttachFluid: damping 0.01, torque 0,
 ---                 viscosity 0, aerodynamics false, no current; `contents` follows liquid)

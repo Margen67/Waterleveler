@@ -72,7 +72,7 @@ local id, err = WLWater.Spawn(nil, mins, maxs)   -- any two opposite corners
 local id = WLWater.Spawn(ply, mins, maxs, {
     liquid = "slime",          -- default "water"
     fluid = false,             -- default true: buoyancy for props
-    material = "gm_construct/water_13",  -- default "": nature/water_movingplane
+    material = "nature/water_movingplane",  -- default "": nothing is drawn (no mesh is made)
     beneath = false,           -- default true: the inside shows the material's _beneath texture
     fluidOptions = { damping = 0.05, currentx = 100 },   -- the options of waterleveler.AttachFluid;
                                -- default {}: a map water brush's values (damping 0.01, no torque,

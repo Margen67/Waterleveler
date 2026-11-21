@@ -2,7 +2,6 @@
 -- Copyright (C) 2026 Margen67
 -- The client half of the Water Volume script (drawing, materials,
 -- the debug commands). Shared parts: autorun/waterleveler_volumes.lua.
-local defaultMaterial = "nature/water_movingplane"; -- when a volume names none
 -- Client half of the networked fluid entity (invisible; the volume is drawn below).
 scripted_ents.Register({
     Type = "anim",
@@ -342,7 +341,10 @@ concommand.Add("waterleveler_material_info", function(_, _, args)
     if not name or name == "" then
         local cv = GetConVar("waterleveler_material");
         name = cv and cv:GetString() or "";
-        if name == "" then name = defaultMaterial; end
+        if name == "" then
+            print("[wl] no material is set (a volume without one is not drawn)");
+            return;
+        end
     end
 
     local original = Material(name);
@@ -572,7 +574,9 @@ end
 -- like any other translucent thing (origin = the box centre).
 local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
 local function drawVolume(bx)
-    local top = mat(bx.material ~= "" and bx.material or defaultMaterial);
+    -- A volume without a material has no mesh at all.
+    if not bx.material or bx.material == "" then return; end
+    local top = mat(bx.material);
     local body = top;
     local now = CurTime();
     if top.animate then top.animate(now); end
@@ -698,7 +702,8 @@ syncVolumeEntities = function()
 
     volumeEnts = {};
     for _, bx in ipairs(boxes) do
-        local e = ents.CreateClientside("wl_volume_draw");
+        -- No material: nothing to draw, so no entity either.
+        local e = bx.material ~= "" and ents.CreateClientside("wl_volume_draw") or nil;
         if IsValid(e) then
             local centre = (bx.mins + bx.maxs) * 0.5;
             e:SetModel("models/error.mdl");
