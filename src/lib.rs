@@ -1093,6 +1093,11 @@ mod engine_hook {
         }
     }
 
+    /// How far inside a volume, along the axis of the face it entered through, a rewritten
+    /// trace ends. More than the engine's 1/32 trace epsilon and its 0.1 downward probe
+    /// can cancel out.
+    pub(crate) const ENTRY_DEPTH: f32 = 0.125;
+
     /// Traces seen with a water bit in the mask (diagnostics).
     static WATER_SURFACE_NAME: &[u8] = b"water\0";
 
@@ -1285,8 +1290,28 @@ mod engine_hook {
                 }
             }
         }
-        let (t, axis, min_face, vi) = best?;
+        let (t_entry, axis, min_face, vi) = best?;
         let v = &vols[vi];
+        // The engine decides whether a bullet hit water by testing the point 0.1 straight
+        // below the end of this trace (`HandleShotImpactingWater`). A real water brush only
+        // has a top face, so that point is always under the surface. A volume has side faces
+        // too: a trace ending exactly on one has that point on the face's edge, or outside
+        // it, and the shot gets no splash. End the trace slightly inside the volume instead.
+        let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
+        let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
+        let t_exit = segment_exit_fraction(s, d, lo, hi);
+        // Only for point rays (bullets). A hull (player movement, water-level probes) rests
+        // against the face as before.
+        let point_ray = ext.iter().all(|&e| e == 0.0);
+        let push = if point_ray {
+            ENTRY_DEPTH / d[axis].abs().max(1e-9)
+        } else {
+            0.0
+        };
+        let t = (t_entry + push)
+            .min((t_entry + t_exit) * 0.5)
+            .min((current - t_entry).mul_add(0.5, t_entry))
+            .max(t_entry);
         let mut end = origin;
         for i in 0..3 {
             end[i] = d[i].mul_add(t, origin[i]);
@@ -5597,11 +5622,11 @@ mod tests {
                 tr.as_mut_ptr(),
                 0x1234
             ));
-            let t = 172.0 / 300.0;
+            let t = (172.0 + ENTRY_DEPTH) / 300.0;
             assert!((f32at(&tr, 0x2c) - t).abs() < 1e-6, "fraction");
             assert!(
-                (f32at(&tr, 0x0c + 8) - 128.0).abs() < 1e-3,
-                "endpos.z is the surface"
+                (f32at(&tr, 0x0c + 8) - (128.0 - ENTRY_DEPTH)).abs() < 1e-3,
+                "endpos.z is just under the surface"
             );
             assert_eq!(f32at(&tr, 8), 300.0, "startpos.z");
             assert_eq!(
@@ -5786,7 +5811,7 @@ mod tests {
             // Water in the mask: the miss becomes a water-surface hit.
             let mut tr = miss_trace();
             call(CONTENTS_WATER as u32 | 0x10, &mut tr);
-            assert!((f32at(&tr, 0x2c) - 172.0 / 300.0).abs() < 1e-6);
+            assert!((f32at(&tr, 0x2c) - (172.0 + ENTRY_DEPTH) / 300.0).abs() < 1e-6);
             assert_eq!(
                 i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
                 CONTENTS_WATER
