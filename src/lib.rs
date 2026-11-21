@@ -767,6 +767,7 @@ mod engine_hook {
     // The Windows-only code below needs more of the parent's names than the Linux build uses.
     #[allow(clippy::wildcard_imports)]
     use super::*;
+    use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     #[cfg(feature = "server")]
@@ -964,12 +965,26 @@ mod engine_hook {
             if !pos.is_null() {
                 // Never block inside an engine callback.
                 let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-                if let Some(vols) = snapshot_if(|v| v.may_contain(p)) {
-                    let inside = vols.contents_at(p);
-                    if inside != 0 {
-                        contents |= inside;
-                        bump(&VOLUME_HITS);
+                let mut inside =
+                    snapshot_if(|v| v.may_contain(p)).map_or(0, |vols| vols.contents_at(p));
+                if inside == 0 {
+                    // The end point of a small-hull trace (a shotgun pellet): the engine asks
+                    // whether it is in water to decide on a splash. Answer for where the
+                    // bullet's own line reaches the surface instead of the hull's centre.
+                    if let Some((end, probe)) = LAST_HULL.with(Cell::get) {
+                        // The very floats the trace returned, so an exact comparison.
+                        #[allow(clippy::float_cmp)]
+                        let same = end == p;
+                        if same {
+                            if let Some(vols) = snapshot_if(|v| v.may_contain(probe)) {
+                                inside = vols.contents_at(probe);
+                            }
+                        }
                     }
+                }
+                if inside != 0 {
+                    contents |= inside;
+                    bump(&VOLUME_HITS);
                 }
                 if DEBUG.load(Ordering::Relaxed) {
                     // A point just outside every volume: a bullet's impact point that lands
@@ -1498,9 +1513,7 @@ mod engine_hook {
                 return;
             }
             if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0 {
-                if DEBUG.load(Ordering::Relaxed) {
-                    debug_log_small_hull(ray, mask, trace);
-                }
+                note_small_hull(ray, mask, trace);
                 return;
             }
             // Never block inside an engine callback.
@@ -1535,27 +1548,77 @@ mod engine_hook {
         }
     }
 
-    /// Debug only: a trace without the water bit whose hull is a few units wide (the
-    /// shotgun's odd pellets use a 3 unit hull) that passes near a volume. The engine
-    /// tests the point contents at its end afterwards.
-    unsafe fn debug_log_small_hull(ray: *const u8, mask: u32, trace: *const u8) {
+    thread_local! {
+        /// The last small-hull trace that hit something near a volume: (its end point, the
+        /// point where the bullet's own line reaches the surface the hull stopped at).
+        static LAST_HULL: Cell<Option<([f32; 3], [f32; 3])>> = const { Cell::new(None) };
+    }
+
+    /// Where the centre line of a hull trace reaches the surface the hull stopped at. The
+    /// hull's centre rests `extents . |normal|` away from that surface, so for a bullet
+    /// that went into a volume through a side face and hit the floor next to it the centre
+    /// can end outside the volume while the bullet itself is inside.
+    pub(crate) fn hull_surface_point(
+        end: [f32; 3],
+        normal: [f32; 3],
+        delta: [f32; 3],
+        extents: [f32; 3],
+    ) -> Option<[f32; 3]> {
+        let len = delta[2]
+            .mul_add(delta[2], delta[0].mul_add(delta[0], delta[1] * delta[1]))
+            .sqrt();
+        if len.is_nan() || len <= 1e-3 {
+            return None;
+        }
+        let dir = [delta[0] / len, delta[1] / len, delta[2] / len];
+        let toward = -dir[2].mul_add(normal[2], dir[0].mul_add(normal[0], dir[1] * normal[1]));
+        if toward.is_nan() || toward <= 0.01 {
+            return None;
+        }
+        let rest = extents[2].mul_add(
+            normal[2].abs(),
+            extents[1].mul_add(normal[1].abs(), extents[0] * normal[0].abs()),
+        );
+        let k = rest / toward;
+        Some([
+            dir[0].mul_add(k, end[0]),
+            dir[1].mul_add(k, end[1]),
+            dir[2].mul_add(k, end[2]),
+        ])
+    }
+
+    /// A trace without the water bit whose hull is a few units wide (the shotgun's odd
+    /// pellets use a 3 unit hull) that hit something near a volume: remembers where its
+    /// line reaches the surface, for `hook_get_point_contents`, and logs it when debugging.
+    unsafe fn note_small_hull(ray: *const u8, mask: u32, trace: *const u8) {
         unsafe {
             let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
             let ext = [rf(0x30), rf(0x34), rf(0x38)];
             if !ext.iter().all(|&e| (1.0..=5.0).contains(&e)) {
                 return;
             }
+            let (fraction, ent) = trace_summary(trace);
+            if fraction >= 1.0 {
+                return;
+            }
             if snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)).is_none() {
                 return;
             }
-            let (fraction, ent) = trace_summary(trace);
-            let end = |o: usize| trace.add(o).cast::<f32>().read_unaligned();
-            debug_log(format!(
-                "hull trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.1}, {:.1}, {:.1}): fraction {fraction:.5} entity {ent:#x}, end ({:.3}, {:.3}, {:.3})",
-                rf(0x00), rf(0x04), rf(0x08), rf(0x10), rf(0x14), rf(0x18),
-                ext[0], ext[1], ext[2],
-                end(0x0c), end(0x10), end(0x14),
-            ));
+            let tf = |o: usize| trace.add(o).cast::<f32>().read_unaligned();
+            let end = [tf(0x0c), tf(0x10), tf(0x14)];
+            let normal = [tf(0x18), tf(0x1c), tf(0x20)];
+            let delta = [rf(0x10), rf(0x14), rf(0x18)];
+            if let Some(probe) = hull_surface_point(end, normal, delta, ext) {
+                LAST_HULL.with(|c| c.set(Some((end, probe))));
+            }
+            if DEBUG.load(Ordering::Relaxed) {
+                debug_log(format!(
+                    "hull trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.1}, {:.1}, {:.1}): fraction {fraction:.5} entity {ent:#x}, end ({:.3}, {:.3}, {:.3})",
+                    rf(0x00), rf(0x04), rf(0x08), delta[0], delta[1], delta[2],
+                    ext[0], ext[1], ext[2],
+                    end[0], end[1], end[2],
+                ));
+            }
         }
     }
 
@@ -5626,6 +5689,25 @@ mod tests {
                 "unexpected m_IsSwept offset {off:#x}"
             );
         }
+    }
+
+    #[test]
+    fn hull_pellet_line_reaches_the_floor_inside_the_volume() {
+        // From a shotgun log: a 3 unit hull rested on the floor at x = 184.026, just outside
+        // a volume whose +x face is at 183.906. The bullet's own line hits the floor inside.
+        let probe = hull_surface_point(
+            [184.026, -1343.636, -140.969],
+            [0.0, 0.0, 1.0],
+            [-51316.113, -2002.649, -24236.941],
+            [3.0; 3],
+        )
+        .unwrap();
+        assert!(probe[0] < 183.906, "x {}", probe[0]);
+        assert!((probe[2] - (-140.969 - 3.0)).abs() < 1e-3, "z {}", probe[2]);
+        // Moving away from the surface it stopped at: no probe.
+        assert!(
+            hull_surface_point([0.0; 3], [0.0, 0.0, 1.0], [0.0, 0.0, 10.0], [3.0; 3]).is_none()
+        );
     }
 
     #[test]
