@@ -1,19 +1,23 @@
 # waterleveler (gmsv_waterlevelercore)
 
-Per-entity water level overrides for Garry's Mod, as a dependency-free Rust
-binary module. 64-bit (x86-64 branch) on Windows and Linux. A server module (`gmsv_`) and a client module (`gmcl_`) are built separately.
+Per-entity water level overrides and fake water volumes for Garry's Mod, as a
+dependency-free Rust binary module for the 64-bit (x86-64) branch. The server module
+(`gmsv_`) and the client module (`gmcl_`) are separate builds. The water volumes are
+Windows x64 only; on Linux only the water level datamap layer works.
 
 ## Install
 
 GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 `lua/bin`), so install in two parts: the DLL into `garrysmod/lua/bin/`, and the
 `addon/waterleveler` folder (Lua library + volume script) into `garrysmod/addons/`.
-`build.sh` does both on Windows (it installs the server and the client module). The CI artifact has both too. Files:
+`build.sh` does both on Windows (it deletes the installed addon first, then copies the server
+and the client module and the addon). The CI artifact has everything too. Files:
 
-| Platform | File name                       |
-|----------|---------------------------------|
-| Linux 64 | `gmsv_waterlevelercore_linux64.dll`   |
-| Win 64   | `gmsv_waterlevelercore_win64.dll`     |
+| Platform | Realm  | File name                           |
+|----------|--------|-------------------------------------|
+| Linux 64 | server | `gmsv_waterlevelercore_linux64.dll` |
+| Win 64   | server | `gmsv_waterlevelercore_win64.dll`   |
+| Win 64   | client | `gmcl_waterlevelercore_win64.dll`   |
 
 
 (The Linux file really is named `.dll`; GMod's module loader expects that.)
@@ -146,7 +150,7 @@ Limits (read these):
   hull that enters a volume from outside before it hits anything else is
   rewritten as a water-surface hit (fraction, endpos, plane, contents). This is
   what the engine's splash code (`ImpactWater`, bullet splash) uses to find the
-  surface. `m_pEnt` is left as the engine set it, and `ClipRayToEntity`/`ClipRayToCollideable` are not
+  surface. The hit entity is the world entity (see below), and `ClipRayToEntity`/`ClipRayToCollideable` are not
   hooked. `waterleveler.TraceHits()` counts rewrites.
   A ray that **starts inside** a volume behaves like one starting inside a
   real water brush: `startsolid`, and when it also ends inside, `allsolid`
@@ -154,6 +158,17 @@ Limits (read these):
   probe (a downward `MASK_WATER` ray from 256 units above the entity) relies on that; before this, a probe starting inside
   a volume looked like "no water" and the surface height collapsed to the
   entity's own height.
+- **Bullet splashes.** The engine decides that a shot hit water from the point contents at the
+  end of its normal trace, then re-traces with `CONTENTS_WATER` and tests the point 0.1 units
+  *straight below* that trace's end. A real water brush only has a top face, so that point is
+  always under the surface; a volume has side faces too. Three things make shots through the
+  sides and next to the floor work: a point ray that enters a volume ends 1/8 unit inside it
+  (hulls end on the face as before); the box a volume gets from `WLWater.Placement` reaches
+  `WLWater.ContactDepth` (1/4 unit) into the surface it rests on, and the client draws the bottom
+  that much shorter; and the shotgun's odd pellets, which are 3 unit hull traces whose end is the
+  hull's centre, are answered for where the bullet's own line reaches the surface the hull
+  stopped at. A bullet that lands on the floor outside a box, even by a fraction of a unit, gets
+  no splash, as with real water.
 - **Bullet bubble trails.** `UTIL_BubbleTrail` clips a
   trail by water depth only, never sideways, and sends one temp entity with
   `count` bubbles for the whole remaining segment. A shot leaving a volume
@@ -205,22 +220,32 @@ from the engine's own ray-building helper at load time (shown in
 
 ## Verified vs not
 
-Verified (`cargo test`, with `SERVER_DLL_X64` pointing at your `server.dll`):
-the signature matches exactly once; the PE section scanner finds it in a
-loader-style mapped image; the detour + trampoline run the **real
-`SetWaterLevel` machine code** from that DLL, substitute the override,
-pass non-overridden calls through, and uninstall restores the bytes exactly.
+Verified by `cargo test` (48 tests; the ones that need `server.dll` take its path in `SERVER_DLL_X64`):
+the signatures match exactly once; the detour and trampoline run the **real
+`SetWaterLevel` machine code** from that DLL, substitute the override, pass other calls
+through, and uninstall restores the bytes exactly; the volume store and its lookup (lanes and
+BVH), the trace maths (`plan_trace`: inside, leaving, entering, hulls, the entry depth), the
+hull-pellet probe, and the vtable hooks run against fake `IEngineTrace` objects.
 
-Not verified, because it needs the actual game:
-- Loading into a live Garry's Mod, the `lua_shared` symbol lookup, and the Lua
-  glue.
-- The Windows-specific glue (`VirtualAlloc/VirtualProtect/GetModuleHandleA`).
-  It is a few dozen lines and could not be compiled here (no Windows target).
-- Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If
-  not, use `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
-- Linux: no engine hook (a Linux `server.so` is a different binary).
-- Patching happens at module load. Do it while the server is idle (normal
-  `require` at startup is fine).
+Verified in a live game (Windows x64, singleplayer and listen server, `gm_construct`): the
+server and client modules load, the hooks install, volumes answer point queries and rewrite
+traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
+at the floor, the visible box has the collision box's size, and the water level, explosion and
+bubble-trail patches act. CI builds each module with `cargo clippy` without warnings.
+
+Not verified:
+- Dedicated servers and other players' clients (prediction for a player inside a volume
+  without the client module).
+- Buoyancy: whether a fluid object created from Lua is accepted exactly like the world's, and
+  the engine-side teardown when it is removed.
+- Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
+  `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
+- Linux: no engine hook (a Linux `server.so` is a different binary), so no volumes. Only the
+  datamap layer runs there.
+- Game updates: the hooks are found by signature, so an update that changes those functions
+  disables the affected hook (`HookStatus()` and `waterleveler_status` say which) and leaves the others.
+- Patching happens at module load. Do it while the server is idle (normal `require` at startup
+  is fine).
 
 ## Build
 
