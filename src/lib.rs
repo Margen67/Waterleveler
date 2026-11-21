@@ -3080,11 +3080,17 @@ mod hook_state {
                     patches.push(patch);
                 }
             }
-            let explosion = format!(
-                " + {}/{} explosion checks",
-                patches.len(),
-                engine_hook::EXPLOSION_TARGETS.len()
-            );
+            // A parenthesis marks a part that is not working (`hook_state::install` callers
+            // report those whatever `developer` says).
+            let explosion = if patches.len() == engine_hook::EXPLOSION_TARGETS.len() {
+                format!(" + {0}/{0} explosion checks", patches.len())
+            } else {
+                format!(
+                    " (only {}/{} explosion checks hooked)",
+                    patches.len(),
+                    engine_hook::EXPLOSION_TARGETS.len()
+                )
+            };
             *EXPLOSIONS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = patches;
@@ -3415,6 +3421,29 @@ unsafe fn fail(l: LuaState, msg: &CStr) -> c_int {
         (a.pushnil)(l);
         (a.pushstring)(l, msg.as_ptr());
         2
+    }
+}
+
+#[cfg(feature = "server")]
+/// The value of the `developer` convar (0 when it cannot be read).
+unsafe fn developer_level(l: LuaState) -> f64 {
+    unsafe {
+        let a = api();
+        let base = (a.gettop)(l);
+        let mut level = 0.0;
+        (a.getfield)(l, LUA_GLOBALSINDEX, c"GetConVar".as_ptr());
+        (a.pushstring)(l, c"developer".as_ptr());
+        // The convar object is a userdata; its GetInt is looked up on its metatable.
+        if (a.pcall)(l, 1, 1, 0) == 0 && (a.type_)(l, -1) == LUA_TUSERDATA {
+            (a.getfield)(l, -1, c"GetInt".as_ptr());
+            (a.pushvalue)(l, -2);
+            if (a.pcall)(l, 1, 1, 0) == 0 {
+                level = (a.tonumber)(l, -1);
+            }
+        }
+
+        (a.settop)(l, base);
+        level
     }
 }
 
@@ -4166,16 +4195,26 @@ unsafe fn open_server(l: LuaState) -> c_int {
         hook_add(l, c"EntityRemoved", l_entity_removed);
 
         // Engine hook (best effort; the Lua layers work without it).
-        let water_level = match hook_state::install() {
+        let water_level = hook_state::install();
+        let contents = hook_state::install_contents();
+        // A hook or patch that failed to install is always reported (where they exist at all:
+        // Windows). The all-good status is only printed with `developer` above 0; it is
+        // always available from `waterleveler_status`.
+        // Parts of the volumes that did not install are noted in parentheses.
+        let failed = cfg!(windows)
+            && (water_level.is_err() || contents.as_ref().map_or(true, |what| what.contains(" (")));
+        let water_level = match water_level {
             Ok(rva) => format!("hooked CBaseEntity::SetWaterLevel at server.dll+{rva:#x}"),
             Err(why) => format!("engine hook inactive: {why}"),
         };
-        let contents = match hook_state::install_contents() {
+        let contents = match contents {
             Ok(what) => format!("water volumes active via {what}"),
             Err(why) => format!("water volumes inactive: {why}"),
         };
         let status = format!("{water_level}; {contents}");
-        lua_print(l, &format!("[wl] {status}"));
+        if failed || developer_level(l) > 0.0 {
+            lua_print(l, &format!("[wl] {status}"));
+        }
         *HOOK_STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = status;

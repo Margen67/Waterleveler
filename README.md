@@ -247,9 +247,15 @@ traces, bullets (single and shotgun) splash on entering a volume through the top
 at the floor, the visible box has the collision box's size, and the water level, explosion and
 bubble-trail patches act. CI builds each module with `cargo clippy` without warnings.
 
+In multiplayer, a client that does **not** have the client module installed sees prediction
+errors, and the effects the client makes from its own water queries are missing: the wake
+splash, bullet and crowbar impact splashes, and the underwater muffling of explosions; a
+glitchy underwater sound can play about every tick. With the client module installed
+everything works. Binary modules cannot be sent by the server, so every player who should see
+volumes correctly needs `gmcl_waterlevelercore_win64.dll` in `garrysmod/lua/bin`.
+
 Not verified:
-- Dedicated servers and other players' clients (prediction for a player inside a volume
-  without the client module).
+- Dedicated servers (listen server with another player is what was tried).
 - Buoyancy: whether a fluid object created from Lua is accepted exactly like the world's, and
   the engine-side teardown when it is removed.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
