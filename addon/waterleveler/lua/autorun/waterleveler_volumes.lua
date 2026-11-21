@@ -25,8 +25,9 @@
 if SERVER then AddCSLuaFile(); end
 WLWater = WLWater or {};
 --- How far the collision box of a volume placed by `WLWater.Placement` reaches into the surface
---- it rests on. The client draws the bottom of the volume this much shorter.
-WLWater.ContactDepth = 0.0625;
+--- it rests on. The client draws the bottom of the volume this much shorter. The engine tests
+--- for water 0.1 below where a bullet hit the floor (1/32 above it), so this must exceed 0.13.
+WLWater.ContactDepth = 0.25;
 --- Where a volume of `size` (Vector) goes for the trace `tr`: it rests against the surface the
 --- trace hit (floor, wall or ceiling), then moves `offset` units up (down when negative).
 --- Returns mins, maxs, center. Shared by the tool's preview (client) and the spawn (server).
