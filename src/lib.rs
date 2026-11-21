@@ -1494,10 +1494,13 @@ mod engine_hook {
                 *mut u8,
             ) = std::mem::transmute(ORIGINAL_TRACE_RAY.load(Ordering::Relaxed));
             original(this, ray, mask, filter, trace);
-            if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0
-                || ray.is_null()
-                || trace.is_null()
-            {
+            if ray.is_null() || trace.is_null() {
+                return;
+            }
+            if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0 {
+                if DEBUG.load(Ordering::Relaxed) {
+                    debug_log_small_hull(ray, mask, trace);
+                }
                 return;
             }
             // Never block inside an engine callback.
@@ -1529,6 +1532,30 @@ mod engine_hook {
                     ));
                 }
             }
+        }
+    }
+
+    /// Debug only: a trace without the water bit whose hull is a few units wide (the
+    /// shotgun's odd pellets use a 3 unit hull) that passes near a volume. The engine
+    /// tests the point contents at its end afterwards.
+    unsafe fn debug_log_small_hull(ray: *const u8, mask: u32, trace: *const u8) {
+        unsafe {
+            let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+            let ext = [rf(0x30), rf(0x34), rf(0x38)];
+            if !ext.iter().all(|&e| (1.0..=5.0).contains(&e)) {
+                return;
+            }
+            if snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)).is_none() {
+                return;
+            }
+            let (fraction, ent) = trace_summary(trace);
+            let end = |o: usize| trace.add(o).cast::<f32>().read_unaligned();
+            debug_log(format!(
+                "hull trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.1}, {:.1}, {:.1}): fraction {fraction:.5} entity {ent:#x}, end ({:.3}, {:.3}, {:.3})",
+                rf(0x00), rf(0x04), rf(0x08), rf(0x10), rf(0x14), rf(0x18),
+                ext[0], ext[1], ext[2],
+                end(0x0c), end(0x10), end(0x14),
+            ));
         }
     }
 
