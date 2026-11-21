@@ -241,13 +241,13 @@ through, and uninstall restores the bytes exactly; the volume store and its look
 BVH), the trace maths (`plan_trace`: inside, leaving, entering, hulls, the entry depth), the
 hull-pellet probe, and the vtable hooks run against fake `IEngineTrace` objects.
 
-Verified in a live game (Windows x64, singleplayer and listen server, `gm_construct`): the
+Verified in a live game (Windows x64, singleplayer and a dedicated server with a connected client, `gm_construct`): the
 server and client modules load, the hooks install, volumes answer point queries and rewrite
 traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
 at the floor, the visible box has the collision box's size, and the water level, explosion and
 bubble-trail patches act. CI builds each module with `cargo clippy` without warnings.
 
-In multiplayer, a client that does **not** have the client module installed sees prediction
+On a dedicated server, a client that does **not** have the client module installed sees prediction
 errors, and the effects the client makes from its own water queries are missing: the wake
 splash, bullet and crowbar impact splashes, and the underwater muffling of explosions; a
 glitchy underwater sound can play about every tick. With the client module installed
@@ -255,7 +255,7 @@ everything works. Binary modules cannot be sent by the server, so every player w
 volumes correctly needs `gmcl_waterlevelercore_win64.dll` in `garrysmod/lua/bin`.
 
 Not verified:
-- Dedicated servers (listen server with another player is what was tried).
+- Listen servers, and a dedicated server with several clients at once.
 - Buoyancy: whether a fluid object created from Lua is accepted exactly like the world's, and
   the engine-side teardown when it is removed.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
