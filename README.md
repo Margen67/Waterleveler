@@ -244,7 +244,7 @@ hull-pellet probe, and the vtable hooks run against fake `IEngineTrace` objects.
 Verified in a live game (Windows x64, singleplayer and a dedicated server with a connected client, `gm_construct`): the
 server and client modules load, the hooks install, volumes answer point queries and rewrite
 traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
-at the floor, the visible box has the collision box's size, and the water level, explosion and
+at the floor, props float up in a volume, the visible box has the collision box's size, and the water level, explosion and
 bubble-trail patches act. CI builds each module with `cargo clippy` without warnings.
 
 On a dedicated server, a client that does **not** have the client module installed sees prediction
@@ -256,8 +256,9 @@ volumes correctly needs `gmcl_waterlevelercore_win64.dll` in `garrysmod/lua/bin`
 
 Not verified:
 - Listen servers, and a dedicated server with several clients at once.
-- Buoyancy: whether a fluid object created from Lua is accepted exactly like the world's, and
-  the engine-side teardown when it is removed.
+- Buoyancy beyond the basics: removing a volume while props are inside it (the `FluidEndTouch`
+  patch exists for that), the `fluidOptions` other than the defaults (torque, viscosity,
+  aerodynamics, currents) and slime physics.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
 - Linux: no engine hook (a Linux `server.so` is a different binary), so no volumes. Only the
