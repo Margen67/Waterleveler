@@ -2,6 +2,10 @@
 -- Copyright (C) 2026 Margen67
 -- The client half of the Water Volume script (drawing, materials,
 -- the debug commands). Shared parts: autorun/waterleveler_volumes.lua.
+-- The server sends the volumes (the "wl_volumes" net message); each one is drawn as a
+-- translucent box with its material, and one without a material is not drawn at all.
+-- The engine side of the volumes on this client is the client module (waterlevelercore),
+-- loaded by autorun/client/waterleveler.lua.
 -- Client half of the networked fluid entity (invisible; the volume is drawn below).
 scripted_ents.Register({
     Type = "anim",

@@ -120,10 +120,19 @@ waterleveler.IsContentsHooked()
 waterleveler.ContentsHits()           -- engine point queries answered with water
 waterleveler.TraceHits()              -- traces rewritten or flagged by a volume
 waterleveler.BubbleClips()            -- bullet bubble trails clipped to a volume
+waterleveler.ExplosionFixes()         -- explosives whose water level was raised to 2
+waterleveler.ExplosionsRedirected()   -- explosion events sent as the water explosion
+waterleveler.SetDebug(1)              -- log what the hooks answer near a volume ...
+waterleveler.TakeDebugLog()           -- ... and read (and empty) that log; see waterleveler_debug
 waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options])  -- experimental buoyancy; options.contents = "water"|"slime"
 waterleveler.DetachFluid(id)
 waterleveler.FluidCount()
 ```
+
+The client module (`gmcl_`) registers the same global `waterlevelercore` with the volume functions
+(`AddVolume`, `RemoveVolume`, `ClearVolumes`, `VolumeCount`, `PointInVolume`), the counters
+`IsContentsHooked`, `ContentsHits` and `TraceHits`, `SetDebug`, `TakeDebugLog` and `HookStatus`; the
+override, fluid, bubble and explosion functions are server only.
 
 Every point inside a volume reports `CONTENTS_WATER` to the engine. This works
 by replacing vtable slot 0 of the engine's `IEngineTrace` object
@@ -198,7 +207,7 @@ Scripts (all loaded automatically as part of the addon), one file per realm so e
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
-The "Inside shows the material's _beneath texture" option (`waterleveler_beneath`, per volume) draws world water single-sided, with `<material>_beneath` on the inside; turned off, the material is drawn on both sides.
+A volume whose material is empty is not drawn at all (no mesh, no client entity); it still works for the engine. The "Inside shows the material's _beneath texture" option (`waterleveler_beneath`, per volume) draws world water single-sided, with `<material>_beneath` on the inside; turned off, the material is drawn on both sides.
 
 The "Underwater screen warp" option (`waterleveler_underwater_warp`, a client setting) turns off the `effects/water_warp01` screen overlay that the script draws while you are fully submerged in a volume.
 

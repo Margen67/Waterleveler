@@ -17,13 +17,17 @@
 --   waterleveler_explode        (server) explode where you look, through the normal
 --                               explosion path (water explosion, sound, particles)
 --   waterleveler_client_status  (client) client hook status, counters, where your eyes are
+--   waterleveler_material_info [material]  (client) how a material is wrapped for drawing
+--   waterleveler_envmap_strength / waterleveler_envmap_contrast  (client convars) the
+--                               reflection of world-water style materials
 --   waterleveler_watch [0|1]    (client) print, once a second, what the client's water
 --                               queries answer at your eyes (underwater muffling)
 --
 -- The volume is REAL to the engine's water logic (swimming, WaterLevel(),
--- OnEntityWaterLevelChanged) because the module makes the engine report
--- CONTENTS_WATER for every point inside it. The translucent box you see is
--- only a client-side placeholder: there is no real water surface shader.
+-- OnEntityWaterLevelChanged, bullet splashes) because the module makes the engine report
+-- CONTENTS_WATER for every point inside it and stops traces at its faces. The translucent
+-- box you see (when the volume has a material) is only a client-side placeholder: there is
+-- no real water surface shader.
 if SERVER then AddCSLuaFile(); end
 WLWater = WLWater or {};
 --- How far the collision box of a volume placed by `WLWater.Placement` reaches into the surface

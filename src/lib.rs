@@ -1,35 +1,51 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Margen67
-//! `gmsv_waterlevel` - per-entity water level overrides for Garry's Mod (server).
+//! `waterlevelercore` - per-entity water level overrides and fake water volumes for
+//! Garry's Mod, as a server module (`gmsv_`) and a client module (`gmcl_`) built from this
+//! one crate with the `server` and `client` features (see `Cargo.toml`). Windows x64 only for
+//! the volumes; Linux has just the datamap layer of the water level overrides.
 //!
-//! Lua API (global table `waterleveler`, plus methods on the Entity metatable):
+//! The server module registers the global table `waterlevelercore` (the `waterleveler` Lua
+//! library in `addon/waterleveler/lua/includes/modules` wraps it and adds helpers) and methods
+//! on the Entity metatable:
 //!
 //! ```lua
 //! require("waterlevelercore")   -- raw module; the `waterleveler` Lua library wraps it
-//! waterlevel.Set(ent, 3)        -- or ent:SetWaterLevelOverride(3)
-//! waterlevel.Get(ent)           -- or ent:GetWaterLevelOverride()  -> number | nil
-//! waterlevel.Clear(ent)         -- or ent:ClearWaterLevelOverride()
-//! waterlevel.ClearAll()
-//! waterlevel.IsHooked()         -- true if the engine hook is active
-//! waterlevel.HookStatus()       -- human readable hook status
-//! waterlevel.HookHits()         -- how many engine calls were overridden
-//! waterlevel.SetSaveKey("m_nWaterLevel") -- datamap key written every tick; "" disables
+//! waterleveler.Set(ent, 3)        -- or ent:SetWaterLevelOverride(3)
+//! waterleveler.Get(ent)           -- or ent:GetWaterLevelOverride()  -> number | nil
+//! waterleveler.Clear(ent)         -- or ent:ClearWaterLevelOverride()
+//! waterleveler.ClearAll()
+//! waterleveler.IsHooked()         -- true if the engine hook is active
+//! waterleveler.HookStatus()       -- human readable hook status
+//! waterleveler.HookHits()         -- how many engine calls were overridden
+//! waterleveler.SetSaveKey("m_nWaterLevel") -- datamap key written every tick; "" disables
 //!
-//! -- Water volumes (Windows x64): world-space boxes the engine treats as water
-//! local id = waterlevel.AddVolume(x1, y1, z1, x2, y2, z2)
-//! waterlevel.RemoveVolume(id)
-//! waterlevel.ClearVolumes()
-//! waterlevel.VolumeCount()
-//! waterlevel.PointInVolume(x, y, z)  -- pure lookup
-//! waterlevel.IsContentsHooked()
-//! waterlevel.ContentsHits()          -- engine point queries answered with water
+//! -- Water volumes (Windows x64): world-space boxes the engine treats as water. The client
+//! -- module has the volume functions, the counters, `SetDebug`, `TakeDebugLog` and `HookStatus`.
+//! local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2 [, "water" | "slime"])
+//! waterleveler.RemoveVolume(id)
+//! waterleveler.ClearVolumes()
+//! waterleveler.VolumeCount()
+//! waterleveler.PointInVolume(x, y, z)  -- pure lookup
+//! waterleveler.IsContentsHooked()
+//! waterleveler.ContentsHits()          -- engine point queries answered with water
+//! waterleveler.TraceHits()             -- traces rewritten as water-surface hits
+//! waterleveler.BubbleClips()           -- server: bullet bubble trails clipped to a volume
+//! waterleveler.ExplosionFixes()        -- server: explosives forced into water
+//! waterleveler.ExplosionsRedirected()  -- server: explosion events sent as the water explosion
+//! waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -- server: buoyancy
+//! waterleveler.DetachFluid(id)
+//! waterleveler.FluidCount()
+//! waterleveler.SetDebug(1)             -- log what the hooks answer near a volume
+//! waterleveler.TakeDebugLog()          -- ...and read (and empty) that log
 //! ```
 //!
-//! Water volumes work by swapping vtable slot 0 of the engine's `IEngineTrace`
-//! object (`GetPointContents`) so points inside a box also report
-//! `CONTENTS_WATER`. No machine code is patched for this one.
+//! Water volumes work by swapping vtable slots of the engine's `IEngineTrace` object:
+//! slot 0 (`GetPointContents`) so points inside a box also report `CONTENTS_WATER`, and slot 4
+//! (`TraceRay`) so rays and hulls that enter a box are stopped at it like at a water brush
+//! (bullet splashes, ripples, explosions). No machine code is patched for those two.
 //!
-//! Three layers:
+//! The water level overrides have three layers:
 //!   1. Engine hook (Windows x64 `server.dll` only): `CBaseEntity::SetWaterLevel`
 //!      is detoured, so the engine itself uses the override. That also keeps
 //!      networking and `GM:OnEntityWaterLevelChanged` consistent.
@@ -171,7 +187,7 @@ unsafe fn find_symbol(name: &CStr) -> *mut c_void {
 }
 
 #[cfg(not(any(target_os = "linux", windows)))]
-compile_error!("gmsv_waterlevel supports Linux and Windows only");
+compile_error!("waterlevelercore supports Linux and Windows only");
 
 // The target of each transmute is the function pointer type of the `Api` field it fills.
 #[allow(clippy::missing_transmute_annotations)]
@@ -951,7 +967,9 @@ mod engine_hook {
 
     /// Replacement for `IEngineTrace::GetPointContents` (vtable slot 0). All
     /// four register arguments are forwarded untouched, so it does not matter
-    /// whether the engine's signature has a mask parameter or not.
+    /// whether the engine's signature has a mask parameter or not. A point inside a volume
+    /// also reports its contents; so does the end point of the last small-hull trace, when
+    /// the bullet's own line reaches the surface it stopped at inside a volume.
     pub(crate) unsafe extern "win64" fn hook_get_point_contents(
         this: *mut c_void,
         pos: *const f32,
@@ -1120,7 +1138,7 @@ mod engine_hook {
     /// can cancel out.
     pub(crate) const ENTRY_DEPTH: f32 = 0.125;
 
-    /// Traces seen with a water bit in the mask (diagnostics).
+    /// The surface name a rewritten trace reports, as a water brush's is.
     static WATER_SURFACE_NAME: &[u8] = b"water\0";
 
     /// Where the segment `s + t*d` (t in 0..1) first enters the box `[lo, hi]`
@@ -1236,7 +1254,9 @@ mod engine_hook {
         /// The ray starts inside a volume and leaves it: startsolid, plus the fraction at
         /// which it left (when that is earlier than what the trace already has).
         Leaves { left_at: Option<f32> },
-        /// The ray enters a volume from outside.
+        /// The ray enters a volume from outside. `fraction` and `end` are the entry point, or
+        /// for a point ray (a bullet) `ENTRY_DEPTH` further in, so the engine's probe 0.1 below
+        /// the end of the trace is inside the volume; `plane_dist` is the face's.
         Enters {
             origin: [f32; 3],
             end: [f32; 3],
@@ -1499,7 +1519,10 @@ mod engine_hook {
         })
     }
 
-    /// Replacement for `IEngineTrace::TraceRay`.
+    /// Replacement for `IEngineTrace::TraceRay`: runs the engine's trace, then, for a trace
+    /// with a water bit in its mask, lets `plan_trace` rewrite the result for the volumes the
+    /// ray touches. A trace without one is only remembered when it is a small hull (a shotgun
+    /// pellet), see `note_small_hull`.
     pub(crate) unsafe extern "win64" fn hook_trace_ray(
         this: *mut c_void,
         ray: *const u8,
@@ -3450,7 +3473,7 @@ unsafe fn apply_level(l: LuaState, idx: i32, level: u8, key: Option<&CStr>) -> b
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "server")]
-/// waterlevel.Set(ent, level) / ent:SetWaterLevelOverride(level)
+/// waterleveler.Set(ent, level) / ent:SetWaterLevelOverride(level)
 unsafe extern "C-unwind" fn l_set(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3473,7 +3496,7 @@ unsafe extern "C-unwind" fn l_set(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// waterlevel.Get(ent) / `ent:GetWaterLevelOverride()`
+/// waterleveler.Get(ent) / `ent:GetWaterLevelOverride()`
 unsafe extern "C-unwind" fn l_get(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3487,7 +3510,7 @@ unsafe extern "C-unwind" fn l_get(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// waterlevel.Clear(ent) / `ent:ClearWaterLevelOverride()`
+/// waterleveler.Clear(ent) / `ent:ClearWaterLevelOverride()`
 unsafe extern "C-unwind" fn l_clear(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3498,14 +3521,14 @@ unsafe extern "C-unwind" fn l_clear(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.ClearAll()`
+/// `waterleveler.ClearAll()`
 unsafe extern "C-unwind" fn l_clear_all(_l: LuaState) -> c_int {
     overrides().clear();
     0
 }
 
 #[cfg(feature = "server")]
-/// waterlevel.SetSaveKey(key) - "" disables the per-tick datamap write.
+/// waterleveler.SetSaveKey(key) - "" disables the per-tick datamap write.
 unsafe extern "C-unwind" fn l_set_save_key(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3523,7 +3546,7 @@ unsafe extern "C-unwind" fn l_set_save_key(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.IsHooked()`
+/// `waterleveler.IsHooked()`
 unsafe extern "C-unwind" fn l_is_hooked(l: LuaState) -> c_int {
     unsafe {
         (api().pushboolean)(l, c_int::from(hook_state::active()));
@@ -3531,7 +3554,7 @@ unsafe extern "C-unwind" fn l_is_hooked(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.HookStatus()`
+/// `waterleveler.HookStatus()`
 unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int {
     unsafe {
         let status = HOOK_STATUS
@@ -3547,7 +3570,7 @@ unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.HookHits()`
+/// `waterleveler.HookHits()`
 unsafe extern "C-unwind" fn l_hook_hits(l: LuaState) -> c_int {
     unsafe {
         (api().pushnumber)(l, hook_hits() as f64);
@@ -3575,7 +3598,7 @@ unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'static CStr> 
     }
 }
 
-/// waterlevel.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid]) -> id | nil, err
+/// waterleveler.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid]) -> id | nil, err
 /// Adds a world-space box in which the engine sees water, or slime when `liquid` is
 /// "slime" ("water" is the default).
 unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
@@ -3633,7 +3656,7 @@ unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
     }
 }
 
-/// waterlevel.RemoveVolume(id) -> bool
+/// waterleveler.RemoveVolume(id) -> bool
 unsafe extern "C-unwind" fn l_remove_volume(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3649,13 +3672,13 @@ unsafe extern "C-unwind" fn l_remove_volume(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.ClearVolumes()`
+/// `waterleveler.ClearVolumes()`
 unsafe extern "C-unwind" fn l_clear_volumes(_l: LuaState) -> c_int {
     volumes().clear();
     0
 }
 
-/// `waterlevel.VolumeCount()`
+/// `waterleveler.VolumeCount()`
 unsafe extern "C-unwind" fn l_volume_count(l: LuaState) -> c_int {
     unsafe {
         let n = volumes().len();
@@ -3664,7 +3687,7 @@ unsafe extern "C-unwind" fn l_volume_count(l: LuaState) -> c_int {
     }
 }
 
-/// waterlevel.PointInVolume(x, y, z) -> bool (pure lookup, no engine needed)
+/// waterleveler.PointInVolume(x, y, z) -> bool (pure lookup, no engine needed)
 unsafe extern "C-unwind" fn l_point_in_volume(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3679,7 +3702,7 @@ unsafe extern "C-unwind" fn l_point_in_volume(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.IsContentsHooked()`
+/// `waterleveler.IsContentsHooked()`
 unsafe extern "C-unwind" fn l_is_contents_hooked(l: LuaState) -> c_int {
     unsafe {
         (api().pushboolean)(l, c_int::from(hook_state::contents_active()));
@@ -3687,7 +3710,7 @@ unsafe extern "C-unwind" fn l_is_contents_hooked(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.ContentsHits()` - engine point queries answered with water
+/// `waterleveler.ContentsHits()` - engine point queries answered with water
 unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int {
     unsafe {
         let n = VOLUME_HITS.load(std::sync::atomic::Ordering::Relaxed);
@@ -3696,7 +3719,7 @@ unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.SetDebug(1|0)` - log what the hooks answer near a volume (read it with `TakeDebugLog`)
+/// `waterleveler.SetDebug(1|0)` - log what the hooks answer near a volume (read it with `TakeDebugLog`)
 unsafe extern "C-unwind" fn l_set_debug(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -3710,7 +3733,7 @@ unsafe extern "C-unwind" fn l_set_debug(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.TakeDebugLog()` -> string: the log lines since the last call, empties the log
+/// `waterleveler.TakeDebugLog()` -> string: the log lines since the last call, empties the log
 unsafe extern "C-unwind" fn l_take_debug_log(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -3723,7 +3746,7 @@ unsafe extern "C-unwind" fn l_take_debug_log(l: LuaState) -> c_int {
     }
 }
 
-/// `waterlevel.TraceHits()` - engine traces rewritten as water-surface hits
+/// `waterleveler.TraceHits()` - engine traces rewritten as water-surface hits
 unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -3736,7 +3759,7 @@ unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// waterlevel.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -> id | nil, err
+/// waterleveler.AttachFluid(physobj, nx, ny, nz, dist [, damping] [, options]) -> id | nil, err
 /// Makes `physobj` an engine fluid (buoyancy + drag for props inside it).
 /// The plane is in world space with the normal pointing out of the fluid;
 /// for a water volume that is (0, 0, 1) and the world Z of its top face.
@@ -3831,7 +3854,7 @@ unsafe extern "C-unwind" fn l_attach_fluid(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// waterlevel.DetachFluid(id) -> bool. Call before removing the entity.
+/// waterleveler.DetachFluid(id) -> bool. Call before removing the entity.
 unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -3843,7 +3866,7 @@ unsafe extern "C-unwind" fn l_detach_fluid(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.FluidCount()`
+/// `waterleveler.FluidCount()`
 unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
     unsafe {
         (api().pushnumber)(l, hook_state::fluid_count() as f64);
@@ -3852,7 +3875,7 @@ unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.BubbleClips()` - bullet bubble trails clipped to a volume
+/// `waterleveler.BubbleClips()` - bullet bubble trails clipped to a volume
 unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -3865,7 +3888,7 @@ unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.ExplosionFixes()` - explosives whose water level was raised
+/// `waterleveler.ExplosionFixes()` - explosives whose water level was raised
 unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -3878,7 +3901,7 @@ unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
 }
 
 #[cfg(feature = "server")]
-/// `waterlevel.ExplosionsRedirected()` - explosion events sent as the water explosion
+/// `waterleveler.ExplosionsRedirected()` - explosion events sent as the water explosion
 unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -4152,7 +4175,7 @@ unsafe fn open_server(l: LuaState) -> c_int {
             Err(why) => format!("water volumes inactive: {why}"),
         };
         let status = format!("{water_level}; {contents}");
-        lua_print(l, &format!("[waterlevel] {status}"));
+        lua_print(l, &format!("[wl] {status}"));
         *HOOK_STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = status;

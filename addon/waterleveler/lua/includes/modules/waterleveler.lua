@@ -4,7 +4,8 @@
 --   require("waterleveler")
 -- Every function of the binary module is available unchanged (waterleveler.Set,
 -- waterleveler.AddVolume, ...); the helpers below only add Vector-based
--- convenience on top. Server realm only.
+-- convenience on top. Server realm only: the client module's table is the global
+-- waterlevelercore, which autorun/client/waterleveler.lua requires.
 if not SERVER then return; end
 require("waterlevelercore");
 local core = waterlevelercore;
