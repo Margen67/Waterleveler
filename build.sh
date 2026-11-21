@@ -14,7 +14,8 @@
 set -e
 
 # Binary modules are only loaded from garrysmod/lua/bin (not from an addon's lua/bin),
-# so the DLL goes there and the Lua addon (addon/waterleveler) goes to garrysmod/addons.
+# so the DLL goes there and the Lua addon (addon/waterleveler) goes to garrysmod/addons
+# (an existing copy is deleted first).
 # Override the garrysmod folder with GMOD_DIR.
 GMOD_DIR_DEFAULT="/c/Program Files (x86)/Steam/steamapps/common/GarrysMod/garrysmod"
 ADDON="addon/waterleveler"
@@ -39,6 +40,8 @@ case "$(uname -s)" in
         cp "target/release/gmsv_waterlevelercore.dll" "out/gmcl_waterlevelercore_win64.dll"
         echo "built out/gmsv_waterlevelercore_win64.dll and out/gmcl_waterlevelercore_win64.dll"
         GMOD="${GMOD_DIR:-${GMOD_DIR_DEFAULT}}"
+        # Delete the old copy first, so files removed from the addon don't linger.
+        rm -rf "${GMOD}/addons/waterleveler"
         mkdir -p "${GMOD}/lua/bin" "${GMOD}/addons/waterleveler"
         cp "out/gmsv_waterlevelercore_win64.dll" "${GMOD}/lua/bin/gmsv_waterlevelercore_win64.dll"
         cp "out/gmcl_waterlevelercore_win64.dll" "${GMOD}/lua/bin/gmcl_waterlevelercore_win64.dll"
