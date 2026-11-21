@@ -102,14 +102,21 @@ function WLWater.RemoveBox(id)
 end
 
 --- Create a volume (engine water + optional buoyancy + undo entry).
---- opts: liquid ("water" default or "slime"; it also picks the fluid's physics material),
---- fluid (default true), material (name, "" = the default), fluidOptions
---- (the options table of waterleveler.AttachFluid: damping, torque, viscosity, aerodynamics,
---- currentx/y/z).
+--- `ply` (the player whose undo list and cleanup get it) and `opts` are optional, and so is every
+--- field of `opts`; the defaults are what a map's water brush has:
+---   liquid        "water" ("slime" picks slime contents and the fluid's physics material)
+---   fluid         true (buoyancy for props; false = engine water only)
+---   material      "" (the default drawn material, nature/water_movingplane)
+---   beneath       true (the inside shows the material's _beneath texture)
+---   fluidOptions  {} (the options of waterleveler.AttachFluid: damping 0.01, torque 0,
+---                 viscosity 0, aerodynamics false, no current; `contents` follows liquid)
+--- mins and maxs may be any two opposite corners.
 --- Returns the volume id, or nil, err.
 function WLWater.Spawn(ply, mins, maxs, opts)
     opts = opts or {};
     opts.liquid = tostring(opts.liquid or ""):lower() == "slime" and "slime" or "water";
+    mins, maxs = Vector(mins), Vector(maxs);
+    OrderVectors(mins, maxs);
     local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid);
     if not id then return nil, err; end
     boxes[id] = {

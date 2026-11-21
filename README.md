@@ -66,18 +66,23 @@ Two levels, both server side:
 ```lua
 -- Everything the Water Volume tool does: engine water, buoyancy, the translucent box on every
 -- client, clients that join later, undo and cleanup. Returns the volume id, or nil, err.
-local id, err = WLWater.Spawn(ply, mins, maxs, {
-    liquid = "water",          -- or "slime"
-    fluid = true,              -- buoyancy for props (default true)
-    material = "",             -- "" = the default drawn material
-    fluidOptions = { damping = 0.01 },   -- the options table of waterleveler.AttachFluid
+local id, err = WLWater.Spawn(nil, mins, maxs)   -- any two opposite corners
+
+-- ply (whose undo list and cleanup get it) and every option are optional:
+local id = WLWater.Spawn(ply, mins, maxs, {
+    liquid = "slime",          -- default "water"
+    fluid = false,             -- default true: buoyancy for props
+    material = "gm_construct/water_13",  -- default "": nature/water_movingplane
+    beneath = false,           -- default true: the inside shows the material's _beneath texture
+    fluidOptions = { damping = 0.05, currentx = 100 },   -- the options of waterleveler.AttachFluid;
+                               -- default {}: a map water brush's values (damping 0.01, no torque,
+                               -- viscosity, aerodynamics or current)
 })
 WLWater.RemoveBox(id)          -- removes it from the module and the clients
--- ply may be NULL for a script-made volume that no player's undo list owns.
 
 -- Only the engine side (point contents, traces, swimming, splashes). Clients are not told:
 -- nothing is drawn and a player's client-side prediction does not know the volume.
-local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2)
+local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2)   -- liquid optional, default "water"
 ```
 
 `WLWater.Placement(tr, size, offset)` (shared) gives the mins, maxs and center for a volume that
