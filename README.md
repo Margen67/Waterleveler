@@ -256,11 +256,11 @@ volumes correctly needs `gmcl_waterlevelercore_win64.dll` in `garrysmod/lua/bin`
 
 Not verified:
 - Listen servers, and a dedicated server with several clients at once.
-- Buoyancy beyond the basics: `torque`, `viscosity`, `aerodynamics`, currents and slime physics.
-  They are passed to vphysics unchanged (as `torqueFactor`, `viscosityFactor`,
-  `useAerodynamics` and `currentVelocity`), and Valve has not documented what the first two do;
-  a map's water brush has them at 0. `damping` is verified: at 10, props are stopped even when
-  punted into the volume with the gravity gun.
+- Buoyancy beyond the basics: `torque`, `viscosity`, `aerodynamics` and slime physics. They are
+  passed to vphysics unchanged (as `torqueFactor`, `viscosityFactor` and `useAerodynamics`), and
+  Valve has not documented what the first two do; a map's water brush has them at 0. `damping`
+  is verified: at 10, props are stopped even when punted into the volume with the gravity gun.
+  Currents (`currentx`, `currenty`, `currentz`) are verified too.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
 - Linux: no engine hook (a Linux `server.so` is a different binary), so no volumes. Only the
