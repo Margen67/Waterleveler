@@ -267,7 +267,7 @@ Not verified:
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
 - Linux: only the 64-bit dedicated server (`server_srv.so`, or `server.so`) has hooks, found by
-  signature; other builds of it are untested. The Linux client has no engine hook, so no volumes there.
+  signature, found and tested against the 64-bit dev branch build; other builds of it are untested. The Linux client has no engine hook, so no volumes there.
   The Linux server has no RTTI for `CTEExplosion`, so explosion events are recognised by the
   temp entity's name; entities are keyed by their handle's index instead of the edict's.
 - Game updates: the hooks are found by signature, so an update that changes those functions
