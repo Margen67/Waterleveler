@@ -3,8 +3,7 @@
 //! `waterlevelercore` - per-entity water level overrides and fake water volumes for
 //! Garry's Mod, as a server module (`gmsv_`) and a client module (`gmcl_`) built from this
 //! one crate with the `server` and `client` features (see `Cargo.toml`). The volumes work on
-//! the 64-bit Windows server and client and on the 64-bit Linux server; the Linux client has
-//! just the datamap layer of the water level overrides.
+//! the 64-bit Windows server and client and on the 64-bit Linux server and client.
 //!
 //! The server module registers the global table `waterlevelercore` (the `waterleveler` Lua
 //! library in `addon/waterleveler/lua/includes/modules` wraps it and adds helpers) and methods
@@ -63,7 +62,7 @@
 
 #![allow(clippy::missing_safety_doc)]
 // The engine hooks are wired up on Windows x64 and the Linux x64 server; on other targets
-// (the Linux client, 32-bit) that code is compiled (and unit-tested) but not called.
+// (32-bit) that code is compiled (and unit-tested) but not called.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(not(any(feature = "server", feature = "client")))]
@@ -861,9 +860,12 @@ mod engine_hook {
 
     /// The 64-bit Linux server's signatures. Always compiled (the tests check them against a
     /// real `server_srv.so`), used only by the Linux build.
-    #[cfg(feature = "server")]
+    #[cfg(any(feature = "server", feature = "client"))]
     #[allow(dead_code)]
     pub(crate) mod linux_sigs {
+        /// `client.so`: `C_BaseEntity::UpdateWaterState` (the `enginetrace` variable load).
+        pub(crate) const CLIENT_TRACE_SIG: &str =
+            "4C 8D 2D ?? ?? ?? ?? 31 D2 4C 89 E6 49 8B 7D 00 48 8B 07 FF 10 A9 30 40 00 00";
         pub(crate) const SIG: &str =
             "55 48 89 E5 41 56 41 55 41 54 41 89 F4 53 44 0F B6 AF D3 02 00 00 \
                            48 89 FB 41 38 F5 74 17 48 8B 07 48 8D B7 D3 02 00 00 FF 90 ?? ?? 00 00 \
@@ -1107,12 +1109,18 @@ mod engine_hook {
     pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 95;
 
     #[cfg(feature = "client")]
+    #[cfg(any(windows, test))]
     /// client.dll: `C_BaseEntity::UpdateWaterState` loads the client's `enginetrace`
     /// the same way (`mov rcx,[rip+disp32]`, `GetPointContents`, test `MASK_WATER`). The
     /// pattern is only the load and the test, so it does not depend on the function's
     /// frame; disp32 is at byte 3 of the match.
     pub(crate) const CLIENT_TRACE_SIG: &str =
         "48 8B 0D ?? ?? ?? ?? 48 8D 54 24 ?? 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
+    #[cfg(feature = "client")]
+    #[cfg(not(any(windows, test)))]
+    /// client.so: the same function loads it with `lea r13,[rip+disp32]` (disp32 at byte 3),
+    /// then `mov rdi,[r13]; mov rax,[rdi]; call [rax]` (`GetPointContents`) and tests `MASK_WATER`.
+    pub(crate) const CLIENT_TRACE_SIG: &str = linux_sigs::CLIENT_TRACE_SIG;
 
     #[cfg(feature = "client")]
     /// The `enginetrace` pointer variable loaded by the instruction at `at`.
@@ -2018,7 +2026,7 @@ mod engine_hook {
         }
     }
 
-    #[cfg(all(feature = "server", not(windows)))]
+    #[cfg(all(any(feature = "server", feature = "client"), not(windows)))]
     unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
         unsafe {
             const PT_LOAD: u32 = 1;
@@ -2048,7 +2056,7 @@ mod engine_hook {
     }
 
     /// Every match of a signature in the executable parts of the module.
-    #[cfg(any(feature = "server", all(windows, feature = "client")))]
+    #[cfg(any(feature = "server", feature = "client"))]
     pub(crate) unsafe fn scan_sig_all(
         base: *const u8,
         sig: &str,
@@ -2070,7 +2078,7 @@ mod engine_hook {
     }
 
     /// Same, for a signature that must match exactly once.
-    #[cfg(any(feature = "server", all(windows, feature = "client")))]
+    #[cfg(any(feature = "server", feature = "client"))]
     pub(crate) unsafe fn scan_sig(base: *const u8, sig: &str) -> Result<*mut u8, &'static str> {
         unsafe {
             let found = scan_sig_all(base, sig)?;
@@ -3227,34 +3235,118 @@ mod engine_hook {
             flush,
         };
 
-        #[cfg(feature = "server")]
         use crate::loaded_objects::{dl_iterate_phdr, DlPhdrInfo};
 
-        /// Load address of the 64-bit Linux server module (`server_srv.so`, or `server.so`).
-        #[cfg(feature = "server")]
-        pub(crate) unsafe fn server_base() -> *const u8 {
+        /// Load address and full path of the loaded library whose path ends with one of
+        /// `suffixes` (for example `/server_srv.so`).
+        unsafe fn loaded_module(suffixes: &[&[u8]]) -> Option<(usize, CString)> {
             unsafe {
+                struct Search<'a> {
+                    suffixes: &'a [&'a [u8]],
+                    found: Option<(usize, CString)>,
+                }
                 unsafe extern "C" fn find(
                     info: *const DlPhdrInfo,
                     _size: usize,
                     data: *mut c_void,
                 ) -> c_int {
                     unsafe {
+                        let search = &mut *data.cast::<Search<'_>>();
                         let name = (*info).name;
                         if name.is_null() {
                             return 0;
                         }
-                        let name = CStr::from_ptr(name).to_bytes();
-                        if name.ends_with(b"/server_srv.so") || name.ends_with(b"/server.so") {
-                            *data.cast::<usize>() = (*info).addr;
+                        let name = CStr::from_ptr(name);
+                        if search.suffixes.iter().any(|s| name.to_bytes().ends_with(s)) {
+                            search.found = Some(((*info).addr, name.to_owned()));
                             return 1;
                         }
                         0
                     }
                 }
-                let mut base = 0usize;
-                dl_iterate_phdr(find, (&raw mut base).cast::<c_void>());
-                base as *const u8
+                let mut search = Search {
+                    suffixes,
+                    found: None,
+                };
+                dl_iterate_phdr(find, (&raw mut search).cast::<c_void>());
+                search.found
+            }
+        }
+
+        /// Load address of the 64-bit Linux server module (`server_srv.so`, or `server.so`).
+        #[cfg(feature = "server")]
+        pub(crate) unsafe fn server_base() -> *const u8 {
+            unsafe {
+                loaded_module(&[b"/server_srv.so", b"/server.so"])
+                    .map_or(std::ptr::null(), |(base, _)| base as *const u8)
+            }
+        }
+
+        /// Load address of the 64-bit Linux client module (`client.so`).
+        #[cfg(feature = "client")]
+        pub(crate) unsafe fn client_base() -> *const u8 {
+            unsafe {
+                loaded_module(&[b"/client.so"])
+                    .map_or(std::ptr::null(), |(base, _)| base as *const u8)
+            }
+        }
+
+        #[cfg(feature = "client")]
+        /// An interface of client.so (`CreateInterface("VClientEntityList003")`).
+        pub(crate) unsafe fn client_interface(name: &CStr) -> usize {
+            unsafe {
+                #[link(name = "dl")]
+                extern "C" {
+                    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+                    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+                }
+                const RTLD_LAZY: c_int = 0x1;
+                const RTLD_NOLOAD: c_int = 0x4;
+                let Some((_, path)) = loaded_module(&[b"/client.so"]) else {
+                    return 0;
+                };
+                let handle = dlopen(path.as_ptr(), RTLD_LAZY | RTLD_NOLOAD);
+                if handle.is_null() {
+                    return 0;
+                }
+                let create = dlsym(handle, c"CreateInterface".as_ptr());
+                if create.is_null() {
+                    return 0;
+                }
+                let create: engine_fn!((*const c_char, *mut c_int) -> usize) =
+                    std::mem::transmute(create);
+                create(name.as_ptr(), std::ptr::null_mut())
+            }
+        }
+
+        /// True when this library was loaded as the client module (file name gmcl_*).
+        #[cfg(feature = "client")]
+        pub(crate) unsafe fn is_client_module() -> bool {
+            unsafe {
+                #[repr(C)]
+                struct DlInfo {
+                    fname: *const c_char,
+                    fbase: *mut c_void,
+                    sname: *const c_char,
+                    saddr: *mut c_void,
+                }
+                #[link(name = "dl")]
+                extern "C" {
+                    fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
+                }
+                let mut info = DlInfo {
+                    fname: std::ptr::null(),
+                    fbase: std::ptr::null_mut(),
+                    sname: std::ptr::null(),
+                    saddr: std::ptr::null_mut(),
+                };
+                if dladdr(is_client_module as *const c_void, &mut info) == 0 || info.fname.is_null()
+                {
+                    return false;
+                }
+                let path = CStr::from_ptr(info.fname).to_bytes();
+                let name = path.rsplit(|&c| c == b'/').next().unwrap_or(path);
+                name.starts_with(b"gmcl_")
             }
         }
     }
@@ -3374,7 +3466,7 @@ mod engine_hook {
 // is all it needs.
 
 #[cfg(all(
-    windows,
+    any(windows, target_os = "linux"),
     target_arch = "x86_64",
     feature = "server",
     feature = "client"
@@ -3385,6 +3477,7 @@ mod client_module {
     use super::*;
 
     /// True when this DLL was loaded as the client module (file name gmcl_*).
+    #[cfg(windows)]
     pub(crate) unsafe fn is_client_module() -> bool {
         unsafe {
             #[link(name = "kernel32")]
@@ -3412,6 +3505,11 @@ mod client_module {
             let name = path.rsplit(['\\', '/']).next().unwrap_or("");
             name.starts_with("gmcl_")
         }
+    }
+
+    #[cfg(not(windows))]
+    pub(crate) unsafe fn is_client_module() -> bool {
+        unsafe { engine_hook::os::is_client_module() }
     }
 }
 
@@ -3836,7 +3934,7 @@ mod hook_state {
             .is_empty()
     }
 
-    #[cfg(all(feature = "client", windows))]
+    #[cfg(all(feature = "client", any(windows, target_os = "linux")))]
     /// Client realm: the same two hooks on the client's own `IEngineTrace`, so what the
     /// client does with water (ripples and splashes, the underwater sound filter,
     /// prediction) sees the volumes the Lua side gave it.
@@ -3858,10 +3956,21 @@ mod hook_state {
             // TraceRay needs the Ray_t layout and a world entity to name in the result;
             // without either only the point contents are hooked.
             let entities = engine_hook::os::client_interface(c"VClientEntityList003");
+            // Windows: where this build keeps m_IsSwept comes from the Ray_t helper. The
+            // Linux client has the old layout (m_IsRay +0x40, m_IsSwept +0x41).
+            #[cfg(windows)]
             let ray = engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG);
+            #[cfg(not(windows))]
+            let ray: Result<*mut u8, &'static str> = Ok(std::ptr::null_mut());
             let note = match (ray, entities) {
                 (Ok(f), e) if e != 0 => {
+                    #[cfg(windows)]
                     let off = engine_hook::ray_swept_offset_from(f);
+                    #[cfg(not(windows))]
+                    let off = {
+                        let _ = f;
+                        engine_hook::RAY_SWEPT_OFFSET_OLD
+                    };
                     engine_hook::RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
                     engine_hook::CLIENT_ENTITY_LIST.store(e, std::sync::atomic::Ordering::SeqCst);
                     let trace_hook = engine_hook::hook_trace_ray as *const () as usize;
@@ -4624,7 +4733,11 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
             return 0;
         };
         let _ = API.set(loaded);
-        #[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+        #[cfg(all(
+            any(windows, target_os = "linux"),
+            target_arch = "x86_64",
+            feature = "client"
+        ))]
         if running_as_client() {
             return open_client(l);
         }
@@ -4642,7 +4755,11 @@ pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
 
 /// True when this DLL is the client module. With both features built in that is decided
 /// from the file name (gmcl_*); a build with only one feature has no choice to make.
-#[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+#[cfg(all(
+    any(windows, target_os = "linux"),
+    target_arch = "x86_64",
+    feature = "client"
+))]
 #[cfg_attr(not(feature = "server"), allow(clippy::missing_const_for_fn))] // only const without the name check
 unsafe fn running_as_client() -> bool {
     #[cfg(feature = "server")]
@@ -4656,7 +4773,11 @@ unsafe fn running_as_client() -> bool {
 /// Loaded as `gmcl_waterlevelercore`: the client's water. The Lua side gives it the
 /// volumes (`AddVolume` etc.); its engine trace is
 /// patched so the client sees and hears them like the server does.
-#[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+#[cfg(all(
+    any(windows, target_os = "linux"),
+    target_arch = "x86_64",
+    feature = "client"
+))]
 unsafe fn open_client(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -4790,7 +4911,11 @@ pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
         if API.get().is_none() {
             return 0;
         }
-        #[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+        #[cfg(all(
+            any(windows, target_os = "linux"),
+            target_arch = "x86_64",
+            feature = "client"
+        ))]
         if running_as_client() {
             return close_client(l);
         }
@@ -4806,7 +4931,11 @@ pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
     }
 }
 
-#[cfg(all(windows, target_arch = "x86_64", feature = "client"))]
+#[cfg(all(
+    any(windows, target_os = "linux"),
+    target_arch = "x86_64",
+    feature = "client"
+))]
 unsafe fn close_client(l: LuaState) -> c_int {
     unsafe {
         let a = api();
@@ -4984,6 +5113,30 @@ mod tests {
         // the entity array idiom has many sites, all naming one global
         let sites = elf_matches(&d, l::ENTITY_ARRAY_SIG);
         assert!(sites.len() > 1);
+    }
+
+    fn client_so() -> Option<Vec<u8>> {
+        let path = std::env::var("CLIENT_SO_X64").ok()?;
+        std::fs::read(path).ok()
+    }
+
+    #[test]
+    fn linux_client_trace_signature_finds_the_enginetrace_variable() {
+        let Some(d) = client_so() else {
+            eprintln!("CLIENT_SO_X64 not set; skipping");
+            return;
+        };
+        let m = elf_matches(&d, linux_sigs::CLIENT_TRACE_SIG);
+        assert_eq!(m.len(), 1, "{} matches", m.len());
+        unsafe {
+            let base = map_elf(&d);
+            let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).expect("matches once");
+            assert_eq!(at as usize - base as usize, m[0]);
+            // `C_BaseEntity::UpdateWaterState` loads the `enginetrace` variable at 0x12270b0
+            // in this dev-branch client.so (the same one its `TraceRay` calls use).
+            let var = trace_global_from_load(at);
+            assert_eq!(var as usize - base as usize, 0x0122_70b0);
+        }
     }
 
     /// Maps the `PT_LOAD` segments of a 64-bit ELF into one anonymous region at their virtual

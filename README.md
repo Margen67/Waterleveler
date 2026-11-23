@@ -3,8 +3,8 @@
 Per-entity water level overrides and fake water volumes for Garry's Mod, as a
 dependency-free Rust binary module for the 64-bit (x86-64) branch. The server module
 (`gmsv_`) and the client module (`gmcl_`) are separate builds. The water volumes work on the
-64-bit Windows server and client and on the 64-bit Linux server (`server_srv.so`); the Linux
-client has no engine hooks, only the water level datamap layer.
+64-bit Windows server and client and on the 64-bit Linux server (`server_srv.so`) and client
+(`client.so`).
 
 ## Install
 
@@ -17,6 +17,7 @@ and the client module and the addon). The CI artifact has everything too. Files:
 | Platform | Realm  | File name                           |
 |----------|--------|-------------------------------------|
 | Linux 64 | server | `gmsv_waterlevelercore_linux64.dll` |
+| Linux 64 | client | `gmcl_waterlevelercore_linux64.dll` |
 | Win 64   | server | `gmsv_waterlevelercore_win64.dll`   |
 | Win 64   | client | `gmcl_waterlevelercore_win64.dll`   |
 
@@ -88,7 +89,7 @@ local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2)   -- liquid optional, 
 
 `WLWater.Placement(tr, size, offset)` (shared) gives the mins, maxs and center for a volume that
 rests against what a trace hit. Volumes are cleared on map cleanup and when the module unloads.
-Needs the Windows x64 server or client, or the Linux x64 server: elsewhere (including the Linux client) the module loads but volumes do nothing.
+Needs the 64-bit Windows or Linux server or client: elsewhere the module loads but volumes do nothing.
 
 ## How it works
 
@@ -195,7 +196,7 @@ Limits (read these):
 - **Client-decided effects** (the flat `effects/splashwake1` ripple, `FX_WaterRipple`) are
   only created if the client's *own* `TraceRay` with `MASK_WATER` hits something just below
   the splash point. The splash effect data the server sends is enough for the particle
-  splashes, but the ripples need the client module (`gmcl_waterlevelercore_win64.dll`), which
+  splashes, but the ripples need the client module (`gmcl_waterlevelercore_win64.dll`, or `gmcl_waterlevelercore_linux64.dll` on Linux), which
   hooks the client's trace so the engine makes them itself. Without it there are no ripples.
 
 Lua is linted and formatted with [GLuaFixer](https://github.com/FPtje/GLuaFixer) (`glualint.json`; CI checks both; `glualint --pretty-print-files addon` formats).
@@ -235,7 +236,7 @@ from the engine's own ray-building helper at load time (shown in
 
 ## Verified vs not
 
-Verified by `cargo test` (52 tests; the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones `server_srv.so` in `SERVER_SO_X64`):
+Verified by `cargo test` (53 tests; the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones `server_srv.so` in `SERVER_SO_X64` and `client.so` in `CLIENT_SO_X64`):
 the signatures match exactly once; the detour and trampoline run the **real
 `SetWaterLevel` machine code** from that DLL, substitute the override, pass other calls
 through, and uninstall restores the bytes exactly; the volume store and its lookup (lanes and
@@ -246,14 +247,14 @@ Verified in a live game (Windows x64, singleplayer and a dedicated server with a
 server and client modules load, the hooks install, volumes answer point queries and rewrite
 traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
 at the floor, props float up in a volume, removing a volume (with props inside it too) does not crash, the visible box has the collision box's size, and the water level, explosion and
-bubble-trail patches act. The 64-bit Linux server is verified live too, in singleplayer and on a dedicated server (the client side is the unmodified Linux client): `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI builds each Windows module with `cargo clippy` without warnings.
+bubble-trail patches act. The 64-bit Linux server is verified live too, in singleplayer and on a dedicated server (there the client was the unmodified Linux client, before the Linux client module existed): `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI builds each Windows module with `cargo clippy` without warnings.
 
 On a dedicated server, a client that does **not** have the client module installed sees prediction
 errors, and the effects the client makes from its own water queries are missing: the wake
 splash, bullet and crowbar impact splashes, and the underwater muffling of explosions; a
 glitchy underwater sound can play about every tick. With the client module installed
 everything works. Binary modules cannot be sent by the server, so every player who should see
-volumes correctly needs `gmcl_waterlevelercore_win64.dll` in `garrysmod/lua/bin`.
+volumes correctly needs the client module (`gmcl_waterlevelercore_win64.dll` or `gmcl_waterlevelercore_linux64.dll`) in `garrysmod/lua/bin`.
 
 Known game bug (not caused by this module): crowbar hit splashes are missing in multiplayer.
 
@@ -267,7 +268,7 @@ Not verified:
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
 - Linux: only the 64-bit dedicated server (`server_srv.so`, or `server.so`) has hooks, found by
-  signature, found and tested against the 64-bit dev branch build; other builds of it are untested. The Linux client has no engine hook, so no volumes there.
+  signature, found and tested against the 64-bit dev branch build; other builds of it are untested. The Linux client module (`client.so`, dev branch) finds its `enginetrace` by signature and hooks `GetPointContents` and `TraceRay` like the Windows client; it has not been run in a live game yet.
   The Linux server has no RTTI for `CTEExplosion`, so explosion events are recognised by the
   temp entity's name; entities are keyed by their handle's index instead of the edict's.
 - Game updates: the hooks are found by signature, so an update that changes those functions
@@ -288,7 +289,7 @@ bubble and explosion patches) and `gmcl_` only the client code; the volume store
 trace hooks are in both.
 
 Tests: `SERVER_DLL_X64=/path/to/server.dll cargo test --release`, and for the Linux
-signatures `SERVER_SO_X64=/path/to/server_srv.so cargo test --release`
+signatures `SERVER_SO_X64=/path/to/server_srv.so cargo test --release` (and `CLIENT_SO_X64=/path/to/client.so` for the Linux client)
 
 ## Removing a volume with props in it
 

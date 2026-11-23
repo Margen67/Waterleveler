@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the 64-bit module for the current host and renames it the way Garry's Mod expects.
-#   Linux  -> gmsv_waterlevelercore_linux64.dll (the 64-bit server, server_srv.so)
+#   Linux  -> gmsv_waterlevelercore_linux64.dll and gmcl_waterlevelercore_linux64.dll (the
+#             64-bit server, server_srv.so, and the 64-bit client, client.so; two builds)
 #   Windows (run under MSYS2/Git Bash) -> gmsv_waterlevelercore_win64.dll and
 #                                         gmcl_waterlevelercore_win64.dll (two builds: the server
 #                                         module has only the server code, the client module only
@@ -35,7 +36,9 @@ case "$(uname -s)" in
     Linux)
         cargo build --release --no-default-features --features server
         cp "target/release/libgmsv_waterlevelercore.so" "out/gmsv_waterlevelercore_linux64.dll"
-        echo "built out/gmsv_waterlevelercore_linux64.dll"
+        cargo build --release --no-default-features --features client
+        cp "target/release/libgmsv_waterlevelercore.so" "out/gmcl_waterlevelercore_linux64.dll"
+        echo "built out/gmsv_waterlevelercore_linux64.dll and out/gmcl_waterlevelercore_linux64.dll"
         GMOD="${GMOD_DIR:-${GMOD_DIR_DEFAULT_LINUX}}"
         if [ -z "${GMOD_DIR}" ] && [ ! -d "${GMOD}" ] && [ -d "${GMOD_DIR_FALLBACK_LINUX}" ]; then
             echo "${GMOD} not found, using ${GMOD_DIR_FALLBACK_LINUX}"
@@ -45,8 +48,9 @@ case "$(uname -s)" in
         rm -rf "${GMOD}/addons/waterleveler"
         mkdir -p "${GMOD}/lua/bin" "${GMOD}/addons/waterleveler"
         cp "out/gmsv_waterlevelercore_linux64.dll" "${GMOD}/lua/bin/gmsv_waterlevelercore_linux64.dll"
+        cp "out/gmcl_waterlevelercore_linux64.dll" "${GMOD}/lua/bin/gmcl_waterlevelercore_linux64.dll"
         cp -r "${ADDON}/." "${GMOD}/addons/waterleveler/"
-        echo "server module -> ${GMOD}/lua/bin, addon -> ${GMOD}/addons/waterleveler"
+        echo "server and client modules -> ${GMOD}/lua/bin, addon -> ${GMOD}/addons/waterleveler"
         ;;
     MINGW*|MSYS*|CYGWIN*)
         cargo build --release --no-default-features --features server

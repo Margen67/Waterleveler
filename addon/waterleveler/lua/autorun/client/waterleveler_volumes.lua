@@ -743,7 +743,7 @@ end
 
 concommand.Add("waterleveler_client_status", function()
     print("[wl] map: " .. game.GetMap());
-    if not waterlevelercore then return print("[wl] client module not loaded (gmcl_waterlevelercore_win64.dll missing or failed): the client's water queries do not see volumes"); end
+    if not waterlevelercore then return print("[wl] client module not loaded (gmcl_waterlevelercore missing or failed): the client's water queries do not see volumes"); end
     print("[wl] " .. waterlevelercore.HookStatus());
     print(("[wl] contents hook: %s | volumes: %d (script knows %d) | point queries answered with water: %d | traces stopped at the surface: %d"):format(tostring(waterlevelercore.IsContentsHooked()), waterlevelercore.VolumeCount(), #boxes, waterlevelercore.ContentsHits(), waterlevelercore.TraceHits()));
     for i, b in ipairs(boxes) do
