@@ -246,7 +246,7 @@ Verified in a live game (Windows x64, singleplayer and a dedicated server with a
 server and client modules load, the hooks install, volumes answer point queries and rewrite
 traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
 at the floor, props float up in a volume, removing a volume (with props inside it too) does not crash, the visible box has the collision box's size, and the water level, explosion and
-bubble-trail patches act. The 64-bit Linux server is verified live too, with a connected client: `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI builds each Windows module with `cargo clippy` without warnings.
+bubble-trail patches act. The 64-bit Linux server is verified live too, in singleplayer (the client side is the unmodified Linux client): `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI builds each Windows module with `cargo clippy` without warnings.
 
 On a dedicated server, a client that does **not** have the client module installed sees prediction
 errors, and the effects the client makes from its own water queries are missing: the wake
