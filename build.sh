@@ -20,6 +20,8 @@ set -e
 # and, on Linux, the dedicated server's (GarrysModDS).
 GMOD_DIR_DEFAULT="/c/Program Files (x86)/Steam/steamapps/common/GarrysMod/garrysmod"
 GMOD_DIR_DEFAULT_LINUX="${HOME}/.local/share/Steam/steamapps/common/GarrysModDS/garrysmod"
+# Used on Linux when the dedicated server's folder (GarrysModDS) does not exist.
+GMOD_DIR_FALLBACK_LINUX="${HOME}/.local/share/Steam/steamapps/common/GarrysMod/garrysmod"
 ADDON="addon/waterleveler"
 
 cd "$(dirname "${0}")"
@@ -35,6 +37,10 @@ case "$(uname -s)" in
         cp "target/release/libgmsv_waterlevelercore.so" "out/gmsv_waterlevelercore_linux64.dll"
         echo "built out/gmsv_waterlevelercore_linux64.dll"
         GMOD="${GMOD_DIR:-${GMOD_DIR_DEFAULT_LINUX}}"
+        if [ -z "${GMOD_DIR}" ] && [ ! -d "${GMOD}" ] && [ -d "${GMOD_DIR_FALLBACK_LINUX}" ]; then
+            echo "${GMOD} not found, using ${GMOD_DIR_FALLBACK_LINUX}"
+            GMOD="${GMOD_DIR_FALLBACK_LINUX}"
+        fi
         # Delete the old copy first, so files removed from the addon don't linger.
         rm -rf "${GMOD}/addons/waterleveler"
         mkdir -p "${GMOD}/lua/bin" "${GMOD}/addons/waterleveler"

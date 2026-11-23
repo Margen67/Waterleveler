@@ -11,7 +11,7 @@ client has no engine hooks, only the water level datamap layer.
 GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 `lua/bin`), so install in two parts: the DLL into `garrysmod/lua/bin/`, and the
 `addon/waterleveler` folder (Lua library + volume script) into `garrysmod/addons/`.
-`build.sh` does both on Windows and Linux (the Linux default is the dedicated server, `~/.local/share/Steam/steamapps/common/GarrysModDS/garrysmod`; override with `GMOD_DIR`) (it deletes the installed addon first, then copies the server
+`build.sh` does both on Windows and Linux (the Linux default is the dedicated server, `~/.local/share/Steam/steamapps/common/GarrysModDS/garrysmod`; falls back to `GarrysMod/garrysmod` there if that folder is missing; override with `GMOD_DIR`) (it deletes the installed addon first, then copies the server
 and the client module and the addon). The CI artifact has everything too. Files:
 
 | Platform | Realm  | File name                           |
