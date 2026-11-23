@@ -2,8 +2,9 @@
 
 Per-entity water level overrides and fake water volumes for Garry's Mod, as a
 dependency-free Rust binary module for the 64-bit (x86-64) branch. The server module
-(`gmsv_`) and the client module (`gmcl_`) are separate builds. The water volumes are
-Windows x64 only; on Linux only the water level datamap layer works.
+(`gmsv_`) and the client module (`gmcl_`) are separate builds. The water volumes work on the
+64-bit Windows server and client and on the 64-bit Linux server (`server_srv.so`); the Linux
+client has no engine hooks, only the water level datamap layer.
 
 ## Install
 
@@ -47,7 +48,7 @@ waterleveler.Get(ent)          -- number | nil
 waterleveler.Clear(ent)        -- bool (was there an override)
 waterleveler.ClearAll()
 waterleveler.IsHooked()        -- engine hook active?
-waterleveler.HookStatus()      -- e.g. "hooked CBaseEntity::SetWaterLevel at server.dll+<rva>"
+waterleveler.HookStatus()      -- e.g. "hooked CBaseEntity::SetWaterLevel at server module+<rva>"
 waterleveler.HookHits()        -- engine calls whose value was replaced
 waterleveler.SetSaveKey(key)   -- datamap key written each tick; "" disables that layer
 
@@ -101,7 +102,7 @@ Windows x64 only: elsewhere the module loads but volumes do nothing.
 2. **`Entity:WaterLevel()` wrapper.** Lua always sees the override.
 3. **Per-tick datamap write.** `Entity:SetSaveValue("m_nWaterLevel", level)`
    covers code that writes the byte directly (one player-state restore path
-   does) and is the only engine-side layer on Linux.
+   does).
 
 Facts taken from the 64-bit `server.dll`: `m_nWaterLevel` is a
 `FIELD_CHARACTER` datamap field at `this+0x2ab` (SAVE|KEY, map key
@@ -263,8 +264,12 @@ Not verified:
   Currents (`currentx`, `currenty`, `currentz`) are verified too.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
-- Linux: no engine hook (a Linux `server.so` is a different binary), so no volumes. Only the
-  datamap layer runs there.
+- Linux: the server hooks are found by signature in `server_srv.so` (and `server.so`), but
+  have only been checked statically against one build (every signature matches exactly once,
+  the resolved globals and slots were read from the disassembly and from vphysics' symbols); they
+  have not been run in a live server. The Linux client has no engine hook, so no volumes there.
+  The Linux server has no RTTI for `CTEExplosion`, so explosion events are recognised by the
+  temp entity's name; entities are keyed by their handle's index instead of the edict's.
 - Game updates: the hooks are found by signature, so an update that changes those functions
   disables the affected hook (`HookStatus()` and `waterleveler_status` say which) and leaves the others.
 - Patching happens at module load. Do it while the server is idle (normal `require` at startup
@@ -282,7 +287,8 @@ release builds enable one each, so `gmsv_` has only the server code (overrides, 
 bubble and explosion patches) and `gmcl_` only the client code; the volume store and the
 trace hooks are in both.
 
-Tests: `SERVER_DLL_X64=/path/to/server.dll cargo test --release`
+Tests: `SERVER_DLL_X64=/path/to/server.dll cargo test --release`, and for the Linux
+signatures `SERVER_SO_X64=/path/to/server_srv.so cargo test --release`
 
 ## Removing a volume with props in it
 

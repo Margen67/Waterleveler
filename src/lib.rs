@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Margen67
 //! `waterlevelercore` - per-entity water level overrides and fake water volumes for
 //! Garry's Mod, as a server module (`gmsv_`) and a client module (`gmcl_`) built from this
-//! one crate with the `server` and `client` features (see `Cargo.toml`). Windows x64 only for
-//! the volumes; Linux has just the datamap layer of the water level overrides.
+//! one crate with the `server` and `client` features (see `Cargo.toml`). The volumes work on
+//! the 64-bit Windows server and client and on the 64-bit Linux server; the Linux client has
+//! just the datamap layer of the water level overrides.
 //!
 //! The server module registers the global table `waterlevelercore` (the `waterleveler` Lua
 //! library in `addon/waterleveler/lua/includes/modules` wraps it and adds helpers) and methods
@@ -786,24 +787,142 @@ mod engine_hook {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+    // The engine's calling convention: Windows x64 for the Windows server, System V for
+    // the Linux one. Under `cfg(test)` it is always Windows x64: the tests run the
+    // machine code of a Windows server.dll on whatever host runs them.
+    #[cfg(any(windows, test))]
+    macro_rules! engine_fn {
+        ($($t:tt)*) => { unsafe extern "win64" fn $($t)* };
+    }
+    #[cfg(not(any(windows, test)))]
+    macro_rules! engine_fn {
+        ($($t:tt)*) => { unsafe extern "C" fn $($t)* };
+    }
+    /// Defines an `unsafe fn` with the engine's calling convention.
+    macro_rules! engine_abi_item {
+        ($(#[$m:meta])* $v:vis unsafe fn $name:ident ( $($args:tt)* ) $(-> $ret:ty)? $body:block) => {
+            #[cfg(any(windows, test))]
+            $(#[$m])* $v unsafe extern "win64" fn $name($($args)*) $(-> $ret)? $body
+            #[cfg(not(any(windows, test)))]
+            $(#[$m])* $v unsafe extern "C" fn $name($($args)*) $(-> $ret)? $body
+        };
+    }
+
+    /// The 64-bit Linux server's signatures. Always compiled (the tests check them against a
+    /// real `server_srv.so`), used only by the Linux build.
     #[cfg(feature = "server")]
-    /// Bytes overwritten at the function entry (14-byte absolute jmp + 1 nop).
+    #[allow(dead_code)]
+    pub(crate) mod linux_sigs {
+        pub(crate) const SIG: &str =
+            "55 48 89 E5 41 56 41 55 41 54 41 89 F4 53 44 0F B6 AF D3 02 00 00 \
+                           48 89 FB 41 38 F5 74 17 48 8B 07 48 8D B7 D3 02 00 00 FF 90 ?? ?? 00 00 \
+                           44 88 A3 D3 02 00 00";
+        pub(crate) const UPDATE_WATER_STATE_SIG: &str = "\
+        55 48 89 E5 41 55 41 54 4C 8D 65 C0 53 48 8D 75 D0 4C 89 E2 48 89 FB 48 83 EC 28 \
+        48 8B 05 ?? ?? ?? ?? 48 81 C7 10 02 00 00 C7 45 C8 00 00 00 00 48 C7 45 C0 00 00 00 00 \
+        C7 45 D8 00 00 00 00 48 89 45 D0 E8 ?? ?? ?? ?? 31 F6 48 89 DF E8 ?? ?? ?? ?? 31 F6 \
+        48 89 DF E8 ?? ?? ?? ?? 4C 8D 2D ?? ?? ?? ?? 31 D2 4C 89 E6 49 8B 7D 00 48 8B 07 FF 10 \
+        A9 30 40 00 00";
+        pub(crate) const FLUID_END_TOUCH_SIG: &str =
+            "55 48 85 F6 48 89 E5 41 56 49 89 D6 41 55 41 54 53 8B 87 F0 01 00 00 \
+        48 89 FB 8D 50 01 89 97 F0 01 00 00 74 ?? 4D 85 F6 74 ?? 48 8B 06 49 89 F4 48 89 F7 \
+        FF 90 90 00 00 00 48 85 C0 49 89 C5 74 ?? 48 89 C6 48 89 DF E8 ?? ?? ?? ?? 0F 2F 05 \
+        ?? ?? ?? ?? 73 ?? 49 8B 45 00 4C 89 F7 41 81 A5 B8 01 00 00 FF FF F7 FF 4C 8B A0 F0 \
+        02 00 00 49 8B 06 FF 50 38 48 63 D0 BE 01 00 00 00 4C 89 EF 41 FF D4 8B 83 F0 01 00 00";
+        pub(crate) const BUBBLE_TRAIL_SIG: &str =
+            "55 48 89 E5 41 57 41 56 41 55 41 89 D5 41 54 49 89 F4 53 48 89 FB 48 83 EC 68 \
+        F3 0F 10 47 08 F3 0F 10 0D ?? ?? ?? ?? F3 0F 58 C8 E8 ?? ?? ?? ?? F3 0F 10 0D ?? ?? ?? ?? \
+        4C 89 E7 0F 28 D0 F3 41 0F 10 44 24 08 F3 0F 5C 53 08";
+        pub(crate) const DISPATCH_EFFECT_SIG: &str =
+            "55 48 89 E5 41 56 41 55 4C 8D 35 ?? ?? ?? ?? 49 89 FD 41 54 4C 8D 65 A0 53 4C 89 E7 \
+        48 89 F3 48 83 EC 40 E8 ?? ?? ?? ?? 48 89 DE 4C 89 E7";
+        pub(crate) const TE_CREATE_SIG: &str =
+            "55 48 89 E5 41 57 41 56 4C 8D 35 ?? ?? ?? ?? 41 55 41 54 4C 8D 25 ?? ?? ?? ?? 53 \
+        48 89 FB 48 83 EC 28 48 8D 05 ?? ?? ?? ?? 44 8B 05 ?? ?? ?? ?? 4C 8B 28";
+        pub(crate) const PHYSENV_SIG: &str =
+            "48 8B 3D ?? ?? ?? ?? 48 8D 95 ?? ?? ?? ?? 4C 89 E6 48 8B 07 FF 50 60";
+        pub(crate) const ENTITY_ARRAY_SIG: &str =
+            "48 8D 15 ?? ?? ?? ?? 8B 00 48 8B 12 83 F8 FF 74 ?? 89 C1 C1 E8 0E 81 E1 FF 3F 00 00 \
+        48 C1 E1 05";
+        pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
+        &[(
+            "55 48 89 E5 41 56 41 55 41 54 53 48 89 FB 48 81 EC 90 00 00 00 80 BF D3 02 00 00 00 \
+             0F 84 ?? ?? ?? ?? 48 8B 07 66 0F EF C0 48 C7 45 80 00 00 00 00",
+            14,
+        )],
+        &[(
+            "55 48 89 E5 41 54 53 48 89 FB 48 81 EC A0 00 00 00 80 BF D3 02 00 00 01 \
+             0F 86 ?? ?? ?? ?? 48 8B 07 66 0F EF C0 48 C7 45 90 00 00 00 00",
+            17,
+        )],
+        &[(
+            "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 89 FB 48 81 EC A8 00 00 00 48 8B 3D \
+             ?? ?? ?? ?? 48 8B 47 78 48 85 C0 74 ?? 80 38 00 0F 85 ?? ?? ?? ??",
+            16,
+        )],
+    ];
+    }
+
+    #[cfg(feature = "server")]
+    /// Bytes overwritten at the function entry (14-byte absolute jmp, and on Windows 1 nop
+    /// to end on an instruction boundary; the Linux prologue ends on one at 14).
+    #[cfg(any(windows, test))]
     pub(crate) const STOLEN: usize = 15;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const STOLEN: usize = 14;
     #[cfg(feature = "server")]
     pub(crate) const TRAMPOLINE_SIZE: usize = STOLEN + 14;
     #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const OFF_PEV: usize = 0x30;
     #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const OFF_EDICT_INDEX: usize = 6;
+
+    /// Entity index of a `CBaseEntity`: Windows reads the edict (`pev`, then the edict's
+    /// index); Linux reads the entity's own `CBaseHandle` (`m_RefEHandle`, at +8: the vtable
+    /// is at +0), whose low 14 bits are the index into the entity list.
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    pub(crate) unsafe fn entity_index(this: *const u8) -> Option<i32> {
+        unsafe {
+            let pev = *this.add(OFF_PEV).cast::<*const u8>();
+            if pev.is_null() {
+                None
+            } else {
+                Some(i32::from(*pev.add(OFF_EDICT_INDEX).cast::<i16>()))
+            }
+        }
+    }
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) unsafe fn entity_index(this: *const u8) -> Option<i32> {
+        unsafe {
+            let handle = this
+                .add(ENTITY_HANDLE_OFFSET)
+                .cast::<u32>()
+                .read_unaligned();
+            (handle != u32::MAX).then_some((handle & 0x3fff) as i32)
+        }
+    }
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const ENTITY_HANDLE_OFFSET: usize = 8;
 
     #[cfg(feature = "server")]
     /// Signature of the function. `??` bytes are the vtable displacement of
     /// the `NetworkStateChanged` call. The 0x2ab offsets are deliberately NOT
     /// wildcarded: they double as a check that the datamap layout matches.
+    #[cfg(any(windows, test))]
     pub(crate) const SIG: &str = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 \
                            48 83 EC 20 8B FA 0F B6 A9 AB 02 00 00 48 8B F1 \
                            38 91 AB 02 00 00 74 17 48 8B 01 48 8D 91 AB 02 \
                            00 00 FF 90 ?? ?? 00 00 40 88 BE AB 02 00 00";
+    /// Linux `CBaseEntity::SetWaterLevel`: `m_nWaterLevel` is at +0x2d3 (also a layout check).
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const SIG: &str = linux_sigs::SIG;
 
     #[cfg(feature = "server")]
     pub(crate) static TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
@@ -871,18 +990,17 @@ mod engine_hook {
         b
     }
 
+    engine_abi_item! {
     #[cfg(feature = "server")]
     /// The replacement for `CBaseEntity::SetWaterLevel`. Windows x64 calling
     /// convention on every OS, because the original is a Windows function.
-    pub(crate) unsafe extern "win64" fn hook_set_water_level(this: *mut c_void, level: c_int) {
+    pub(crate) unsafe fn hook_set_water_level(this: *mut c_void, level: c_int) {
         unsafe {
-            let original: unsafe extern "win64" fn(*mut c_void, c_int) =
+            let original: engine_fn!((*mut c_void, c_int)) =
                 std::mem::transmute(TRAMPOLINE.load(Ordering::Relaxed));
             let mut level = level;
             if !this.is_null() {
-                let pev = *(this as *const u8).add(OFF_PEV).cast::<*const u8>();
-                if !pev.is_null() {
-                    let idx = i32::from(*pev.add(OFF_EDICT_INDEX).cast::<i16>());
+                if let Some(idx) = entity_index(this as *const u8) {
                     // Never block inside an engine callback. No overrides (the usual
                     // case): nothing to look up, so no lock either.
                     if OVERRIDE_COUNT.load(Ordering::Relaxed) == 0 {
@@ -899,6 +1017,7 @@ mod engine_hook {
             }
             original(this, level);
         }
+    }
     }
 
     /// The handful of OS services needed to patch code.
@@ -918,13 +1037,23 @@ mod engine_hook {
     /// byte 91) loads the `IEngineTrace` object whose vtable slot 0 is
     /// `GetPointContents(const Vector&, ...)`; the result is tested against
     /// `MASK_WATER` (0x4030) to set water level 1, 2 and 3.
+    #[cfg(any(windows, test))]
     pub(crate) const UPDATE_WATER_STATE_SIG: &str = "\
         48 8B C4 53 48 83 EC 50 48 8B D9 0F 29 70 E8 48 81 C1 E8 01 00 00 48 C7 40 CC 00 00 00 00 \
         4C 8D 40 C8 C7 40 C8 00 00 00 00 48 8D 50 D8 C7 40 D8 00 00 00 3F 0F 57 F6 \
         48 C7 40 DC 00 00 00 3F E8 ?? ?? ?? ?? 33 D2 48 8B CB E8 ?? ?? ?? ?? 33 D2 48 8B CB \
         E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 54 24 20 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
+    /// Linux `CBaseEntity::UpdateWaterState`: the `enginetrace` variable is reached with
+    /// `lea r13,[rip+disp32]` (disp32 at byte 95), then `mov rdi,[r13]; mov rax,[rdi]; call [rax]`.
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const UPDATE_WATER_STATE_SIG: &str = linux_sigs::UPDATE_WATER_STATE_SIG;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 91;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 95;
 
     #[cfg(feature = "client")]
     /// client.dll: `C_BaseEntity::UpdateWaterState` loads the client's `enginetrace`
@@ -965,19 +1094,20 @@ mod engine_hook {
 
     pub(crate) static ORIGINAL_GPC: AtomicUsize = AtomicUsize::new(0);
 
+    engine_abi_item! {
     /// Replacement for `IEngineTrace::GetPointContents` (vtable slot 0). All
     /// four register arguments are forwarded untouched, so it does not matter
     /// whether the engine's signature has a mask parameter or not. A point inside a volume
     /// also reports its contents; so does the end point of the last small-hull trace, when
     /// the bullet's own line reaches the surface it stopped at inside a volume.
-    pub(crate) unsafe extern "win64" fn hook_get_point_contents(
+    pub(crate) unsafe fn hook_get_point_contents(
         this: *mut c_void,
         pos: *const f32,
         a3: usize,
         a4: usize,
     ) -> c_int {
         unsafe {
-            let original: unsafe extern "win64" fn(*mut c_void, *const f32, usize, usize) -> c_int =
+            let original: engine_fn!((*mut c_void, *const f32, usize, usize) -> c_int) =
                 std::mem::transmute(ORIGINAL_GPC.load(Ordering::Relaxed));
             let mut contents = original(this, pos, a3, a4);
             if !pos.is_null() {
@@ -1026,6 +1156,7 @@ mod engine_hook {
             }
             contents
         }
+    }
     }
 
     /// Swaps vtable slot 0 of the `IEngineTrace` object. No machine code is
@@ -1519,11 +1650,12 @@ mod engine_hook {
         })
     }
 
+    engine_abi_item! {
     /// Replacement for `IEngineTrace::TraceRay`: runs the engine's trace, then, for a trace
     /// with a water bit in its mask, lets `plan_trace` rewrite the result for the volumes the
     /// ray touches. A trace without one is only remembered when it is a small hull (a shotgun
     /// pellet), see `note_small_hull`.
-    pub(crate) unsafe extern "win64" fn hook_trace_ray(
+    pub(crate) unsafe fn hook_trace_ray(
         this: *mut c_void,
         ray: *const u8,
         mask: u32,
@@ -1531,13 +1663,13 @@ mod engine_hook {
         trace: *mut u8,
     ) {
         unsafe {
-            let original: unsafe extern "win64" fn(
+            let original: engine_fn!((
                 *mut c_void,
                 *const u8,
                 u32,
                 *mut c_void,
                 *mut u8,
-            ) = std::mem::transmute(ORIGINAL_TRACE_RAY.load(Ordering::Relaxed));
+            )) = std::mem::transmute(ORIGINAL_TRACE_RAY.load(Ordering::Relaxed));
             original(this, ray, mask, filter, trace);
             if ray.is_null() || trace.is_null() {
                 return;
@@ -1584,6 +1716,7 @@ mod engine_hook {
                 }
             }
         }
+    }
     }
 
     thread_local! {
@@ -1732,9 +1865,20 @@ mod engine_hook {
     /// C1 E9 0E  48 C1 E0 05  39 4C 30 10`: the engine's "entity from handle"
     /// idiom (entries are 32 bytes: pointer at +8, serial at +0x10). It occurs
     /// many times, always with the same array global.
+    #[cfg(any(windows, test))]
     pub(crate) const ENTITY_ARRAY_SIG: &str =
         "83 F9 FF 74 ?? 48 8B 35 ?? ?? ?? ?? 8B C1 25 FF 3F 00 00 \
                                         C1 E9 0E 48 C1 E0 05 39 4C 30 10";
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const ENTITY_ARRAY_SIG: &str = linux_sigs::ENTITY_ARRAY_SIG;
+    /// Where the rip-relative displacement of the array global sits in the idiom.
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    const ENTITY_ARRAY_DISP_AT: usize = 8;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    const ENTITY_ARRAY_DISP_AT: usize = 3;
     #[cfg(feature = "server")]
     pub(crate) static ENTITY_ARRAY_GLOBAL: AtomicUsize = AtomicUsize::new(0);
 
@@ -1746,8 +1890,8 @@ mod engine_hook {
             let all = scan_sig_all(base, ENTITY_ARRAY_SIG)?;
             let mut global = 0usize;
             for at in all {
-                let disp = (at.add(8) as *const i32).read_unaligned() as isize;
-                let g = at.offset(12 + disp) as usize;
+                let disp = (at.add(ENTITY_ARRAY_DISP_AT) as *const i32).read_unaligned() as isize;
+                let g = at.offset((ENTITY_ARRAY_DISP_AT + 4) as isize + disp) as usize;
                 if global != 0 && global != g {
                     return Err("entity array idiom resolves to different globals");
                 }
@@ -1770,7 +1914,7 @@ mod engine_hook {
                 if list != 0 {
                     // Client realm: entity 0 of the client's entity list.
                     let vtable = (list as *const *const usize).read();
-                    let get: unsafe extern "win64" fn(usize, c_int) -> usize =
+                    let get: engine_fn!((usize, c_int) -> usize) =
                         std::mem::transmute(vtable.add(CLIENT_GET_ENTITY_SLOT).read());
                     return get(list, 0);
                 }
@@ -1792,87 +1936,97 @@ mod engine_hook {
         }
     }
 
-    /// Every match of a signature in the executable sections.
+    /// The executable parts of a loaded module as (offset from `base`, size): the
+    /// executable sections of a PE image, the executable segments of an ELF one.
+    #[cfg(all(feature = "server", windows))]
+    unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
+        unsafe {
+            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
+            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
+            if rd16(0) != 0x5A4D {
+                return Err("module has no MZ header");
+            }
+            let nt = rd32(0x3C) as usize;
+            if rd32(nt) != 0x0000_4550 {
+                return Err("module has no PE header");
+            }
+            if rd16(nt + 24) != 0x20B {
+                return Err("module is not a 64-bit PE image");
+            }
+            let nsec = rd16(nt + 6) as usize;
+            let optsz = rd16(nt + 20) as usize;
+            let sections = nt + 24 + optsz;
+            let mut regions = Vec::new();
+            for i in 0..nsec {
+                let s = sections + i * 40;
+                if rd32(s + 36) & 0x2000_0000 != 0 {
+                    regions.push((rd32(s + 12) as usize, rd32(s + 8) as usize));
+                }
+            }
+            Ok(regions)
+        }
+    }
+
+    #[cfg(all(feature = "server", not(windows)))]
+    unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
+        unsafe {
+            const PT_LOAD: u32 = 1;
+            const PF_X: u32 = 1;
+            let rd64 = |off: usize| base.add(off).cast::<u64>().read_unaligned();
+            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
+            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
+            if std::slice::from_raw_parts(base, 4) != b"\x7fELF" {
+                return Err("module has no ELF header");
+            }
+            if *base.add(4) != 2 || rd16(18) != 62 {
+                return Err("module is not a 64-bit x86-64 ELF image");
+            }
+            let phoff = rd64(0x20) as usize;
+            let phentsize = rd16(0x36) as usize;
+            let phnum = rd16(0x38) as usize;
+            let mut regions = Vec::new();
+            for i in 0..phnum {
+                let ph = phoff + i * phentsize;
+                if rd32(ph) == PT_LOAD && rd32(ph + 4) & PF_X != 0 {
+                    // p_vaddr, p_memsz
+                    regions.push((rd64(ph + 0x10) as usize, rd64(ph + 0x28) as usize));
+                }
+            }
+            Ok(regions)
+        }
+    }
+
+    /// Every match of a signature in the executable parts of the module.
     #[cfg(feature = "server")]
     pub(crate) unsafe fn scan_sig_all(
         base: *const u8,
         sig: &str,
     ) -> Result<Vec<*mut u8>, &'static str> {
         unsafe {
-            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-            if rd16(0) != 0x5A4D {
-                return Err("module has no MZ header");
-            }
-            let nt = rd32(0x3C) as usize;
-            if rd32(nt) != 0x0000_4550 {
-                return Err("module has no PE header");
-            }
-            if rd16(nt + 24) != 0x20B {
-                return Err("module is not a 64-bit PE image");
-            }
-            let nsec = rd16(nt + 6) as usize;
-            let optsz = rd16(nt + 20) as usize;
-            let sections = nt + 24 + optsz;
             let pat = parse_sig(sig);
             let mut found: Vec<*mut u8> = Vec::new();
-            for i in 0..nsec {
-                let s = sections + i * 40;
-                let vsize = rd32(s + 8) as usize;
-                let va = rd32(s + 12) as usize;
-                let chars = rd32(s + 36);
-                if chars & 0x2000_0000 == 0 {
-                    continue;
-                }
-                let region = std::slice::from_raw_parts(base.add(va), vsize);
+            for (va, size) in executable_regions(base)? {
+                let region = std::slice::from_raw_parts(base.add(va), size);
                 for off in find_all(region, &pat) {
                     found.push(base.add(va + off).cast_mut());
                 }
             }
             if found.is_empty() {
-                return Err("signature not found (different server.dll build?)");
+                return Err("signature not found (different game build?)");
             }
             Ok(found)
         }
     }
 
-    /// Same, for any signature.
+    /// Same, for a signature that must match exactly once.
+    #[cfg(feature = "server")]
     pub(crate) unsafe fn scan_sig(base: *const u8, sig: &str) -> Result<*mut u8, &'static str> {
         unsafe {
-            let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-            let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-            if rd16(0) != 0x5A4D {
-                return Err("module has no MZ header");
-            }
-            let nt = rd32(0x3C) as usize;
-            if rd32(nt) != 0x0000_4550 {
-                return Err("module has no PE header");
-            }
-            if rd16(nt + 24) != 0x20B {
-                return Err("module is not a 64-bit PE image");
-            }
-            let nsec = rd16(nt + 6) as usize;
-            let optsz = rd16(nt + 20) as usize;
-            let sections = nt + 24 + optsz;
-            let pat = parse_sig(sig);
-            let mut found: Vec<*mut u8> = Vec::new();
-            for i in 0..nsec {
-                let s = sections + i * 40;
-                let vsize = rd32(s + 8) as usize;
-                let va = rd32(s + 12) as usize;
-                let chars = rd32(s + 36);
-                if chars & 0x2000_0000 == 0 {
-                    continue; // not executable
-                }
-                let region = std::slice::from_raw_parts(base.add(va), vsize);
-                for off in find_all(region, &pat) {
-                    found.push(base.add(va + off).cast_mut());
-                }
-            }
-            match found.len() {
-                1 => Ok(found[0]),
-                0 => Err("signature not found (different server.dll build?)"),
-                _ => Err("signature is ambiguous"),
+            let found = scan_sig_all(base, sig)?;
+            if found.len() == 1 {
+                Ok(found[0])
+            } else {
+                Err("signature is ambiguous")
             }
         }
     }
@@ -1944,12 +2098,25 @@ mod engine_hook {
     /// Finds `mov rcx,[physenv]; lea r8,[..]; mov rdx,rsi; mov r9,[rcx];
     /// call [r9+0x58]` in the world-setup code. The rip displacement of the
     /// first instruction is the `physenv` global.
+    #[cfg(any(windows, test))]
     pub(crate) const PHYSENV_SIG: &str =
         "48 8B 0D ?? ?? ?? ?? 4C 8D 85 ?? ?? ?? ?? 48 8B D6 4C 8B 09 41 FF 51 58";
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const PHYSENV_SIG: &str = linux_sigs::PHYSENV_SIG;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const CREATE_FLUID_SLOT: usize = 11;
     #[cfg(feature = "server")]
+    /// Linux vtables have two destructor slots, so the later slots are one higher.
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const CREATE_FLUID_SLOT: usize = 12;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const DESTROY_FLUID_SLOT: usize = 12;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const DESTROY_FLUID_SLOT: usize = 13;
 
     #[cfg(feature = "server")]
     /// Address of the engine's `physenv` variable.
@@ -1975,10 +2142,9 @@ mod engine_hook {
     }
 
     #[cfg(feature = "server")]
-    type CreateFluidFn =
-        unsafe extern "win64" fn(*mut c_void, *mut c_void, *const FluidParams) -> *mut c_void;
+    type CreateFluidFn = engine_fn!((*mut c_void, *mut c_void, *const FluidParams) -> *mut c_void);
     #[cfg(feature = "server")]
-    type DestroyFluidFn = unsafe extern "win64" fn(*mut c_void, *mut c_void);
+    type DestroyFluidFn = engine_fn!((*mut c_void, *mut c_void));
 
     #[cfg(feature = "server")]
     pub(crate) unsafe fn create_fluid(
@@ -1996,18 +2162,26 @@ mod engine_hook {
     #[cfg(feature = "server")]
     /// `IPhysicsObject` vtable slots (confirmed in the world water setup:
     /// `call [rbx+0xb8]`, `or ax,0x200`, `call [rbx+0xb0]`).
+    #[cfg(any(windows, test))]
     pub(crate) const OBJ_SET_CALLBACK_FLAGS_SLOT: usize = 0xb0 / 8;
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const OBJ_SET_CALLBACK_FLAGS_SLOT: usize = 0xb8 / 8;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const OBJ_GET_CALLBACK_FLAGS_SLOT: usize = 0xb8 / 8;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const OBJ_GET_CALLBACK_FLAGS_SLOT: usize = 0xc0 / 8;
     #[cfg(feature = "server")]
     /// The engine ORs this into the world water object before creating its
     /// fluid controller (`CALLBACK_GLOBAL_TOUCH_STATIC`, unconfirmed name).
     pub(crate) const FLUID_OBJECT_CALLBACK_FLAG: u16 = 0x200;
 
     #[cfg(feature = "server")]
-    type GetFlagsFn = unsafe extern "win64" fn(*mut c_void) -> u16;
+    type GetFlagsFn = engine_fn!((*mut c_void) -> u16);
     #[cfg(feature = "server")]
-    type SetFlagsFn = unsafe extern "win64" fn(*mut c_void, u16);
+    type SetFlagsFn = engine_fn!((*mut c_void, u16));
 
     #[cfg(feature = "server")]
     /// Mirrors the engine's setup of a water object. Returns the old flags.
@@ -2046,6 +2220,7 @@ mod engine_hook {
     // (The signature covers the entity offsets and slots used here.)
 
     #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const FLUID_END_TOUCH_SIG: &str = "48 89 5C 24 10 48 89 7C 24 18 41 56 48 83 EC 20 \
         FF 81 F0 01 00 00 4D 8B F0 48 8B DA 48 8B F9 48 85 D2 0F 84 ?? ?? ?? ?? 4D 85 C0 74 ?? \
         48 8B 02 48 8B CA 48 89 74 24 30 FF 90 88 00 00 00 48 8B F0 48 85 C0 74 ?? \
@@ -2053,21 +2228,40 @@ mod engine_hook {
         E8 ?? ?? ?? ?? 81 A6 90 01 00 00 FF FF F7 FF 49 8B CE 49 8B 06 48 8B 1E FF 50 30 \
         4C 63 C0 BA 01 00 00 00 48 8B CE FF 93 E8 02 00 00 FF 8F F0 01 00 00";
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const FLUID_END_TOUCH_SIG: &str = linux_sigs::FLUID_END_TOUCH_SIG;
+    #[cfg(feature = "server")]
     /// Whole instructions covered by the 14-byte jump.
+    #[cfg(any(windows, test))]
     pub(crate) const FLUID_END_TOUCH_STOLEN: usize = 16;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const FLUID_END_TOUCH_STOLEN: usize = 14;
     #[cfg(feature = "server")]
     pub(crate) static FLUID_END_TOUCH_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
     #[cfg(feature = "server")]
     /// `IPhysicsObject::GetGameData` (the entity), vtable offset 0x88.
+    #[cfg(any(windows, test))]
     pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x88 / 8;
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x90 / 8;
+    #[cfg(feature = "server")]
     /// `CBaseEntity::m_iEFlags` and its `EFL_TOUCHING_FLUID` bit.
+    #[cfg(any(windows, test))]
     pub(crate) const ENTITY_EFLAGS_OFFSET: usize = 0x190;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const ENTITY_EFLAGS_OFFSET: usize = 0x1b8;
     #[cfg(feature = "server")]
     pub(crate) const EFL_TOUCHING_FLUID: u32 = 0x80000;
     #[cfg(feature = "server")]
     /// `CBaseEntity::OnEntityEvent(event`, data), vtable offset 0x2e8.
+    #[cfg(any(windows, test))]
     pub(crate) const ENTITY_EVENT_SLOT: usize = 0x2e8 / 8;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const ENTITY_EVENT_SLOT: usize = 0x2f0 / 8;
     #[cfg(feature = "server")]
     pub(crate) const ENTITY_EVENT_WATER_UNTOUCH: c_int = 1;
 
@@ -2107,8 +2301,9 @@ mod engine_hook {
             .clear();
     }
 
+    engine_abi_item! {
     #[cfg(feature = "server")]
-    pub(crate) unsafe extern "win64" fn hook_fluid_end_touch(
+    pub(crate) unsafe fn hook_fluid_end_touch(
         this: *mut c_void,
         object: *mut c_void,
         fluid: *mut c_void,
@@ -2120,7 +2315,7 @@ mod engine_hook {
                 .ok()
                 .and_then(|d| d.iter().find(|e| e.0 == fluid as usize).map(|e| e.1));
             let Some(contents) = dead else {
-                let original: unsafe extern "win64" fn(*mut c_void, *mut c_void, *mut c_void) =
+                let original: engine_fn!((*mut c_void, *mut c_void, *mut c_void)) =
                     std::mem::transmute(FLUID_END_TOUCH_TRAMPOLINE.load(Ordering::Relaxed));
                 original(this, object, fluid);
                 return;
@@ -2128,7 +2323,7 @@ mod engine_hook {
             if object.is_null() {
                 return;
             }
-            let get_game_data: unsafe extern "win64" fn(*mut c_void) -> *mut u8 =
+            let get_game_data: engine_fn!((*mut c_void) -> *mut u8) =
                 std::mem::transmute(
                     *(*(object as *const *const usize)).add(OBJ_GET_GAME_DATA_SLOT),
                 );
@@ -2138,7 +2333,7 @@ mod engine_hook {
             }
             let flags = entity.add(ENTITY_EFLAGS_OFFSET).cast::<u32>();
             flags.write_unaligned(flags.read_unaligned() & !EFL_TOUCHING_FLUID);
-            let on_event: unsafe extern "win64" fn(*mut u8, c_int, *mut c_void) =
+            let on_event: engine_fn!((*mut u8, c_int, *mut c_void)) =
                 std::mem::transmute(*(*(entity as *const *const usize)).add(ENTITY_EVENT_SLOT));
             on_event(
                 entity,
@@ -2146,6 +2341,7 @@ mod engine_hook {
                 contents as isize as *mut c_void,
             );
         }
+    }
     }
 
     // ---- UTIL_BubbleTrail(const Vector &from, const Vector &to, int count) --
@@ -2163,14 +2359,22 @@ mod engine_hook {
     // scales `count` by the kept fraction; everything else is left alone.
 
     #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const BUBBLE_TRAIL_SIG: &str =
         "48 8B C4 48 89 58 08 48 89 70 10 57 48 81 EC E0 00 00 00 \
                                         F3 0F 10 49 08 41 8B F0 0F 29 70 E8 0F 28 D1 \
                                         F3 0F 58 15 ?? ?? ?? ?? 0F 29 78 D8 48 8B FA \
                                         44 0F 29 48 B8 48 8B D9 E8";
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const BUBBLE_TRAIL_SIG: &str = linux_sigs::BUBBLE_TRAIL_SIG;
+    #[cfg(feature = "server")]
     /// Whole instructions covered by the 14-byte jump.
+    #[cfg(any(windows, test))]
     pub(crate) const BUBBLE_TRAIL_STOLEN: usize = 19;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const BUBBLE_TRAIL_STOLEN: usize = 15;
     #[cfg(feature = "server")]
     pub(crate) static BUBBLE_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
     #[cfg(feature = "server")]
@@ -2195,6 +2399,38 @@ mod engine_hook {
         hook: usize,
         p: &Platform,
     ) -> Result<Patch, &'static str> {
+        unsafe { install_patch_relocating(target, sig, stolen, &[], hook, p) }
+    }
+
+    #[cfg(feature = "server")]
+    /// `lea r64, [rip+disp32]` (7 bytes) at `at` in `code`, rewritten as `movabs r64, imm64`
+    /// (10 bytes) that loads the same address when the code runs from somewhere else.
+    pub(crate) fn relocate_rip_lea(code: &[u8], at: usize, origin: u64) -> Option<[u8; 10]> {
+        let b = code.get(at..at + 7)?;
+        if (b[0] & 0xFB) != 0x48 || b[1] != 0x8D || (b[2] & 0xC7) != 0x05 {
+            return None;
+        }
+        let disp = i64::from(i32::from_le_bytes(b[3..7].try_into().ok()?));
+        let value = (origin + at as u64 + 7).wrapping_add_signed(disp);
+        let reg = ((b[0] >> 2) & 1) << 3 | ((b[2] >> 3) & 7);
+        let mut out = [0u8; 10];
+        out[0] = 0x48 | (reg >> 3);
+        out[1] = 0xB8 | (reg & 7);
+        out[2..].copy_from_slice(&value.to_le_bytes());
+        Some(out)
+    }
+
+    #[cfg(feature = "server")]
+    /// Like [`install_patch`], for a prologue that holds `lea r64,[rip+disp32]` instructions
+    /// (at the byte offsets in `rip_leas`): those are rewritten in the trampoline.
+    pub(crate) unsafe fn install_patch_relocating(
+        target: *mut u8,
+        sig: &str,
+        stolen: usize,
+        rip_leas: &[usize],
+        hook: usize,
+        p: &Platform,
+    ) -> Result<Patch, &'static str> {
         unsafe {
             assert!(stolen >= 14);
             let pat = parse_sig(sig);
@@ -2210,7 +2446,20 @@ mod engine_hook {
             if tramp.is_null() {
                 return Err("could not allocate executable memory");
             }
-            let mut tb = original.clone();
+            let mut tb = Vec::with_capacity(stolen + 32);
+            let mut i = 0;
+            while i < stolen {
+                if rip_leas.contains(&i) {
+                    let Some(abs) = relocate_rip_lea(&original, i, target as u64) else {
+                        return Err("prologue lea cannot be relocated");
+                    };
+                    tb.extend_from_slice(&abs);
+                    i += 7;
+                } else {
+                    tb.push(original[i]);
+                    i += 1;
+                }
+            }
             tb.extend_from_slice(&[0xFF, 0x25, 0, 0, 0, 0]);
             tb.extend_from_slice(&(target as u64 + stolen as u64).to_le_bytes());
             std::ptr::copy_nonoverlapping(tb.as_ptr(), tramp, tb.len());
@@ -2343,15 +2592,16 @@ mod engine_hook {
         BubbleClip::Clipped(at(a), at(b), b - a)
     }
 
+    engine_abi_item! {
     #[cfg(feature = "server")]
     /// Replacement for `UTIL_BubbleTrail` (Windows x64 convention).
-    pub(crate) unsafe extern "win64" fn hook_bubble_trail(
+    pub(crate) unsafe fn hook_bubble_trail(
         from: *const f32,
         to: *const f32,
         count: c_int,
     ) {
         unsafe {
-            let original: unsafe extern "win64" fn(*const f32, *const f32, c_int) =
+            let original: engine_fn!((*const f32, *const f32, c_int)) =
                 std::mem::transmute(BUBBLE_TRAMPOLINE.load(Ordering::Relaxed));
             let mut action = BubbleClip::Keep;
             if !from.is_null() && !to.is_null() {
@@ -2392,6 +2642,7 @@ mod engine_hook {
             }
         }
     }
+    }
 
     // ---- Explosions ------------------------------------------------------
     //
@@ -2408,6 +2659,7 @@ mod engine_hook {
     #[cfg(feature = "server")]
     /// Per function: the prologue of each known build (tried in order).
     /// Newer builds store rbx at [rsp+0x10] and reshuffle the pushes.
+    #[cfg(any(windows, test))]
     pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
         &[
             ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
@@ -2422,6 +2674,9 @@ mod engine_hook {
             ("48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
         ],
     ];
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = linux_sigs::EXPLOSION_TARGETS;
 
     #[cfg(feature = "server")]
     /// The first alternative of target `i` that matches exactly once.
@@ -2449,9 +2704,17 @@ mod engine_hook {
     #[cfg(feature = "server")]
     pub(crate) static EXPLOSION_FIXES: AtomicU64 = AtomicU64::new(0);
     #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2ab;
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2d3;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x33c;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x364;
 
     #[cfg(feature = "server")]
     /// Raises `this`'s water level to 2 if its origin is in a volume.
@@ -2479,7 +2742,7 @@ mod engine_hook {
     }
 
     #[cfg(feature = "server")]
-    type ExplosionFn = unsafe extern "win64" fn(*mut u8, usize, usize, usize) -> usize;
+    type ExplosionFn = engine_fn!((*mut u8, usize, usize, usize) -> usize);
 
     #[cfg(feature = "server")]
     unsafe fn explosion_hook(i: usize, this: *mut u8, a: usize, b: usize, c: usize) -> usize {
@@ -2490,8 +2753,9 @@ mod engine_hook {
             original(this, a, b, c)
         }
     }
+    engine_abi_item! {
     #[cfg(feature = "server")]
-    pub(crate) unsafe extern "win64" fn hook_explosion0(
+    pub(crate) unsafe fn hook_explosion0(
         t: *mut u8,
         a: usize,
         b: usize,
@@ -2499,8 +2763,10 @@ mod engine_hook {
     ) -> usize {
         unsafe { explosion_hook(0, t, a, b, c) }
     }
+    }
+    engine_abi_item! {
     #[cfg(feature = "server")]
-    pub(crate) unsafe extern "win64" fn hook_explosion1(
+    pub(crate) unsafe fn hook_explosion1(
         t: *mut u8,
         a: usize,
         b: usize,
@@ -2508,14 +2774,17 @@ mod engine_hook {
     ) -> usize {
         unsafe { explosion_hook(1, t, a, b, c) }
     }
+    }
+    engine_abi_item! {
     #[cfg(feature = "server")]
-    pub(crate) unsafe extern "win64" fn hook_explosion2(
+    pub(crate) unsafe fn hook_explosion2(
         t: *mut u8,
         a: usize,
         b: usize,
         c: usize,
     ) -> usize {
         unsafe { explosion_hook(2, t, a, b, c) }
+    }
     }
     #[cfg(feature = "server")]
     pub(crate) const EXPLOSION_HOOKS: [ExplosionFn; 3] =
@@ -2524,8 +2793,12 @@ mod engine_hook {
     #[cfg(feature = "server")]
     /// DispatchEffect(const char *name, const `CEffectData` &data).
     /// Only its address is used (to send the water explosion effect), nothing is patched.
+    #[cfg(any(windows, test))]
     pub(crate) const DISPATCH_EFFECT_SIG: &str = "48 89 5C 24 08 57 48 83 EC 70 48 8B D9 48 8B FA \
                                            48 8D 4C 24 30 E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 8B D7";
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const DISPATCH_EFFECT_SIG: &str = linux_sigs::DISPATCH_EFFECT_SIG;
     #[cfg(feature = "server")]
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) const DISPATCH_EFFECT_STOLEN: usize = 16;
@@ -2544,6 +2817,61 @@ mod engine_hook {
 
     #[cfg(feature = "server")]
     pub(crate) const TE_ORIGIN_OFFSET: usize = 0x18;
+    /// `CTEExplosion` fields: scale (f32), flags (u32), magnitude (i32).
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    pub(crate) const TE_SCALE_OFFSET: usize = 0x28;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    pub(crate) const TE_FLAGS_OFFSET: usize = 0x2c;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    pub(crate) const TE_MAGNITUDE_OFFSET: usize = 0x34;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TE_SCALE_OFFSET: usize = 0x24;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TE_FLAGS_OFFSET: usize = 0x28;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TE_MAGNITUDE_OFFSET: usize = 0x30;
+    /// Offsets in the `Create` prologue of `lea r64,[rip+disp32]` instructions.
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    pub(crate) const TE_CREATE_RIP_LEAS: &[usize] = &[];
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TE_CREATE_RIP_LEAS: &[usize] = &[8];
+    /// `CBaseTempEntity::m_pszName` (a `const char*`).
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    const TE_NAME_OFFSET: usize = 8;
+
+    /// True for a `CTEExplosion`: Windows compares the vtable (found through RTTI); Linux has
+    /// no RTTI for it and compares the temp entity's name, "Explosion".
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
+    unsafe fn is_te_explosion(this: *const u8) -> bool {
+        unsafe {
+            let vtable = TE_EXPLOSION_VTABLE.load(Ordering::Relaxed);
+            vtable != 0 && this.cast::<usize>().read() == vtable
+        }
+    }
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    unsafe fn is_te_explosion(this: *const u8) -> bool {
+        unsafe {
+            if TE_EXPLOSION_VTABLE.load(Ordering::Relaxed) == 0 {
+                return false;
+            }
+            let name = this
+                .add(TE_NAME_OFFSET)
+                .cast::<*const u8>()
+                .read_unaligned();
+            !name.is_null() && CStr::from_ptr(name.cast()).to_bytes() == b"Explosion"
+        }
+    }
     #[cfg(feature = "server")]
     pub(crate) static ORIGINAL_TE_CREATE: AtomicUsize = AtomicUsize::new(0);
     #[cfg(feature = "server")]
@@ -2552,6 +2880,19 @@ mod engine_hook {
     pub(crate) static EXPLOSIONS_REDIRECTED: AtomicU64 = AtomicU64::new(0);
 
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    /// The Linux server has no RTTI for `CTEExplosion`, so no vtable is looked up: the hook
+    /// recognises the object by its name instead ([`is_te_explosion`]). The returned `1` is
+    /// only the "armed" marker stored in [`TE_EXPLOSION_VTABLE`].
+    #[allow(clippy::unnecessary_wraps)] // same signature as the Windows lookup, which can fail
+    pub(crate) const unsafe fn te_explosion_vtable(
+        _base: *const u8,
+    ) -> Result<usize, &'static str> {
+        Ok(1)
+    }
+
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     /// Address of `CTEExplosion`'s vtable, found through RTTI only: the type
     /// descriptor name, the complete object locator that names it, and the
     /// pointer to that locator just before the vtable. No code bytes are
@@ -2562,6 +2903,7 @@ mod engine_hook {
     }
 
     #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) unsafe fn rtti_vtable(base: *const u8, name: &[u8]) -> Result<usize, &'static str> {
         unsafe {
             let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
@@ -2668,14 +3010,14 @@ mod engine_hook {
             if !inside {
                 return false;
             }
-            // CTEExplosion fields: scale f32 @0x28, flags u32 @0x2c, magnitude i32 @0x34.
+            // CTEExplosion fields (see TE_SCALE_OFFSET).
             // The effect gets the blast point: the client traces up from it to find
             // the surface and the depth (which picks the muffled sound).
-            let scale = this.add(0x28).cast::<f32>().read_unaligned();
-            let flags = this.add(0x2c).cast::<u32>().read_unaligned();
-            let magnitude = this.add(0x34).cast::<i32>().read_unaligned() as f32;
+            let scale = this.add(TE_SCALE_OFFSET).cast::<f32>().read_unaligned();
+            let flags = this.add(TE_FLAGS_OFFSET).cast::<u32>().read_unaligned();
+            let magnitude = this.add(TE_MAGNITUDE_OFFSET).cast::<i32>().read_unaligned() as f32;
             let data = water_explosion_effect_data_with(origin, flags, scale, magnitude);
-            let f: unsafe extern "win64" fn(*const u8, *const u8) = std::mem::transmute(dispatch);
+            let f: engine_fn!((*const u8, *const u8)) = std::mem::transmute(dispatch);
             f(c"WaterSurfaceExplosion".as_ptr().cast(), data.as_ptr());
             bump(&EXPLOSIONS_REDIRECTED);
             true
@@ -2686,36 +3028,200 @@ mod engine_hook {
     /// `CBaseTempEntity::Create(this`, filter, delay): every temp entity goes
     /// through it (`CTempEnts::Explosion` jumps straight to it, so the vtable
     /// slot is never used). Only `CTEExplosion` objects are looked at.
+    #[cfg(any(windows, test))]
     pub(crate) const TE_CREATE_SIG: &str =
         "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 \
                                      48 8B 05 ?? ?? ?? ?? 48 8B EA 0F 29 74 24 30";
     #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TE_CREATE_SIG: &str = linux_sigs::TE_CREATE_SIG;
+    #[cfg(feature = "server")]
+    #[cfg(any(windows, test))]
     pub(crate) const TE_CREATE_STOLEN: usize = 20;
+    #[cfg(feature = "server")]
+    #[cfg(not(any(windows, test)))]
+    pub(crate) const TE_CREATE_STOLEN: usize = 15;
     #[cfg(feature = "server")]
     pub(crate) static TE_EXPLOSION_VTABLE: AtomicUsize = AtomicUsize::new(0);
 
+    engine_abi_item! {
     #[cfg(feature = "server")]
-    pub(crate) unsafe extern "win64" fn hook_te_create(
+    pub(crate) unsafe fn hook_te_create(
         this: *mut u8,
         filter: *mut c_void,
         delay: f32,
     ) {
         unsafe {
-            let vtable = TE_EXPLOSION_VTABLE.load(Ordering::Relaxed);
-            if vtable != 0
-                && !this.is_null()
-                && (this as *const usize).read() == vtable
-                && redirect_explosion(this)
-            {
+            if !this.is_null() && is_te_explosion(this) && redirect_explosion(this) {
                 return;
             }
-            let original: unsafe extern "win64" fn(*mut u8, *mut c_void, f32) =
+            let original: engine_fn!((*mut u8, *mut c_void, f32)) =
                 std::mem::transmute(ORIGINAL_TE_CREATE.load(Ordering::Relaxed));
             original(this, filter, delay);
         }
     }
+    }
 
     // ---- Windows glue (thin on purpose) ----------------------------------
+
+    // ---- Linux glue (thin on purpose) -------------------------------------
+
+    #[cfg(target_os = "linux")]
+    pub(crate) mod lin {
+        #[allow(clippy::wildcard_imports)]
+        use super::*;
+
+        const PROT_READ: c_int = 1;
+        const PROT_WRITE: c_int = 2;
+        const PROT_EXEC: c_int = 4;
+        const MAP_PRIVATE: c_int = 2;
+        const MAP_ANONYMOUS: c_int = 0x20;
+        const PAGE: usize = 4096;
+
+        extern "C" {
+            #[cfg(feature = "server")]
+            fn mmap(
+                addr: *mut c_void,
+                len: usize,
+                prot: c_int,
+                flags: c_int,
+                fd: c_int,
+                off: i64,
+            ) -> *mut c_void;
+            fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
+            #[cfg(feature = "server")]
+            fn dl_iterate_phdr(
+                callback: unsafe extern "C" fn(*const DlPhdrInfo, usize, *mut c_void) -> c_int,
+                data: *mut c_void,
+            ) -> c_int;
+        }
+
+        /// The start of glibc's `struct dl_phdr_info`, which is all that is read.
+        #[cfg(feature = "server")]
+        #[repr(C)]
+        struct DlPhdrInfo {
+            addr: usize,
+            name: *const c_char,
+        }
+
+        #[cfg(feature = "server")]
+        unsafe fn alloc_exec(size: usize) -> *mut u8 {
+            unsafe {
+                let p = mmap(
+                    std::ptr::null_mut(),
+                    size,
+                    PROT_READ | PROT_WRITE | PROT_EXEC,
+                    MAP_PRIVATE | MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                if p as isize == -1 {
+                    std::ptr::null_mut()
+                } else {
+                    p.cast::<u8>()
+                }
+            }
+        }
+
+        /// Protection bits (`PROT_*`) of the mapping that holds `addr`.
+        fn protection_of(addr: usize) -> Option<c_int> {
+            let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+            for line in maps.lines() {
+                let mut it = line.split_whitespace();
+                let (range, perms) = (it.next()?, it.next()?);
+                let (lo, hi) = range.split_once('-')?;
+                let (lo, hi) = (
+                    usize::from_str_radix(lo, 16).ok()?,
+                    usize::from_str_radix(hi, 16).ok()?,
+                );
+                if (lo..hi).contains(&addr) {
+                    let p = perms.as_bytes();
+                    return Some(
+                        if p.first() == Some(&b'r') {
+                            PROT_READ
+                        } else {
+                            0
+                        } | if p.get(1) == Some(&b'w') {
+                            PROT_WRITE
+                        } else {
+                            0
+                        } | if p.get(2) == Some(&b'x') {
+                            PROT_EXEC
+                        } else {
+                            0
+                        },
+                    );
+                }
+            }
+            None
+        }
+
+        fn page_span(p: *mut u8, n: usize) -> (*mut c_void, usize) {
+            let start = p as usize & !(PAGE - 1);
+            let end = (p as usize + n).div_ceil(PAGE) * PAGE;
+            (start as *mut c_void, end - start)
+        }
+
+        unsafe fn make_writable(p: *mut u8, n: usize) -> Option<u32> {
+            unsafe {
+                let old = protection_of(p as usize)?;
+                let (start, len) = page_span(p, n);
+                (mprotect(start, len, old | PROT_WRITE) == 0).then_some(old as u32)
+            }
+        }
+        unsafe fn restore_protect(p: *mut u8, n: usize, old: u32) {
+            unsafe {
+                let (start, len) = page_span(p, n);
+                mprotect(start, len, old as c_int);
+            }
+        }
+        #[cfg(feature = "server")]
+        const unsafe fn flush(_p: *mut u8, _n: usize) {
+            // x86 keeps instruction fetches coherent with stores
+        }
+
+        pub(crate) const PLATFORM: Platform = Platform {
+            #[cfg(feature = "server")]
+            alloc_exec,
+            make_writable,
+            restore_protect,
+            #[cfg(feature = "server")]
+            flush,
+        };
+
+        /// Load address of the 64-bit Linux server module (`server_srv.so`, or `server.so`).
+        #[cfg(feature = "server")]
+        pub(crate) unsafe fn server_base() -> *const u8 {
+            unsafe {
+                unsafe extern "C" fn find(
+                    info: *const DlPhdrInfo,
+                    _size: usize,
+                    data: *mut c_void,
+                ) -> c_int {
+                    unsafe {
+                        let name = (*info).name;
+                        if name.is_null() {
+                            return 0;
+                        }
+                        let name = CStr::from_ptr(name).to_bytes();
+                        if name.ends_with(b"/server_srv.so") || name.ends_with(b"/server.so") {
+                            *data.cast::<usize>() = (*info).addr;
+                            return 1;
+                        }
+                        0
+                    }
+                }
+                let mut base = 0usize;
+                dl_iterate_phdr(find, (&raw mut base).cast::<c_void>());
+                base as *const u8
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) use lin as os;
+    #[cfg(windows)]
+    pub(crate) use win as os;
 
     #[cfg(windows)]
     pub(crate) mod win {
@@ -2809,7 +3315,7 @@ mod engine_hook {
                 if create.is_null() {
                     return 0;
                 }
-                let create: unsafe extern "win64" fn(*const c_char, *mut c_int) -> usize =
+                let create: engine_fn!((*const c_char, *mut c_int) -> usize) =
                     std::mem::transmute(create);
                 create(name.as_ptr(), std::ptr::null_mut())
             }
@@ -2868,13 +3374,13 @@ mod client_module {
     }
 }
 
-#[cfg(all(windows, target_arch = "x86_64"))]
+#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
 mod hook_state {
     use super::engine_hook;
     #[cfg(feature = "server")]
     use super::engine_hook::STOLEN;
     #[allow(clippy::wildcard_imports)]
-    // the Windows-only code needs more names than the Linux build uses
+    // this code needs more names than the other builds use
     use super::*;
 
     #[cfg(feature = "server")]
@@ -2883,12 +3389,12 @@ mod hook_state {
     #[cfg(feature = "server")]
     pub(crate) unsafe fn install() -> Result<usize, &'static str> {
         unsafe {
-            let base = engine_hook::win::server_base();
+            let base = engine_hook::os::server_base();
             if base.is_null() {
-                return Err("server.dll is not loaded");
+                return Err("the server module is not loaded");
             }
             let target = engine_hook::scan_image(base)?;
-            let original = engine_hook::install(target, &engine_hook::win::PLATFORM)?;
+            let original = engine_hook::install(target, &engine_hook::os::PLATFORM)?;
             *TARGET
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -2905,7 +3411,7 @@ mod hook_state {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
             if let Some((target, original)) = taken {
-                engine_hook::uninstall(target as *mut u8, &original, &engine_hook::win::PLATFORM);
+                engine_hook::uninstall(target as *mut u8, &original, &engine_hook::os::PLATFORM);
             }
         }
     }
@@ -2927,14 +3433,14 @@ mod hook_state {
     #[allow(clippy::too_many_lines)]
     pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
         unsafe {
-            let base = engine_hook::win::server_base();
+            let base = engine_hook::os::server_base();
             if base.is_null() {
-                return Err("server.dll is not loaded");
+                return Err("the server module is not loaded");
             }
             let func = engine_hook::scan_sig(base, engine_hook::UPDATE_WATER_STATE_SIG)?;
             let trace = engine_hook::trace_global_from(func).read();
             let (slot, original) =
-                engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
+                engine_hook::install_contents_hook(trace, &engine_hook::os::PLATFORM)?;
             let mut hooks = vec![(
                 slot,
                 original,
@@ -2942,6 +3448,19 @@ mod hook_state {
             )];
 
             // Ray_t layout: where this build keeps m_IsSwept.
+            // Linux: the server's Ray_t is the old layout (m_IsRay +0x40, m_IsSwept +0x41).
+            #[cfg(not(windows))]
+            let ray_note = {
+                engine_hook::RAY_SWEPT_OFFSET.store(
+                    engine_hook::RAY_SWEPT_OFFSET_OLD,
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                format!(
+                    " (Ray_t m_IsSwept at +{:#x})",
+                    engine_hook::RAY_SWEPT_OFFSET_OLD
+                )
+            };
+            #[cfg(windows)]
             let ray_note = match engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG) {
                 Ok(f) => {
                     let off = engine_hook::ray_swept_offset_from(f);
@@ -2964,7 +3483,7 @@ mod hook_state {
                 engine_hook::TRACE_RAY_SLOT,
                 trace_hook,
                 &engine_hook::ORIGINAL_TRACE_RAY,
-                &engine_hook::win::PLATFORM,
+                &engine_hook::os::PLATFORM,
             ) {
                 Ok((entry, orig)) => {
                     hooks.push((entry, orig, trace_hook));
@@ -2984,7 +3503,7 @@ mod hook_state {
                         engine_hook::BUBBLE_TRAIL_SIG,
                         engine_hook::BUBBLE_TRAIL_STOLEN,
                         engine_hook::hook_bubble_trail as *const () as usize,
-                        &engine_hook::win::PLATFORM,
+                        &engine_hook::os::PLATFORM,
                     )
                 }) {
                     Ok(patch) => {
@@ -3005,7 +3524,7 @@ mod hook_state {
                         engine_hook::FLUID_END_TOUCH_SIG,
                         engine_hook::FLUID_END_TOUCH_STOLEN,
                         engine_hook::hook_fluid_end_touch as *const () as usize,
-                        &engine_hook::win::PLATFORM,
+                        &engine_hook::os::PLATFORM,
                     )
                 }) {
                 Ok(patch) => {
@@ -3032,12 +3551,13 @@ mod hook_state {
                 let vtable = engine_hook::te_explosion_vtable(base)?;
                 engine_hook::TE_EXPLOSION_VTABLE.store(vtable, std::sync::atomic::Ordering::SeqCst);
                 let create = engine_hook::scan_sig(base, engine_hook::TE_CREATE_SIG)?;
-                let patch = engine_hook::install_patch(
+                let patch = engine_hook::install_patch_relocating(
                     create,
                     engine_hook::TE_CREATE_SIG,
                     engine_hook::TE_CREATE_STOLEN,
+                    engine_hook::TE_CREATE_RIP_LEAS,
                     engine_hook::hook_te_create as *const () as usize,
-                    &engine_hook::win::PLATFORM,
+                    &engine_hook::os::PLATFORM,
                 )?;
                 engine_hook::ORIGINAL_TE_CREATE
                     .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
@@ -3071,7 +3591,7 @@ mod hook_state {
                         sig,
                         stolen,
                         engine_hook::EXPLOSION_HOOKS[i] as usize,
-                        &engine_hook::win::PLATFORM,
+                        &engine_hook::os::PLATFORM,
                     )
                 });
                 if let Ok(patch) = r {
@@ -3119,9 +3639,9 @@ mod hook_state {
     #[cfg(feature = "server")]
     unsafe fn physenv() -> Result<*mut c_void, &'static str> {
         unsafe {
-            let base = engine_hook::win::server_base();
+            let base = engine_hook::os::server_base();
             if base.is_null() {
-                return Err("server.dll is not loaded");
+                return Err("the server module is not loaded");
             }
             let at = engine_hook::scan_sig(base, engine_hook::PHYSENV_SIG)
                 .map_err(|_| "physics environment pointer not found in server.dll")?;
@@ -3229,7 +3749,7 @@ mod hook_state {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take();
                 if let Some(patch) = te_patch {
-                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                    engine_hook::uninstall_patch(&patch, &engine_hook::os::PLATFORM);
                 }
                 engine_hook::TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
                 let explosion_patches = std::mem::take(
@@ -3238,14 +3758,14 @@ mod hook_state {
                         .unwrap_or_else(std::sync::PoisonError::into_inner),
                 );
                 for patch in explosion_patches {
-                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                    engine_hook::uninstall_patch(&patch, &engine_hook::os::PLATFORM);
                 }
                 let patch = FLUID_END_TOUCH
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take();
                 if let Some(patch) = patch {
-                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                    engine_hook::uninstall_patch(&patch, &engine_hook::os::PLATFORM);
                 }
                 engine_hook::forget_dead_fluids();
                 // Bubble detour first: it calls through the trampoline, not the slots.
@@ -3254,7 +3774,7 @@ mod hook_state {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take();
                 if let Some(patch) = patch {
-                    engine_hook::uninstall_patch(&patch, &engine_hook::win::PLATFORM);
+                    engine_hook::uninstall_patch(&patch, &engine_hook::os::PLATFORM);
                 }
             }
             let taken = std::mem::take(
@@ -3263,12 +3783,7 @@ mod hook_state {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
             for (entry, original, hook) in taken.into_iter().rev() {
-                engine_hook::uninstall_slot_hook(
-                    entry,
-                    hook,
-                    original,
-                    &engine_hook::win::PLATFORM,
-                );
+                engine_hook::uninstall_slot_hook(entry, hook, original, &engine_hook::os::PLATFORM);
             }
         }
     }
@@ -3280,20 +3795,20 @@ mod hook_state {
             .is_empty()
     }
 
-    #[cfg(feature = "client")]
+    #[cfg(all(feature = "client", windows))]
     /// Client realm: the same two hooks on the client's own `IEngineTrace`, so what the
     /// client does with water (ripples and splashes, the underwater sound filter,
     /// prediction) sees the volumes the Lua side gave it.
     pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
         unsafe {
-            let base = engine_hook::win::client_base();
+            let base = engine_hook::os::client_base();
             if base.is_null() {
                 return Err("client.dll is not loaded");
             }
             let at = engine_hook::scan_sig(base, engine_hook::CLIENT_TRACE_SIG)?;
             let trace = engine_hook::trace_global_from_load(at).read();
             let (slot, original) =
-                engine_hook::install_contents_hook(trace, &engine_hook::win::PLATFORM)?;
+                engine_hook::install_contents_hook(trace, &engine_hook::os::PLATFORM)?;
             let mut hooks = vec![(
                 slot,
                 original,
@@ -3301,7 +3816,7 @@ mod hook_state {
             )];
             // TraceRay needs the Ray_t layout and a world entity to name in the result;
             // without either only the point contents are hooked.
-            let entities = engine_hook::win::client_interface(c"VClientEntityList003");
+            let entities = engine_hook::os::client_interface(c"VClientEntityList003");
             let ray = engine_hook::scan_sig(base, engine_hook::RAY_HELPER_SIG);
             let note = match (ray, entities) {
                 (Ok(f), e) if e != 0 => {
@@ -3314,7 +3829,7 @@ mod hook_state {
                         engine_hook::TRACE_RAY_SLOT,
                         trace_hook,
                         &engine_hook::ORIGINAL_TRACE_RAY,
-                        &engine_hook::win::PLATFORM,
+                        &engine_hook::os::PLATFORM,
                     ) {
                         Ok((entry, orig)) => {
                             hooks.push((entry, orig, trace_hook));
@@ -3334,11 +3849,11 @@ mod hook_state {
     }
 }
 
-#[cfg(not(all(windows, target_arch = "x86_64")))]
+#[cfg(not(all(target_arch = "x86_64", any(windows, target_os = "linux"))))]
 mod hook_state {
     #[cfg(feature = "server")]
     pub(crate) const unsafe fn install() -> Result<usize, &'static str> {
-        Err("engine hook is only available for the Windows x64 server.dll")
+        Err("engine hook is only available for the 64-bit Windows and Linux servers")
     }
     #[cfg(feature = "server")]
     pub(crate) const unsafe fn uninstall() {}
@@ -3348,7 +3863,7 @@ mod hook_state {
     }
     #[cfg(feature = "server")]
     pub(crate) const unsafe fn install_contents() -> Result<String, &'static str> {
-        Err("engine hook is only available for the Windows x64 server.dll")
+        Err("engine hook is only available for the 64-bit Windows and Linux servers")
     }
     pub(crate) const unsafe fn uninstall_contents() {}
     pub(crate) const fn contents_active() -> bool {
@@ -3360,7 +3875,7 @@ mod hook_state {
         _: [f32; 4],
         _: &super::FluidSettings,
     ) -> Result<u32, &'static str> {
-        Err("fluids are only available for the Windows x64 server.dll")
+        Err("fluids are only available for the 64-bit Windows and Linux servers")
     }
     #[cfg(feature = "server")]
     pub(crate) const unsafe fn fluid_detach(_: u32) -> bool {
@@ -4198,13 +4713,13 @@ unsafe fn open_server(l: LuaState) -> c_int {
         let water_level = hook_state::install();
         let contents = hook_state::install_contents();
         // A hook or patch that failed to install is always reported (where they exist at all:
-        // Windows). The all-good status is only printed with `developer` above 0; it is
+        // the Windows and Linux servers). The all-good status is only printed with `developer` above 0; it is
         // always available from `waterleveler_status`.
         // Parts of the volumes that did not install are noted in parentheses.
-        let failed = cfg!(windows)
+        let failed = cfg!(any(windows, target_os = "linux"))
             && (water_level.is_err() || contents.as_ref().map_or(true, |what| what.contains(" (")));
         let water_level = match water_level {
-            Ok(rva) => format!("hooked CBaseEntity::SetWaterLevel at server.dll+{rva:#x}"),
+            Ok(rva) => format!("hooked CBaseEntity::SetWaterLevel at server module+{rva:#x}"),
             Err(why) => format!("engine hook inactive: {why}"),
         };
         let contents = match contents {
@@ -4342,6 +4857,240 @@ mod tests {
     fn server_dll() -> Option<Vec<u8>> {
         let path = std::env::var("SERVER_DLL_X64").ok()?;
         std::fs::read(path).ok()
+    }
+
+    fn server_so() -> Option<Vec<u8>> {
+        let path = std::env::var("SERVER_SO_X64").ok()?;
+        std::fs::read(path).ok()
+    }
+
+    /// Virtual addresses of every match of `sig` in the executable segments of a 64-bit ELF.
+    fn elf_matches(d: &[u8], sig: &str) -> Vec<usize> {
+        let rd = |o: usize, n: usize| {
+            usize::try_from(u64::from_le_bytes({
+                let mut b = [0u8; 8];
+                b[..n].copy_from_slice(&d[o..o + n]);
+                b
+            }))
+            .unwrap()
+        };
+        assert_eq!(&d[..4], b"\x7fELF");
+        let (phoff, phentsize, phnum) = (rd(0x20, 8), rd(0x36, 2), rd(0x38, 2));
+        let pat = parse_sig(sig);
+        let mut out = Vec::new();
+        for i in 0..phnum {
+            let ph = phoff + i * phentsize;
+            if rd(ph, 4) == 1 && rd(ph + 4, 4) & 1 != 0 {
+                let (off, va, filesz) = (rd(ph + 8, 8), rd(ph + 0x10, 8), rd(ph + 0x20, 8));
+                out.extend(
+                    find_all(&d[off..off + filesz], &pat)
+                        .into_iter()
+                        .map(|m| va + m),
+                );
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn relocated_rip_lea_loads_the_same_address() {
+        // lea r14,[rip+0x1000] at offset 8 of a function at 0x5000_0000
+        let mut code = vec![0x90u8; 8];
+        code.extend_from_slice(&[0x4C, 0x8D, 0x35, 0x00, 0x10, 0x00, 0x00]);
+        let abs = relocate_rip_lea(&code, 8, 0x5000_0000).expect("a lea");
+        assert_eq!(&abs[..2], &[0x49, 0xBE], "movabs r14");
+        assert_eq!(
+            u64::from_le_bytes(abs[2..].try_into().unwrap()),
+            0x5000_0000 + 8 + 7 + 0x1000
+        );
+        // lea rax,[rip-0x10]: no REX.B/R, register 0, negative displacement
+        let code = [0x48, 0x8D, 0x05, 0xF0, 0xFF, 0xFF, 0xFF];
+        let abs = relocate_rip_lea(&code, 0, 0x1000).unwrap();
+        assert_eq!(&abs[..2], &[0x48, 0xB8]);
+        assert_eq!(
+            u64::from_le_bytes(abs[2..].try_into().unwrap()),
+            0x1000 + 7 - 0x10
+        );
+        // not a rip-relative lea
+        assert!(relocate_rip_lea(&[0x48, 0x89, 0xE5, 0, 0, 0, 0], 0, 0).is_none());
+    }
+
+    #[test]
+    fn linux_signatures_are_unique_in_server_so() {
+        let Some(d) = server_so() else {
+            eprintln!("SERVER_SO_X64 not set; skipping");
+            return;
+        };
+        use linux_sigs as l;
+        let mut sigs = vec![
+            ("SetWaterLevel", l::SIG),
+            ("UpdateWaterState", l::UPDATE_WATER_STATE_SIG),
+            ("FluidEndTouch", l::FLUID_END_TOUCH_SIG),
+            ("UTIL_BubbleTrail", l::BUBBLE_TRAIL_SIG),
+            ("DispatchEffect", l::DISPATCH_EFFECT_SIG),
+            ("CBaseTempEntity::Create", l::TE_CREATE_SIG),
+            ("physenv user", l::PHYSENV_SIG),
+        ];
+        for t in l::EXPLOSION_TARGETS {
+            sigs.push(("explosion target", t[0].0));
+        }
+        for (name, sig) in sigs {
+            let m = elf_matches(&d, sig);
+            assert_eq!(m.len(), 1, "{name}: {} matches", m.len());
+        }
+        // the entity array idiom has many sites, all naming one global
+        let sites = elf_matches(&d, l::ENTITY_ARRAY_SIG);
+        assert!(sites.len() > 1);
+    }
+
+    /// Maps the `PT_LOAD` segments of a 64-bit ELF into one anonymous region at their virtual
+    /// addresses (no relocations, nothing is executed) and returns its base.
+    unsafe fn map_elf(d: &[u8]) -> *mut u8 {
+        unsafe {
+            let rd = |o: usize, n: usize| {
+                let mut b = [0u8; 8];
+                b[..n].copy_from_slice(&d[o..o + n]);
+                usize::try_from(u64::from_le_bytes(b)).unwrap()
+            };
+            let (phoff, phentsize, phnum) = (rd(0x20, 8), rd(0x36, 2), rd(0x38, 2));
+            let mut end = 0;
+            for i in 0..phnum {
+                let ph = phoff + i * phentsize;
+                if rd(ph, 4) == 1 {
+                    end = end.max(rd(ph + 0x10, 8) + rd(ph + 0x28, 8));
+                }
+            }
+            let size = end.div_ceil(4096) * 4096;
+            let base = mmap(std::ptr::null_mut(), size, 7, 0x22, -1, 0).cast::<u8>();
+            assert!(base as isize != -1);
+            for i in 0..phnum {
+                let ph = phoff + i * phentsize;
+                if rd(ph, 4) == 1 {
+                    let (off, va, filesz) = (rd(ph + 8, 8), rd(ph + 0x10, 8), rd(ph + 0x20, 8));
+                    std::ptr::copy_nonoverlapping(d[off..].as_ptr(), base.add(va), filesz);
+                }
+            }
+            base
+        }
+    }
+
+    #[test]
+    fn linux_patches_install_on_the_mapped_server_so() {
+        let Some(d) = server_so() else {
+            eprintln!("SERVER_SO_X64 not set; skipping");
+            return;
+        };
+        use linux_sigs as l;
+        unsafe {
+            let base = map_elf(&d);
+            // the executable segments back to r-x so the real make_writable path is used
+            extern "C" {
+                fn mprotect(addr: *mut c_void, len: usize, prot: i32) -> i32;
+            }
+            let rva_of = |at: *mut u8| at as usize - base as usize;
+            let text = scan_sig(base, l::SIG).expect("SetWaterLevel");
+            assert_eq!(rva_of(text), 0x00bd_9cf0);
+            let page = (text as usize & !4095) as *mut c_void;
+            assert_eq!(mprotect(page, 4096, 5), 0, "r-x");
+
+            let before = std::slice::from_raw_parts(text, 14).to_vec();
+            let patch = install_patch(
+                text,
+                l::SIG,
+                14,
+                hook_set_water_level as *const () as usize,
+                &lin::PLATFORM,
+            )
+            .expect("install SetWaterLevel");
+            let written = std::slice::from_raw_parts(text, 14);
+            assert_eq!(&written[..6], &[0xFF, 0x25, 0, 0, 0, 0]);
+            assert_eq!(
+                u64::from_le_bytes(written[6..14].try_into().unwrap()),
+                hook_set_water_level as *const () as usize as u64
+            );
+            let tramp = std::slice::from_raw_parts(patch.trampoline as *const u8, 28);
+            assert_eq!(&tramp[..14], &before[..]);
+            assert_eq!(
+                u64::from_le_bytes(tramp[20..28].try_into().unwrap()),
+                text as u64 + 14
+            );
+            // the page is r-x again
+            let perms = std::fs::read_to_string("/proc/self/maps").unwrap();
+            let line = perms
+                .lines()
+                .find(|l| {
+                    let (lo, hi) = l
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                        .split_once('-')
+                        .unwrap();
+                    (usize::from_str_radix(lo, 16).unwrap()..usize::from_str_radix(hi, 16).unwrap())
+                        .contains(&(text as usize))
+                })
+                .unwrap();
+            assert_eq!(line.split_whitespace().nth(1), Some("r-xp"));
+            uninstall_patch(&patch, &lin::PLATFORM);
+            assert_eq!(std::slice::from_raw_parts(text, 14), &before[..]);
+
+            // CBaseTempEntity::Create: its first lea is rewritten in the trampoline
+            let create = scan_sig(base, l::TE_CREATE_SIG).expect("Create");
+            let orig15 = std::slice::from_raw_parts(create, 15).to_vec();
+            let patch = install_patch_relocating(
+                create,
+                l::TE_CREATE_SIG,
+                15,
+                &[8], // the Linux build's TE_CREATE_RIP_LEAS (tests use the Windows constants)
+                hook_te_create as *const () as usize,
+                &lin::PLATFORM,
+            )
+            .expect("install Create");
+            let t = std::slice::from_raw_parts(patch.trampoline as *const u8, 18 + 14);
+            assert_eq!(&t[..8], &orig15[..8]);
+            assert_eq!(&t[8..10], &[0x49, 0xBE], "movabs r14");
+            let disp = i32::from_le_bytes(orig15[11..15].try_into().unwrap());
+            assert_eq!(
+                u64::from_le_bytes(t[10..18].try_into().unwrap()),
+                (create as usize + 15).wrapping_add_signed(disp as isize) as u64
+            );
+            assert_eq!(
+                u64::from_le_bytes(t[24..32].try_into().unwrap()) as usize,
+                create as usize + 15
+            );
+            uninstall_patch(&patch, &lin::PLATFORM);
+
+            // globals (the tests build with the Windows constants, so the Linux displacement
+            // positions are spelled out here: 95 / 3 / 3)
+            let upd = scan_sig(base, l::UPDATE_WATER_STATE_SIG).expect("UpdateWaterState");
+            let disp = upd.add(95).cast::<i32>().read_unaligned() as isize;
+            assert_eq!(rva_of(upd.offset(95 + 4 + disp)), 0x01a7_3c58);
+            let env = scan_sig(base, l::PHYSENV_SIG).expect("physenv user");
+            assert_eq!(rva_of(physenv_global_from(env) as *mut u8), 0x0196_a670);
+            for at in scan_sig_all(base, l::ENTITY_ARRAY_SIG).expect("entity array idiom") {
+                let disp = at.add(3).cast::<i32>().read_unaligned() as isize;
+                assert_eq!(rva_of(at.offset(7 + disp)), 0x0189_8d50);
+            }
+        }
+    }
+
+    #[test]
+    fn linux_create_prologue_relocates_its_lea() {
+        let Some(d) = server_so() else {
+            eprintln!("SERVER_SO_X64 not set; skipping");
+            return;
+        };
+        let at = elf_matches(&d, linux_sigs::TE_CREATE_SIG)[0];
+        // single PT_LOAD at vaddr == file offset is not guaranteed: find the file offset
+        let pat = parse_sig(linux_sigs::TE_CREATE_SIG);
+        let off = find_all(&d, &pat)[0];
+        let code = &d[off..off + 15];
+        let abs = relocate_rip_lea(code, 8, at as u64).expect("lea r14");
+        let disp = i32::from_le_bytes(code[11..15].try_into().unwrap());
+        assert_eq!(&abs[..2], &[0x49, 0xBE]);
+        assert_eq!(
+            u64::from_le_bytes(abs[2..].try_into().unwrap()),
+            (at + 8 + 7).wrapping_add_signed(isize::try_from(disp).unwrap()) as u64
+        );
     }
 
     fn client_dll() -> Option<Vec<u8>> {

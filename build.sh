@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the 64-bit module for the current host and renames it the way Garry's Mod expects.
-#   Linux  -> gmsv_waterlevelercore_linux64.dll
+#   Linux  -> gmsv_waterlevelercore_linux64.dll (the 64-bit server, server_srv.so)
 #   Windows (run under MSYS2/Git Bash) -> gmsv_waterlevelercore_win64.dll and
 #                                         gmcl_waterlevelercore_win64.dll (two builds: the server
 #                                         module has only the server code, the client module only
