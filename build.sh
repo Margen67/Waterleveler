@@ -16,8 +16,10 @@ set -e
 # Binary modules are only loaded from garrysmod/lua/bin (not from an addon's lua/bin),
 # so the DLL goes there and the Lua addon (addon/waterleveler) goes to garrysmod/addons
 # (an existing copy is deleted first).
-# Override the garrysmod folder with GMOD_DIR.
+# Override the garrysmod folder with GMOD_DIR. The defaults are the Windows client's folder
+# and, on Linux, the dedicated server's (GarrysModDS).
 GMOD_DIR_DEFAULT="/c/Program Files (x86)/Steam/steamapps/common/GarrysMod/garrysmod"
+GMOD_DIR_DEFAULT_LINUX="${HOME}/.local/share/Steam/steamapps/common/GarrysModDS/garrysmod"
 ADDON="addon/waterleveler"
 
 cd "$(dirname "${0}")"
@@ -31,7 +33,14 @@ case "$(uname -s)" in
     Linux)
         cargo build --release --no-default-features --features server
         cp "target/release/libgmsv_waterlevelercore.so" "out/gmsv_waterlevelercore_linux64.dll"
-        echo "built out/gmsv_waterlevelercore_linux64.dll (put it in garrysmod/lua/bin)"
+        echo "built out/gmsv_waterlevelercore_linux64.dll"
+        GMOD="${GMOD_DIR:-${GMOD_DIR_DEFAULT_LINUX}}"
+        # Delete the old copy first, so files removed from the addon don't linger.
+        rm -rf "${GMOD}/addons/waterleveler"
+        mkdir -p "${GMOD}/lua/bin" "${GMOD}/addons/waterleveler"
+        cp "out/gmsv_waterlevelercore_linux64.dll" "${GMOD}/lua/bin/gmsv_waterlevelercore_linux64.dll"
+        cp -r "${ADDON}/." "${GMOD}/addons/waterleveler/"
+        echo "server module -> ${GMOD}/lua/bin, addon -> ${GMOD}/addons/waterleveler"
         ;;
     MINGW*|MSYS*|CYGWIN*)
         cargo build --release --no-default-features --features server
