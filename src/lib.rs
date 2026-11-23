@@ -21,7 +21,7 @@
 //! waterleveler.HookHits()         -- how many engine calls were overridden
 //! waterleveler.SetSaveKey("m_nWaterLevel") -- datamap key written every tick; "" disables
 //!
-//! -- Water volumes (Windows x64): world-space boxes the engine treats as water. The client
+//! -- Water volumes (Windows x64 and Linux x64 server): world-space boxes the engine treats as water. The client
 //! -- module has the volume functions, the counters, `SetDebug`, `TakeDebugLog` and `HookStatus`.
 //! local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2 [, "water" | "slime"])
 //! waterleveler.RemoveVolume(id)
@@ -47,7 +47,7 @@
 //! (bullet splashes, ripples, explosions). No machine code is patched for those two.
 //!
 //! The water level overrides have three layers:
-//!   1. Engine hook (Windows x64 `server.dll` only): `CBaseEntity::SetWaterLevel`
+//!   1. Engine hook (64-bit `server.dll` or Linux `server_srv.so` only): `CBaseEntity::SetWaterLevel`
 //!      is detoured, so the engine itself uses the override. That also keeps
 //!      networking and `GM:OnEntityWaterLevelChanged` consistent.
 //!   2. `Entity:WaterLevel()` is wrapped, so Lua always sees the override.
@@ -62,8 +62,8 @@
 //! library (dlsym / `GetProcAddress`), so there are no link-time dependencies.
 
 #![allow(clippy::missing_safety_doc)]
-// The engine hooks are only wired up on Windows x64; on other targets that
-// code is compiled (and unit-tested) but not called.
+// The engine hooks are wired up on Windows x64 and the Linux x64 server; on other targets
+// (the Linux client, 32-bit) that code is compiled (and unit-tested) but not called.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[cfg(not(any(feature = "server", feature = "client")))]
@@ -832,7 +832,7 @@ fn point_in_volumes(vols: &[Volume], p: [f32; 3]) -> bool {
 
 #[cfg(target_arch = "x86_64")]
 mod engine_hook {
-    // The Windows-only code below needs more of the parent's names than the Linux build uses.
+    // The Windows build (and the client) needs more of the parent's names than the Linux server uses.
     #[allow(clippy::wildcard_imports)]
     use super::*;
     use std::cell::Cell;
@@ -1043,8 +1043,8 @@ mod engine_hook {
 
     engine_abi_item! {
     #[cfg(feature = "server")]
-    /// The replacement for `CBaseEntity::SetWaterLevel`. Windows x64 calling
-    /// convention on every OS, because the original is a Windows function.
+    /// The replacement for `CBaseEntity::SetWaterLevel`, in the engine's calling
+    /// convention (see `engine_fn!`).
     pub(crate) unsafe fn hook_set_water_level(this: *mut c_void, level: c_int) {
         unsafe {
             let original: engine_fn!((*mut c_void, c_int)) =
@@ -2645,7 +2645,7 @@ mod engine_hook {
 
     engine_abi_item! {
     #[cfg(feature = "server")]
-    /// Replacement for `UTIL_BubbleTrail` (Windows x64 convention).
+    /// Replacement for `UTIL_BubbleTrail` (the engine's calling convention).
     pub(crate) unsafe fn hook_bubble_trail(
         from: *const f32,
         to: *const f32,
@@ -3267,7 +3267,7 @@ mod engine_hook {
     #[cfg(windows)]
     pub(crate) mod win {
         #[allow(clippy::wildcard_imports)]
-        // the Windows-only code needs more names than the Linux build uses
+        // the Windows code needs more names than the Linux server uses
         use super::*;
 
         #[link(name = "kernel32")]
@@ -3381,7 +3381,7 @@ mod engine_hook {
 ))]
 mod client_module {
     #[allow(clippy::wildcard_imports)]
-    // the Windows-only code needs more names than the Linux build uses
+    // the Windows code needs more names than the Linux server uses
     use super::*;
 
     /// True when this DLL was loaded as the client module (file name gmcl_*).
@@ -4862,9 +4862,11 @@ unsafe fn close_server(l: LuaState) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (Linux x86-64): exercise the real hook machinery against the real
-// bytes of SetWaterLevel taken from a 64-bit Windows server.dll.
+// Tests (x86-64): exercise the real hook machinery against the real
+// bytes of SetWaterLevel taken from a 64-bit Windows server.dll (these run on a Linux host).
 //   SERVER_DLL_X64=/path/to/server.dll cargo test --release
+// The Linux server's signatures and patches are checked against a real server_srv.so:
+//   SERVER_SO_X64=/path/to/server_srv.so cargo test --release
 // ---------------------------------------------------------------------------
 
 #[cfg(all(

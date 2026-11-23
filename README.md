@@ -88,28 +88,28 @@ local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2)   -- liquid optional, 
 
 `WLWater.Placement(tr, size, offset)` (shared) gives the mins, maxs and center for a volume that
 rests against what a trace hit. Volumes are cleared on map cleanup and when the module unloads.
-Windows x64 only: elsewhere the module loads but volumes do nothing.
+Needs the Windows x64 server or client, or the Linux x64 server: elsewhere (including the Linux client) the module loads but volumes do nothing.
 
 ## How it works
 
-1. **Engine hook (Windows x64 only).** `CBaseEntity::SetWaterLevel(int)` is
+1. **Engine hook (Windows x64 and Linux x64 servers).** `CBaseEntity::SetWaterLevel(int)` is
    detoured. It is the engine's single writer of `m_nWaterLevel` (18 call
    sites), so when an entity has an override the engine itself uses it, and
    networking and `GM:OnEntityWaterLevelChanged` stay consistent. The function
    is found at load time by a 63-byte signature (must match exactly once) in
-   the executable sections of `server.dll`. If it does not match, for example
+   the executable sections of `server.dll` (`server_srv.so` on Linux, with its own signature). If it does not match, for example
    on a different build, the hook is skipped and the other layers still work.
 2. **`Entity:WaterLevel()` wrapper.** Lua always sees the override.
 3. **Per-tick datamap write.** `Entity:SetSaveValue("m_nWaterLevel", level)`
    covers code that writes the byte directly (one player-state restore path
    does).
 
-Facts taken from the 64-bit `server.dll`: `m_nWaterLevel` is a
+Facts taken from the 64-bit Windows `server.dll` (the Linux server's layout is noted in `src/lib.rs`): `m_nWaterLevel` is a
 `FIELD_CHARACTER` datamap field at `this+0x2ab` (SAVE|KEY, map key
 `waterlevel`); the entity index is `*(i16*)(*(void**)(this+0x30)+6)`
 (`m_pPev->m_EdictIndex`, the same thing `Entity:EntIndex` reads).
 
-## Water volumes (Windows x64)
+## Water volumes (Windows x64 and Linux x64 server)
 
 ```lua
 local id = waterleveler.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid])  -- world-space box; liquid "water" (default) or "slime"
@@ -235,7 +235,7 @@ from the engine's own ray-building helper at load time (shown in
 
 ## Verified vs not
 
-Verified by `cargo test` (48 tests; the ones that need `server.dll` take its path in `SERVER_DLL_X64`):
+Verified by `cargo test` (52 tests; the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones `server_srv.so` in `SERVER_SO_X64`):
 the signatures match exactly once; the detour and trampoline run the **real
 `SetWaterLevel` machine code** from that DLL, substitute the override, pass other calls
 through, and uninstall restores the bytes exactly; the volume store and its lookup (lanes and
@@ -246,7 +246,7 @@ Verified in a live game (Windows x64, singleplayer and a dedicated server with a
 server and client modules load, the hooks install, volumes answer point queries and rewrite
 traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
 at the floor, props float up in a volume, removing a volume (with props inside it too) does not crash, the visible box has the collision box's size, and the water level, explosion and
-bubble-trail patches act. CI builds each module with `cargo clippy` without warnings.
+bubble-trail patches act. The 64-bit Linux dedicated server is verified live too: `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI builds each Windows module with `cargo clippy` without warnings.
 
 On a dedicated server, a client that does **not** have the client module installed sees prediction
 errors, and the effects the client makes from its own water queries are missing: the wake
@@ -266,10 +266,8 @@ Not verified:
   Currents (`currentx`, `currenty`, `currentz`) are verified too.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
-- Linux: the server hooks are found by signature in `server_srv.so` (and `server.so`), but
-  have only been checked statically against one build (every signature matches exactly once,
-  the resolved globals and slots were read from the disassembly and from vphysics' symbols); they
-  have not been run in a live server. The Linux client has no engine hook, so no volumes there.
+- Linux: only the 64-bit dedicated server (`server_srv.so`, or `server.so`) has hooks, found by
+  signature; other builds of it are untested. The Linux client has no engine hook, so no volumes there.
   The Linux server has no RTTI for `CTEExplosion`, so explosion events are recognised by the
   temp entity's name; entities are keyed by their handle's index instead of the edict's.
 - Game updates: the hooks are found by signature, so an update that changes those functions
@@ -306,7 +304,7 @@ A water hit produced for a volume names the world entity (entry 0 of the engine'
 
 ## Explosion events
 
-Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect is sent at the blast point; the client traces up from it with `MASK_WATER` to find the surface (splash and wake go there) and the depth, and plays the muffled `WaterExplosionEffect.Sound` file when that depth is over 128 units. The client module's trace hook therefore reports the exit point (`fractionleftsolid`) for rays that start inside a volume. `waterleveler.ExplosionsRedirected()` counts them.
+Barrels, RPGs, grenades and SLAMs send the client an explosion *event*; the client picks the normal or the water explosion (underwater sound, splash, wake) from its own point-contents check, which a volume cannot feed. `CBaseTempEntity::Create` (every temp entity goes through it) is therefore detoured and checks for the `CTEExplosion` vtable (found through its RTTI name; on Linux, which has no RTTI for it, the temp entity's name is checked instead): an explosion whose origin is inside a volume is sent as the `WaterSurfaceExplosion` effect instead (the same effect and data the engine's own water-explosion code sends) and the event is dropped. The effect is sent at the blast point; the client traces up from it with `MASK_WATER` to find the surface (splash and wake go there) and the depth, and plays the muffled `WaterExplosionEffect.Sound` file when that depth is over 128 units. The client module's trace hook therefore reports the exit point (`fractionleftsolid`) for rays that start inside a volume. `waterleveler.ExplosionsRedirected()` counts them.
 
 ## Water or slime
 
