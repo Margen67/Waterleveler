@@ -1989,7 +1989,7 @@ mod engine_hook {
 
     /// The executable parts of a loaded module as (offset from `base`, size): the
     /// executable sections of a PE image, the executable segments of an ELF one.
-    #[cfg(all(feature = "server", windows))]
+    #[cfg(all(windows, any(feature = "server", feature = "client")))]
     unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
         unsafe {
             let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
@@ -2048,7 +2048,7 @@ mod engine_hook {
     }
 
     /// Every match of a signature in the executable parts of the module.
-    #[cfg(feature = "server")]
+    #[cfg(any(feature = "server", all(windows, feature = "client")))]
     pub(crate) unsafe fn scan_sig_all(
         base: *const u8,
         sig: &str,
@@ -2070,7 +2070,7 @@ mod engine_hook {
     }
 
     /// Same, for a signature that must match exactly once.
-    #[cfg(feature = "server")]
+    #[cfg(any(feature = "server", all(windows, feature = "client")))]
     pub(crate) unsafe fn scan_sig(base: *const u8, sig: &str) -> Result<*mut u8, &'static str> {
         unsafe {
             let found = scan_sig_all(base, sig)?;
