@@ -28,7 +28,6 @@
 -- CONTENTS_WATER for every point inside it and stops traces at its faces. The translucent
 -- box you see (when the volume has a material) is only a client-side placeholder: there is
 -- no real water surface shader.
-if SERVER then AddCSLuaFile(); end
 WLWater = WLWater or {};
 --- How far the collision box of a volume placed by `WLWater.Placement` reaches into the surface
 --- it rests on. The client draws the bottom of the volume this much shorter. The engine tests
