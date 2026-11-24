@@ -602,16 +602,25 @@ local function debugColor(liquid, alpha)
     return c;
 end
 
--- Solid-colour entries (a plain white material tinted by the colour), one per colour.
+-- Solid-colour entries, one per colour. The colour and alpha travel in the vertices (the plain
+-- "color" material ignores colour modulation and blend, which drew these as opaque white).
+local solidMaterial = CreateMaterial("wl_solid_color", "UnlitGeneric", {
+    ["$basetexture"] = "color/white",
+    ["$vertexcolor"] = 1,
+    ["$vertexalpha"] = 1,
+    ["$translucent"] = 1,
+    ["$nocull"] = 1,
+});
+
 local solidEntries = {};
 local function solidEntry(c)
     local key = c.r + c.g * 256 + c.b * 65536 + c.a * 16777216;
     local entry = solidEntries[key];
     if not entry then
         entry = {
-            mat = fallback,
+            mat = solidMaterial,
             color = Color(c.r, c.g, c.b, c.a),
-            vcol = false
+            vcol = true
         };
 
         solidEntries[key] = entry;
