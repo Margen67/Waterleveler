@@ -964,14 +964,19 @@ mod engine_hook {
     pub(crate) const ENTITY_HANDLE_OFFSET: usize = 8;
 
     #[cfg(feature = "server")]
-    /// Signature of the function. `??` bytes are the vtable displacement of
-    /// the `NetworkStateChanged` call. The 0x2ab offsets are deliberately NOT
-    /// wildcarded: they double as a check that the datamap layout matches.
+    /// Signature of the function. `??` bytes are the vtable displacement of the
+    /// `NetworkStateChanged` call and the offset of `m_nWaterLevel`, which differs between
+    /// game builds (0x2ab in the default build, 0x2b3 on the dev branch): the offset is read
+    /// from the match (see `learn_water_level_layout`), which also checks that the four
+    /// places that name it agree.
     #[cfg(any(windows, test))]
     pub(crate) const SIG: &str = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 \
-                           48 83 EC 20 8B FA 0F B6 A9 AB 02 00 00 48 8B F1 \
-                           38 91 AB 02 00 00 74 17 48 8B 01 48 8D 91 AB 02 \
-                           00 00 FF 90 ?? ?? 00 00 40 88 BE AB 02 00 00";
+                           48 83 EC 20 8B FA 0F B6 A9 ?? ?? 00 00 48 8B F1 \
+                           38 91 ?? ?? 00 00 74 17 48 8B 01 48 8D 91 ?? ?? \
+                           00 00 FF 90 ?? ?? 00 00 40 88 BE ?? ?? 00 00";
+    /// Where `m_nWaterLevel`'s four displacements sit in the match of `SIG`.
+    #[cfg(all(feature = "server", any(windows, test)))]
+    pub(crate) const WATER_LEVEL_DISP_AT: [usize; 4] = [25, 34, 46, 59];
     /// Linux `CBaseEntity::SetWaterLevel`: `m_nWaterLevel` is at +0x2d3 (also a layout check).
     #[cfg(feature = "server")]
     #[cfg(not(any(windows, test)))]
@@ -1092,7 +1097,7 @@ mod engine_hook {
     /// `MASK_WATER` (0x4030) to set water level 1, 2 and 3.
     #[cfg(any(windows, test))]
     pub(crate) const UPDATE_WATER_STATE_SIG: &str = "\
-        48 8B C4 53 48 83 EC 50 48 8B D9 0F 29 70 E8 48 81 C1 E8 01 00 00 48 C7 40 CC 00 00 00 00 \
+        48 8B C4 53 48 83 EC 50 48 8B D9 0F 29 70 E8 48 81 C1 ?? ?? 00 00 48 C7 40 CC 00 00 00 00 \
         4C 8D 40 C8 C7 40 C8 00 00 00 00 48 8D 50 D8 C7 40 D8 00 00 00 3F 0F 57 F6 \
         48 C7 40 DC 00 00 00 3F E8 ?? ?? ?? ?? 33 D2 48 8B CB E8 ?? ?? ?? ?? 33 D2 48 8B CB \
         E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 54 24 20 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
@@ -1999,6 +2004,23 @@ mod engine_hook {
     /// executable sections of a PE image, the executable segments of an ELF one.
     #[cfg(all(windows, any(feature = "server", feature = "client")))]
     unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
+        unsafe { pe_regions(base) }
+    }
+
+    /// The tests scan mapped Windows images on a Linux host too.
+    #[cfg(all(any(feature = "server", feature = "client"), not(windows)))]
+    unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
+        unsafe {
+            #[cfg(test)]
+            if std::slice::from_raw_parts(base, 2) == b"MZ" {
+                return pe_regions(base);
+            }
+            elf_regions(base)
+        }
+    }
+
+    #[cfg(all(any(windows, test), any(feature = "server", feature = "client")))]
+    unsafe fn pe_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
         unsafe {
             let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
             let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
@@ -2027,7 +2049,7 @@ mod engine_hook {
     }
 
     #[cfg(all(any(feature = "server", feature = "client"), not(windows)))]
-    unsafe fn executable_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
+    unsafe fn elf_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
         unsafe {
             const PT_LOAD: u32 = 1;
             const PF_X: u32 = 1;
@@ -2281,11 +2303,17 @@ mod engine_hook {
     #[cfg(feature = "server")]
     #[cfg(any(windows, test))]
     pub(crate) const FLUID_END_TOUCH_SIG: &str = "48 89 5C 24 10 48 89 7C 24 18 41 56 48 83 EC 20 \
-        FF 81 F0 01 00 00 4D 8B F0 48 8B DA 48 8B F9 48 85 D2 0F 84 ?? ?? ?? ?? 4D 85 C0 74 ?? \
+        FF 81 ?? ?? 00 00 4D 8B F0 48 8B DA 48 8B F9 48 85 D2 0F 84 ?? ?? ?? ?? 4D 85 C0 74 ?? \
         48 8B 02 48 8B CA 48 89 74 24 30 FF 90 88 00 00 00 48 8B F0 48 85 C0 74 ?? \
         48 8B D0 48 8B CF E8 ?? ?? ?? ?? 0F 2F 05 ?? ?? ?? ?? 72 ?? 4C 8B C6 48 8B D3 49 8B CE \
-        E8 ?? ?? ?? ?? 81 A6 90 01 00 00 FF FF F7 FF 49 8B CE 49 8B 06 48 8B 1E FF 50 30 \
-        4C 63 C0 BA 01 00 00 00 48 8B CE FF 93 E8 02 00 00 FF 8F F0 01 00 00";
+        E8 ?? ?? ?? ?? 81 A6 ?? ?? 00 00 FF FF F7 FF 49 8B CE 49 8B 06 48 8B 1E FF 50 30 \
+        4C 63 C0 BA 01 00 00 00 48 8B CE FF 93 ?? ?? 00 00 FF 8F ?? ?? 00 00";
+    /// Where `m_iEFlags`'s offset (`and [rsi+disp32], ~EFL_TOUCHING_FLUID`) and the
+    /// `OnEntityEvent` vtable offset (`call [rbx+disp32]`) sit in the match of `FLUID_END_TOUCH_SIG`.
+    #[cfg(all(feature = "server", any(windows, test)))]
+    pub(crate) const FLUID_EFLAGS_DISP_AT: usize = 106;
+    #[cfg(all(feature = "server", any(windows, test)))]
+    pub(crate) const FLUID_EVENT_DISP_AT: usize = 139;
     #[cfg(feature = "server")]
     #[cfg(not(any(windows, test)))]
     pub(crate) const FLUID_END_TOUCH_SIG: &str = linux_sigs::FLUID_END_TOUCH_SIG;
@@ -2390,10 +2418,12 @@ mod engine_hook {
             if entity.is_null() {
                 return;
             }
-            let flags = entity.add(ENTITY_EFLAGS_OFFSET).cast::<u32>();
+            let flags = entity.add(EFLAGS_OFFSET.load(Ordering::Relaxed)).cast::<u32>();
             flags.write_unaligned(flags.read_unaligned() & !EFL_TOUCHING_FLUID);
             let on_event: engine_fn!((*mut u8, c_int, *mut c_void)) =
-                std::mem::transmute(*(*(entity as *const *const usize)).add(ENTITY_EVENT_SLOT));
+                std::mem::transmute(
+                    *(*(entity as *const *const usize)).add(EVENT_SLOT.load(Ordering::Relaxed)),
+                );
             on_event(
                 entity,
                 ENTITY_EVENT_WATER_UNTOUCH,
@@ -2721,16 +2751,16 @@ mod engine_hook {
     #[cfg(any(windows, test))]
     pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
         &[
-            ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
-            ("48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 02", 18),
+            ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 02", 18),
+            ("48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 02", 18),
         ],
         &[
-            ("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 80 02 00 00", 19),
-            ("48 8B C4 48 89 58 10 48 89 70 18 55 57 41 56 48 8D 68 C8 48 81 EC 20 01 00 00 0F 29 70 D8 48 8B D9 8B 89 80 02 00 00", 15),
+            ("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 ?? 02 00 00", 19),
+            ("48 8B C4 48 89 58 10 48 89 70 18 55 57 41 56 48 8D 68 C8 48 81 EC 20 01 00 00 0F 29 70 D8 48 8B D9 8B 89 ?? 02 00 00", 15),
         ],
         &[
-            ("48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
-            ("48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 AB 02 00 00 00", 16),
+            ("48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 00", 16),
+            ("48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 00", 16),
         ],
     ];
     #[cfg(feature = "server")]
@@ -2775,6 +2805,77 @@ mod engine_hook {
     #[cfg(not(any(windows, test)))]
     pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x364;
 
+    // The entity layout of the running game build. It differs between builds (the dev branch's
+    // Windows server has everything 8 bytes further on than the default branch's), so the
+    // Windows builds read it from the signature matches (`learn_*`); until then, and always on
+    // Linux, the constants above are used.
+    #[cfg(feature = "server")]
+    pub(crate) static WATER_LEVEL_OFFSET: AtomicUsize = AtomicUsize::new(ENTITY_WATER_LEVEL_OFFSET);
+    #[cfg(feature = "server")]
+    pub(crate) static ORIGIN_OFFSET: AtomicUsize = AtomicUsize::new(ENTITY_ORIGIN_OFFSET);
+    #[cfg(feature = "server")]
+    pub(crate) static EFLAGS_OFFSET: AtomicUsize = AtomicUsize::new(ENTITY_EFLAGS_OFFSET);
+    #[cfg(feature = "server")]
+    pub(crate) static EVENT_SLOT: AtomicUsize = AtomicUsize::new(ENTITY_EVENT_SLOT);
+    /// `m_vecAbsOrigin` is this far after `m_nWaterLevel` in `CBaseEntity` (0x2ab -> 0x33c in the
+    /// default Windows build, 0x2d3 -> 0x364 in the dev Linux build).
+    #[cfg(feature = "server")]
+    pub(crate) const ORIGIN_AFTER_WATER_LEVEL: usize = 0x91;
+
+    #[cfg(feature = "server")]
+    #[allow(clippy::missing_const_for_fn)]
+    pub(crate) unsafe fn read_disp(at: *const u8, i: usize) -> usize {
+        unsafe { at.add(i).cast::<u32>().read_unaligned() as usize }
+    }
+
+    /// Reads `m_nWaterLevel`'s offset out of a match of `SIG` (the four places that name it
+    /// must agree) and derives where the origin is.
+    #[cfg(all(feature = "server", any(windows, test)))]
+    pub(crate) unsafe fn learn_water_level_layout(at: *const u8) -> Result<usize, &'static str> {
+        unsafe {
+            let off = read_disp(at, WATER_LEVEL_DISP_AT[0]);
+            if !(0x100..0x1000).contains(&off)
+                || WATER_LEVEL_DISP_AT.iter().any(|&i| read_disp(at, i) != off)
+            {
+                return Err("the entity layout is not the expected one (different game build?)");
+            }
+            WATER_LEVEL_OFFSET.store(off, Ordering::SeqCst);
+            ORIGIN_OFFSET.store(off + ORIGIN_AFTER_WATER_LEVEL, Ordering::SeqCst);
+            Ok(off)
+        }
+    }
+
+    #[cfg(all(feature = "server", not(any(windows, test))))]
+    #[allow(clippy::missing_const_for_fn, clippy::unnecessary_wraps)]
+    pub(crate) unsafe fn learn_water_level_layout(_at: *const u8) -> Result<usize, &'static str> {
+        Ok(ENTITY_WATER_LEVEL_OFFSET)
+    }
+
+    /// Reads `m_iEFlags`' offset and the `OnEntityEvent` vtable slot out of a match of
+    /// `FLUID_END_TOUCH_SIG`.
+    #[cfg(all(feature = "server", any(windows, test)))]
+    pub(crate) unsafe fn learn_fluid_layout(at: *const u8) -> Result<(), &'static str> {
+        unsafe {
+            let flags = read_disp(at, FLUID_EFLAGS_DISP_AT);
+            let event = read_disp(at, FLUID_EVENT_DISP_AT);
+            if !(0x100..0x1000).contains(&flags)
+                || event % 8 != 0
+                || !(0x100..0x1000).contains(&event)
+            {
+                return Err("the entity layout is not the expected one (different game build?)");
+            }
+            EFLAGS_OFFSET.store(flags, Ordering::SeqCst);
+            EVENT_SLOT.store(event / 8, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[cfg(all(feature = "server", not(any(windows, test))))]
+    #[allow(clippy::missing_const_for_fn, clippy::unnecessary_wraps)]
+    pub(crate) unsafe fn learn_fluid_layout(_at: *const u8) -> Result<(), &'static str> {
+        Ok(())
+    }
+
     #[cfg(feature = "server")]
     /// Raises `this`'s water level to 2 if its origin is in a volume.
     pub(crate) unsafe fn raise_water_level_in_volume(this: *mut u8) {
@@ -2782,7 +2883,7 @@ mod engine_hook {
             if this.is_null() {
                 return;
             }
-            let o = this.add(ENTITY_ORIGIN_OFFSET) as *const f32;
+            let o = this.add(ORIGIN_OFFSET.load(Ordering::Relaxed)) as *const f32;
             let p = [
                 o.read_unaligned(),
                 o.add(1).read_unaligned(),
@@ -2791,7 +2892,7 @@ mod engine_hook {
             // try_lock: never wait (the original calls back into the contents hook).
             let inside = snapshot_if(|v| v.may_contain(p)).is_some_and(|v| v.contains(p));
             if inside {
-                let level = this.add(ENTITY_WATER_LEVEL_OFFSET);
+                let level = this.add(WATER_LEVEL_OFFSET.load(Ordering::Relaxed));
                 if level.read() < 2 {
                     level.write(2);
                     bump(&EXPLOSION_FIXES);
@@ -3533,6 +3634,7 @@ mod hook_state {
                 return Err("the server module is not loaded");
             }
             let target = engine_hook::scan_image(base)?;
+            engine_hook::learn_water_level_layout(target)?;
             let original = engine_hook::install(target, &engine_hook::os::PLATFORM)?;
             *TARGET
                 .lock()
@@ -3658,6 +3760,7 @@ mod hook_state {
             // Fluids destroyed while props are in them must not crash FluidEndTouch.
             let end_touch = match engine_hook::scan_sig(base, engine_hook::FLUID_END_TOUCH_SIG)
                 .and_then(|t| {
+                    engine_hook::learn_fluid_layout(t)?;
                     engine_hook::install_patch(
                         t,
                         engine_hook::FLUID_END_TOUCH_SIG,
@@ -5476,6 +5579,12 @@ mod tests {
             let target = rwx(4096);
             std::ptr::copy_nonoverlapping(func.as_ptr(), target, FUNC_LEN);
 
+            // Where this build keeps m_nWaterLevel (0x2ab or 0x2b3), from the function itself;
+            // the four places that name it agree.
+            let wl = read_disp(target, WATER_LEVEL_DISP_AT[0]);
+            assert!(WATER_LEVEL_DISP_AT
+                .iter()
+                .all(|&i| read_disp(target, i) == wl));
             let original = install(target, &TEST_PLATFORM).expect("install failed");
             assert_eq!(&original[..5], &[0x48, 0x89, 0x5C, 0x24, 0x08]);
             // The entry now starts with the detour.
@@ -5486,7 +5595,7 @@ mod tests {
             edict[6..8].copy_from_slice(&5i16.to_le_bytes());
             let mut entity = vec![0u8; 0x400];
             entity[OFF_PEV..OFF_PEV + 8].copy_from_slice(&(edict.as_ptr() as u64).to_le_bytes());
-            entity[0x2ab] = 1;
+            entity[wl] = 1;
             let this = entity.as_mut_ptr().cast::<c_void>();
 
             let set_water_level: unsafe extern "win64" fn(*mut c_void, c_int) =
@@ -5499,7 +5608,7 @@ mod tests {
             //    would crash on this fake object) and the byte stays 1.
             overrides().insert(5, 1);
             set_water_level(this, 3);
-            assert_eq!(entity[0x2ab], 1);
+            assert_eq!(entity[wl], 1);
             assert_eq!(HITS.load(Ordering::Relaxed), hits_before + 1);
 
             // 2) No override: the call goes through the trampoline, which runs
@@ -5507,14 +5616,14 @@ mod tests {
             //    level == current again so it returns without side effects.
             overrides().remove(&5);
             set_water_level(this, 1);
-            assert_eq!(entity[0x2ab], 1);
+            assert_eq!(entity[wl], 1);
             assert_eq!(HITS.load(Ordering::Relaxed), hits_before + 1);
 
             // 3) Entities without a pev are passed through untouched.
             let mut bare = vec![0u8; 0x400];
-            bare[0x2ab] = 2;
+            bare[wl] = 2;
             set_water_level(bare.as_mut_ptr().cast::<c_void>(), 2);
-            assert_eq!(bare[0x2ab], 2);
+            assert_eq!(bare[wl], 2);
 
             // 4) Uninstall restores the original bytes exactly.
             uninstall(target, &original, &TEST_PLATFORM);

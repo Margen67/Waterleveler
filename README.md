@@ -109,7 +109,7 @@ Needs the 64-bit Windows or Linux server or client: elsewhere the module loads b
    covers code that writes the byte directly (one player-state restore path
    does).
 
-Facts taken from the 64-bit Windows `server.dll` (the Linux server's layout is noted in `src/lib.rs`): `m_nWaterLevel` is a
+Facts taken from the 64-bit Windows `server.dll` of the default branch (the Linux server's layout is noted in `src/lib.rs`; the dev branch's `CBaseEntity` is 8 bytes bigger before these fields, so the Windows build reads the offsets of `m_nWaterLevel`, `m_iEFlags` and the `OnEntityEvent` slot out of its signature matches instead of assuming them): `m_nWaterLevel` is a
 `FIELD_CHARACTER` datamap field at `this+0x2ab` (SAVE|KEY, map key
 `waterlevel`); the entity index is `*(i16*)(*(void**)(this+0x30)+6)`
 (`m_pPev->m_EdictIndex`, the same thing `Entity:EntIndex` reads).
