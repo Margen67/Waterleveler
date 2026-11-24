@@ -275,11 +275,6 @@ if CLIENT then
         return IsValid(ent) and ent.IsPlayerHolding ~= nil and ent:IsPlayerHolding();
     end
 
-    local function convarString(name, default)
-        local cv = GetConVar(name);
-        return cv and cv:GetString() or default;
-    end
-
     hook.Add("PostDrawTranslucentRenderables", "waterleveler_tool_preview", function(_, skybox)
         if skybox then return; end
         local ply = LocalPlayer();
@@ -306,8 +301,9 @@ if CLIENT then
             });
         end
 
-        local r, g, b = WLWater.LiquidColor(convarString("waterleveler_liquid", "water"));
-        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, 255), true);
-        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, 60), false);
+        -- The guide outline uses the outline color picker's color.
+        local r, g, b, a = convar("waterleveler_outline_r", 90), convar("waterleveler_outline_g", 190), convar("waterleveler_outline_b", 255), convar("waterleveler_outline_a", 255);
+        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, a), true);
+        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, math.min(a, 60)), false);
     end);
 end
