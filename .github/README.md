@@ -11,7 +11,7 @@ dependency-free Rust binary module for the 64-bit (x86-64) branch. The server mo
 GMod only loads binary modules from `garrysmod/lua/bin/` (not from an addon's
 `lua/bin`), so install in two parts: the DLL into `garrysmod/lua/bin/`, and the
 `addon/waterleveler` folder (Lua library + volume script) into `garrysmod/addons/`.
-`build.sh` does both on Windows and Linux (the Linux default is the dedicated server, `~/.local/share/Steam/steamapps/common/GarrysModDS/garrysmod`; falls back to `GarrysMod/garrysmod` there if that folder is missing; override with `GMOD_DIR`) (it deletes the installed addon first, then copies the server
+`build.sh` (Linux) and `build.ps1` (Windows, PowerShell) do both (the Linux default is the dedicated server, `~/.local/share/Steam/steamapps/common/GarrysModDS/garrysmod`; falls back to `GarrysMod/garrysmod` there if that folder is missing; override with `GMOD_DIR`) (it deletes the installed addon first, then copies the server
 and the client module and the addon). The CI artifact has everything too. Files:
 
 | Platform | Realm  | File name                           |
@@ -283,9 +283,8 @@ Not verified:
 
 ## Build
 
-`./build.sh` (Linux host -> linux64, MSYS2/Git Bash -> win64). No crates are
-fetched. Cross-compiling Windows from Linux is described at the top of
-`build.sh`. Needs Rust 1.77+.
+`./build.sh` on Linux (linux64) or `./build.ps1` in PowerShell on Windows (win64). No
+crates are fetched. Needs Rust 1.77+.
 
 The server and the client module are separate builds of the same crate: the `server`
 and `client` cargo features (both on by default, which is what `cargo test` uses). The

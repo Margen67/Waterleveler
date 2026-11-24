@@ -11,7 +11,6 @@
 -- The volume this entity draws.
 ---@class Entity
 ---@field WLBox table
-
 -- Client half of the networked fluid entity (invisible; the volume is drawn below).
 scripted_ents.Register({
     Type = "anim",
@@ -407,7 +406,29 @@ local function emitQuad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
     local t = (d - a):GetNormalized();
     local n = s:Cross(t);
     ---@type {pos: Vector, u: number, v: number}[]
-    local verts = {{pos = a, u = 0, v = 0}, {pos = b, u = u, v = 0}, {pos = c, u = u, v = v}, {pos = d, u = 0, v = v}};
+    local verts = {
+        {
+            pos = a,
+            u = 0,
+            v = 0
+        },
+        {
+            pos = b,
+            u = u,
+            v = 0
+        },
+        {
+            pos = c,
+            u = u,
+            v = v
+        },
+        {
+            pos = d,
+            u = 0,
+            v = v
+        }
+    };
+
     if outward then
         -- Culled materials: the engine's front face is the clockwise one,
         -- so wind the quad clockwise as seen from outside the box.

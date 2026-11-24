@@ -4,7 +4,6 @@
 -- cleanup, networking, the debug commands). Shared parts: autorun/waterleveler_volumes.lua.
 require("waterleveler");
 util.AddNetworkString("wl_volumes");
-
 -- What the volume's handle entity carries (set in WLWater.Spawn).
 ---@class Entity
 ---@field WLHalf Vector
@@ -12,7 +11,6 @@ util.AddNetworkString("wl_volumes");
 ---@field WLVolumeId integer
 ---@field WLFluidOptions table
 ---@field WLFluid integer
-
 -- Buoyancy. Creates the same kind of engine object a map's
 -- water brush uses: a static physics box with the liquid's material that
 -- gets a fluid controller (waterleveler.AttachFluid). vphysics then floats

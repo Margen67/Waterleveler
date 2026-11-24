@@ -7,10 +7,8 @@
 --  * adds "Use with Water Volume tool" to the right-click menu of material icons in the
 --    spawnmenu (the stock menu and Extended Spawnmenu's), next to "Use with Material Tool".
 pcall(require, "waterlevelercore");
-
 ---@class Panel
 ---@field OpenMenu fun(...)
-
 local wrapped = {}; -- content type functions this file made, so they are not wrapped twice
 local function useWithWaterTool(spawnname)
     RunConsoleCommand("waterleveler_material", spawnname);

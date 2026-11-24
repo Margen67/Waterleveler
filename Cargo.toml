@@ -6,7 +6,7 @@ rust-version = "1.77"
 description = "Garry's Mod binary module (server and client): per-entity water level overrides and fake water volumes"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/Margen67/Waterleveler"
-readme = "README.md"
+readme = ".github/README.md"
 keywords = ["garrys-mod", "gmod", "water"]
 categories = ["game-development"]
 
@@ -16,7 +16,7 @@ categories = ["game-development"]
 [dependencies]
 
 # One DLL per realm: `server` (gmsv_) and `client` (gmcl_). The release builds enable one
-# each (see build.sh), so each carries only the code it needs; the default has both,
+# each (see build.sh and build.ps1), so each carries only the code it needs; the default has both,
 # which is what the tests need, and then the realm is chosen from the DLL's file name.
 [features]
 default = ["server", "client"]
