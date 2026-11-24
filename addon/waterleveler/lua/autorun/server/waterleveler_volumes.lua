@@ -136,7 +136,9 @@ function WLWater.Spawn(ply, mins, maxs, opts)
     local r, g, b = WLWater.LiquidColor(opts.liquid);
     local function colorOf(c, a)
         if not istable(c) then return Color(r, g, b, a); end
-        local function byte(v, d) return math.Clamp(math.floor(tonumber(v) or d), 0, 255); end
+        local function byte(v, d)
+            return math.Clamp(math.floor(tonumber(v) or d), 0, 255);
+        end
         return Color(byte(c.r, r), byte(c.g, g), byte(c.b, b), byte(c.a, a));
     end
 

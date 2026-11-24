@@ -650,8 +650,8 @@ local drawFill;
 local function drawVolume(bx)
     -- The tool's preview (not persistent) has its own outline.
     local dbgFill = bx.persist and debugFill:GetBool();
-    local fill = (dbgFill and debugColor(bx.liquid, WLWater.FillAlpha)) or (bx.solid and bx.color) or nil;
-    if fill or (bx.material and bx.material ~= "") then drawFill(bx, fill); end
+    local fill = dbgFill and debugColor(bx.liquid, WLWater.FillAlpha) or bx.solid and bx.color or nil;
+    if fill or bx.material and bx.material ~= "" then drawFill(bx, fill); end
     if bx.persist then
         if debugOutline:GetBool() then
             drawOutline(bx, debugColor(bx.liquid, 255), debugOutlineTop:GetBool());
@@ -774,7 +774,7 @@ drawFill = function(bx, fill)
     render.CullMode(MATERIAL_CULLMODE_CCW);
     render.SetColorModulation(1, 1, 1);
     render.SetBlend(1);
-end
+end;
 
 -- Also used by the Water Volume tool for its preview.
 WLWater.DrawVolume = drawVolume;

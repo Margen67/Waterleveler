@@ -83,7 +83,9 @@ end
 
 -- The colour stored in the convars <prefix>_r, _g, _b and _a.
 local function readColor(get, prefix)
-    local function byte(channel) return math.Clamp(math.floor(get(prefix .. "_" .. channel)), 0, 255); end
+    local function byte(channel)
+        return math.Clamp(math.floor(get(prefix .. "_" .. channel)), 0, 255);
+    end
     return Color(byte("r"), byte("g"), byte("b"), byte("a"));
 end
 
@@ -197,13 +199,17 @@ if CLIENT then
             RunConsoleCommand("waterleveler_liquid", data);
             -- The colours follow the liquid: blue for water, green for slime.
             local r, g, b = WLWater.LiquidColor(data);
-            for prefix, alpha in pairs({color = WLWater.FillAlpha, outline = 255}) do
+            for prefix, alpha in pairs({
+                color = WLWater.FillAlpha,
+                outline = 255
+            }) do
                 RunConsoleCommand("waterleveler_" .. prefix .. "_r", tostring(r));
                 RunConsoleCommand("waterleveler_" .. prefix .. "_g", tostring(g));
                 RunConsoleCommand("waterleveler_" .. prefix .. "_b", tostring(b));
                 RunConsoleCommand("waterleveler_" .. prefix .. "_a", tostring(alpha));
             end
         end;
+
         panel:ControlHelp("Slime: slime-coloured splashes and ripples, slower wading, no water explosion effect.");
         panel:CheckBox("Underwater screen warp (off: no distortion inside water volumes)", "waterleveler_underwater_warp");
         panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid");
