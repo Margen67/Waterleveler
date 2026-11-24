@@ -76,6 +76,10 @@ local id = WLWater.Spawn(ply, mins, maxs, {
     fluid = false,             -- default true: buoyancy for props
     material = "nature/water_movingplane",  -- default "": nothing is drawn (no mesh is made)
     beneath = false,           -- default true: the inside shows the material's _beneath texture
+    solid = true,              -- default false: one translucent color instead of the material
+    color = Color(90, 190, 255, 110), -- the solid color (default: the liquid's, blue or green)
+    outline = true,            -- default false: draw the edges
+    outlineColor = Color(90, 190, 255), -- default: the liquid's color
     fluidOptions = { damping = 0.05, currentx = 100 },   -- the options of waterleveler.AttachFluid;
                                -- default {}: a map water brush's values (damping 0.01, no torque,
                                -- viscosity, aerodynamics or current)
@@ -209,7 +213,7 @@ Scripts (all loaded automatically as part of the addon), one file per realm so e
 Tool: **Water Volume** under Tools > Construction (size per axis, vertical offset up to the
 biggest size, buoyancy and material; an outline previews the volume where you
 are looking).
-A volume whose material is empty is not drawn at all (no mesh, no client entity); it still works for the engine. The "Inside shows the material's _beneath texture" option (`waterleveler_beneath`, per volume) draws world water single-sided, with `<material>_beneath` on the inside; turned off, the material is drawn on both sides.
+A volume whose material is empty is not drawn at all (no mesh); it still works for the engine, unless it has a solid color or an outline. "Draw as a solid color" (`waterleveler_solid`, with `waterleveler_color_r/g/b/a`) draws the volume as one translucent color instead of the material, and "Draw an outline" (`waterleveler_outline`, `waterleveler_outline_r/g/b/a`) draws its edges; both are per volume, and the colors default to blue for water and green for slime (picking the liquid in the tool resets them). The tool's collapsed Debug section (client-only) draws every volume as a solid color and/or outlined, optionally over everything else (`waterleveler_debug_fill`, `waterleveler_debug_outline`, `waterleveler_debug_outline_top`), in fixed colors (blue water, green slime) that ignore the colors above. The "Inside shows the material's _beneath texture" option (`waterleveler_beneath`, per volume) draws world water single-sided, with `<material>_beneath` on the inside; turned off, the material is drawn on both sides.
 
 The "Underwater screen warp" option (`waterleveler_underwater_warp`, a client setting) turns off the `effects/water_warp01` screen overlay that the script draws while you are fully submerged in a volume.
 

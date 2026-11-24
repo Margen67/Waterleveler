@@ -84,6 +84,14 @@ local function sync(ply)
         net.WriteString(b.material or ""); -- "" = none: the client draws nothing
         net.WriteString(b.liquid or "water");
         net.WriteBool(b.beneath ~= false);
+        net.WriteBool(b.solid);
+        net.WriteBool(b.outline);
+        for _, c in ipairs({b.color, b.outlineColor}) do
+            net.WriteUInt(c.r, 8);
+            net.WriteUInt(c.g, 8);
+            net.WriteUInt(c.b, 8);
+            net.WriteUInt(c.a, 8);
+        end
     end
 
     if IsValid(ply) then
@@ -106,8 +114,14 @@ end
 --- field of `opts`; the defaults are what a map's water brush has:
 ---   liquid        "water" ("slime" picks slime contents and the fluid's physics material)
 ---   fluid         true (buoyancy for props; false = engine water only)
----   material      "" (none: the volume is real to the engine but nothing is drawn)
+---   material      "" (none: the volume is real to the engine but nothing is drawn, unless it has a
+---                 solid colour or an outline)
 ---   beneath       true (the inside shows the material's _beneath texture)
+---   solid         false (true: drawn as one translucent colour instead of the material)
+---   color         the liquid's colour (WLWater.LiquidColor) with alpha WLWater.FillAlpha:
+---                 the solid colour (a Color)
+---   outline       false (true: the box's edges are drawn)
+---   outlineColor  the liquid's colour, opaque (a Color)
 ---   fluidOptions  {} (the options of waterleveler.AttachFluid: damping 0.01, torque 0,
 ---                 viscosity 0, aerodynamics false, no current; `contents` follows liquid)
 --- mins and maxs may be any two opposite corners.
@@ -119,12 +133,23 @@ function WLWater.Spawn(ply, mins, maxs, opts)
     OrderVectors(mins, maxs);
     local id, err = waterleveler.AddVolume(mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, opts.liquid);
     if not id then return nil, err; end
+    local r, g, b = WLWater.LiquidColor(opts.liquid);
+    local function colorOf(c, a)
+        if not istable(c) then return Color(r, g, b, a); end
+        local function byte(v, d) return math.Clamp(math.floor(tonumber(v) or d), 0, 255); end
+        return Color(byte(c.r, r), byte(c.g, g), byte(c.b, b), byte(c.a, a));
+    end
+
     boxes[id] = {
         mins = mins,
         maxs = maxs,
         material = opts.material,
         beneath = opts.beneath ~= false,
-        liquid = opts.liquid
+        liquid = opts.liquid,
+        solid = opts.solid == true,
+        color = colorOf(opts.color, WLWater.FillAlpha),
+        outline = opts.outline == true,
+        outlineColor = colorOf(opts.outlineColor, 255)
     };
 
     -- Every volume has a wl_fluid entity: it is what undo and cleanup remove (the volume

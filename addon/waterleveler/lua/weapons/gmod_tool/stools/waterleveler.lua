@@ -23,6 +23,16 @@ TOOL.ClientConVar = {
     fluid_currentz = "0",
     material = "nature/water_movingplane",
     beneath = "1", -- the inside shows the material's _beneath texture; off: the material, double-sided
+    solid = "0", -- draw as one translucent colour (color_*) instead of the material
+    color_r = "90", -- the liquid's colour: blue for water, green for slime (reset when the liquid changes)
+    color_g = "190",
+    color_b = "255",
+    color_a = "110",
+    outline = "0", -- draw the box's edges in outline_*
+    outline_r = "90",
+    outline_g = "190",
+    outline_b = "255",
+    outline_a = "255",
 };
 
 local minSize, maxSize = 1, 32768;
@@ -44,6 +54,16 @@ if CLIENT then
         fluid_currentx = {0, -maxCurrent, maxCurrent},
         fluid_currenty = {0, -maxCurrent, maxCurrent},
         fluid_currentz = {0, -maxCurrent, maxCurrent},
+        solid = {0, 0, 1},
+        color_r = {90, 0, 255},
+        color_g = {190, 0, 255},
+        color_b = {255, 0, 255},
+        color_a = {110, 0, 255},
+        outline = {0, 0, 1},
+        outline_r = {90, 0, 255},
+        outline_g = {190, 0, 255},
+        outline_b = {255, 0, 255},
+        outline_a = {255, 0, 255},
     };
 
     for name, l in pairs(limits) do
@@ -59,6 +79,12 @@ end
 local function readOffset(get, size)
     local max = math.max(size.x, size.y, size.z);
     return math.Clamp(get("offset"), -max, max);
+end
+
+-- The colour stored in the convars <prefix>_r, _g, _b and _a.
+local function readColor(get, prefix)
+    local function byte(channel) return math.Clamp(math.floor(get(prefix .. "_" .. channel)), 0, 255); end
+    return Color(byte("r"), byte("g"), byte("b"), byte("a"));
 end
 
 if CLIENT then
@@ -110,6 +136,10 @@ function TOOL:LeftClick(trace)
         },
         material = self:GetClientInfo("material"),
         beneath = self:GetClientNumber("beneath", 1) ~= 0,
+        solid = self:GetClientNumber("solid", 0) ~= 0,
+        color = readColor(get, "color"),
+        outline = self:GetClientNumber("outline", 0) ~= 0,
+        outlineColor = readColor(get, "outline"),
     });
 
     if not id then
@@ -163,7 +193,17 @@ if CLIENT then
         local isSlime = current and current:GetString() == "slime";
         liquid:AddChoice("Water", "water", not isSlime);
         liquid:AddChoice("Slime", "slime", isSlime);
-        liquid.OnSelect = function(_, _, _, data) RunConsoleCommand("waterleveler_liquid", data); end;
+        liquid.OnSelect = function(_, _, _, data)
+            RunConsoleCommand("waterleveler_liquid", data);
+            -- The colours follow the liquid: blue for water, green for slime.
+            local r, g, b = WLWater.LiquidColor(data);
+            for prefix, alpha in pairs({color = WLWater.FillAlpha, outline = 255}) do
+                RunConsoleCommand("waterleveler_" .. prefix .. "_r", tostring(r));
+                RunConsoleCommand("waterleveler_" .. prefix .. "_g", tostring(g));
+                RunConsoleCommand("waterleveler_" .. prefix .. "_b", tostring(b));
+                RunConsoleCommand("waterleveler_" .. prefix .. "_a", tostring(alpha));
+            end
+        end;
         panel:ControlHelp("Slime: slime-coloured splashes and ripples, slower wading, no water explosion effect.");
         panel:CheckBox("Underwater screen warp (off: no distortion inside water volumes)", "waterleveler_underwater_warp");
         panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid");
@@ -191,6 +231,21 @@ if CLIENT then
 
         materialRow("Material", "waterleveler_material");
         panel:CheckBox("Inside shows the material's _beneath texture (off: double-sided)", "waterleveler_beneath");
+        panel:CheckBox("Draw as a solid color instead of the texture", "waterleveler_solid");
+        panel:ColorPicker("Solid color", "waterleveler_color_r", "waterleveler_color_g", "waterleveler_color_b", "waterleveler_color_a");
+        panel:ControlHelp("Setting the liquid to water or slime picks the colors for you (blue and green).");
+        panel:CheckBox("Draw an outline", "waterleveler_outline");
+        panel:ColorPicker("Outline color", "waterleveler_outline_r", "waterleveler_outline_g", "waterleveler_outline_b", "waterleveler_outline_a");
+        -- Debug (minimized): these only change what this client draws, for every volume, in fixed
+        -- colors (blue water, green slime) that ignore the colors above.
+        local debugForm = vgui.Create("DForm", panel);
+        debugForm:SetLabel("Debug");
+        debugForm:SetExpanded(false);
+        debugForm:CheckBox("Draw every volume as a solid color (even invisible water)", "waterleveler_debug_fill");
+        debugForm:CheckBox("Draw an outline around every volume", "waterleveler_debug_outline");
+        debugForm:CheckBox("The outline draws over everything else", "waterleveler_debug_outline_top");
+        debugForm:ControlHelp("Blue for water, green for slime. The colors above do not apply.");
+        panel:AddItem(debugForm);
     end
 
     -- Preview: the volume drawn with the selected materials, plus an outline, where the player is looking.
@@ -240,12 +295,12 @@ if CLIENT then
                 maxs = maxs,
                 material = str("waterleveler_material", ""),
                 beneath = convar("waterleveler_beneath", 1) ~= 0,
+                solid = convar("waterleveler_solid", 0) ~= 0,
+                color = Color(convar("waterleveler_color_r", 90), convar("waterleveler_color_g", 190), convar("waterleveler_color_b", 255), convar("waterleveler_color_a", 110)),
             });
         end
 
-        local slime = convarString("waterleveler_liquid", "water"):lower() == "slime";
-        local r, g, b = 90, 190, 255;
-        if slime then r, g, b = 90, 255, 120; end
+        local r, g, b = WLWater.LiquidColor(convarString("waterleveler_liquid", "water"));
         render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, 255), true);
         render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, 60), false);
     end);

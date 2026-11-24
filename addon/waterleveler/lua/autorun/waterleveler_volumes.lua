@@ -34,6 +34,16 @@ WLWater = WLWater or {};
 --- it rests on. The client draws the bottom of the volume this much shorter. The engine tests
 --- for water 0.1 below where a bullet hit the floor (1/32 above it), so this must exceed 0.13.
 WLWater.ContactDepth = 0.25;
+--- The colour of a liquid when it is drawn as a solid colour or outlined (also the Water Volume
+--- tool's defaults and the debug view's colours): blue for water, green for slime.
+--- Returns r, g, b (0-255).
+function WLWater.LiquidColor(liquid)
+    if tostring(liquid or ""):lower() == "slime" then return 90, 255, 120; end
+    return 90, 190, 255;
+end
+
+--- Alpha of a solid-colour fill by default, and of the debug view's fill.
+WLWater.FillAlpha = 110;
 --- Where a volume of `size` (Vector) goes for the trace `tr`: it rests against the surface the
 --- trace hit (floor, wall or ceiling), then moves `offset` units up (down when negative).
 --- Returns mins, maxs, center. Shared by the tool's preview (client) and the spawn (server).

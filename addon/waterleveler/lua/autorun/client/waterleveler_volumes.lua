@@ -3,7 +3,9 @@
 -- The client half of the Water Volume script (drawing, materials,
 -- the debug commands). Shared parts: autorun/waterleveler_volumes.lua.
 -- The server sends the volumes (the "wl_volumes" net message); each one is drawn as a
--- translucent box with its material, and one without a material is not drawn at all.
+-- translucent box with its material (or as one solid colour, with an optional outline), and
+-- one with none of these is not drawn at all. The Debug section of the tool's menu draws every
+-- volume as a solid colour and/or outlined (blue water, green slime), whatever it looks like.
 -- The engine side of the volumes on this client is the client module (waterlevelercore),
 -- loaded by autorun/client/waterleveler.lua.
 -- Client half of the networked fluid entity (invisible; the volume is drawn below).
@@ -24,8 +26,14 @@ net.Receive("wl_volumes", function()
             maxs = net.ReadVector(),
             material = net.ReadString(),
             liquid = net.ReadString(),
-            beneath = net.ReadBool()
+            beneath = net.ReadBool(),
+            solid = net.ReadBool(),
+            outline = net.ReadBool()
         };
+
+        local b = boxes[i];
+        b.color = Color(net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8));
+        b.outlineColor = Color(net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8));
     end
 
     -- The client module (gmcl_waterlevelercore) makes the client's own water queries see the
@@ -577,10 +585,90 @@ end
 -- sort, so it is ordered against splashes, sprites and shards by distance
 -- like any other translucent thing (origin = the box centre).
 local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
+-- The Debug section of the tool menu (client-only settings). The debug colours are fixed:
+-- they ignore the colours a volume was made with.
+local debugFill = CreateClientConVar("waterleveler_debug_fill", "0", true, false, "Draw every water volume as a solid colour (blue water, green slime)", 0, 1);
+local debugOutline = CreateClientConVar("waterleveler_debug_outline", "0", true, false, "Draw an outline around every water volume", 0, 1);
+local debugOutlineTop = CreateClientConVar("waterleveler_debug_outline_top", "0", true, false, "The debug outline is drawn over everything else", 0, 1);
+local debugColors = {};
+local function debugColor(liquid, alpha)
+    local key = (liquid == "slime" and "slime" or "water") .. alpha;
+    local c = debugColors[key];
+    if not c then
+        local r, g, b = WLWater.LiquidColor(liquid);
+        c = Color(r, g, b, alpha);
+        debugColors[key] = c;
+    end
+    return c;
+end
+
+-- Solid-colour entries (a plain white material tinted by the colour), one per colour.
+local solidEntries = {};
+local function solidEntry(c)
+    local key = c.r + c.g * 256 + c.b * 65536 + c.a * 16777216;
+    local entry = solidEntries[key];
+    if not entry then
+        entry = {
+            mat = fallback,
+            color = Color(c.r, c.g, c.b, c.a),
+            vcol = false
+        };
+
+        solidEntries[key] = entry;
+    end
+    return entry, key;
+end
+
+local faints = setmetatable({}, {
+    __mode = "k"
+});
+
+local function faint(c)
+    local f = faints[c];
+    if not f then
+        f = Color(c.r, c.g, c.b, 60);
+        faints[c] = f;
+    end
+    return f;
+end
+
+-- The edges of a volume. `over`: drawn over everything else (the debug option), otherwise it
+-- is hidden by what is in front of it and a faint copy shows through.
+local function drawOutline(bx, c, over)
+    if over then
+        cam.IgnoreZ(true);
+        render.DrawWireframeBox(vector_origin, angle_zero, bx.mins, bx.maxs, c, false);
+        cam.IgnoreZ(false);
+        return;
+    end
+
+    render.DrawWireframeBox(vector_origin, angle_zero, bx.mins, bx.maxs, c, true);
+    render.DrawWireframeBox(vector_origin, angle_zero, bx.mins, bx.maxs, faint(c), false);
+end
+
+local drawFill;
 local function drawVolume(bx)
-    -- A volume without a material has no mesh at all.
-    if not bx.material or bx.material == "" then return; end
-    local top = mat(bx.material);
+    -- The tool's preview (not persistent) has its own outline.
+    local dbgFill = bx.persist and debugFill:GetBool();
+    local fill = (dbgFill and debugColor(bx.liquid, WLWater.FillAlpha)) or (bx.solid and bx.color) or nil;
+    if fill or (bx.material and bx.material ~= "") then drawFill(bx, fill); end
+    if bx.persist then
+        if debugOutline:GetBool() then
+            drawOutline(bx, debugColor(bx.liquid, 255), debugOutlineTop:GetBool());
+        elseif bx.outline then
+            drawOutline(bx, bx.outlineColor, false);
+        end
+    end
+end
+
+drawFill = function(bx, fill)
+    local top, pack;
+    if fill then
+        top, pack = solidEntry(fill);
+    else
+        top, pack = mat(bx.material), -1;
+    end
+
     local body = top;
     local now = CurTime();
     if top.animate then top.animate(now); end
@@ -617,6 +705,7 @@ local function drawVolume(bx)
         owner.maxs = bx.maxs - centre;
         owner.material = bx.material;
         owner.beneath = bx.beneath;
+        owner.pack = pack;
         local translation = Matrix();
         translation:SetTranslation(centre);
         cam.PushModelMatrix(translation);
@@ -629,8 +718,10 @@ local function drawVolume(bx)
     -- aim point, and float noise must not rebuild its meshes every frame.
     local sizeX, sizeY, sizeZ = math.floor((owner.maxs.x - owner.mins.x) * 100 + 0.5), math.floor((owner.maxs.y - owner.mins.y) * 100 + 0.5), math.floor((owner.maxs.z - owner.mins.z) * 100 + 0.5);
     local material, beneath = owner.material or "", owner.beneath ~= false;
+    if fill then material = ""; end
+    owner.pack = pack;
     local built = owner.built;
-    if not built or built.material ~= material or built.beneath ~= beneath or built.sizeX ~= sizeX or built.sizeY ~= sizeY or built.sizeZ ~= sizeZ then
+    if not built or built.material ~= material or built.pack ~= pack or built.beneath ~= beneath or built.sizeX ~= sizeX or built.sizeY ~= sizeY or built.sizeZ ~= sizeZ then
         destroyBuilt(owner);
         -- Neighbouring faces that share a material go into one mesh (one draw call). The
         -- faces stay in the same order, so the surface still blends over the sides.
@@ -663,6 +754,7 @@ local function drawVolume(bx)
         flush();
         owner.built = {
             material = material,
+            pack = pack,
             beneath = beneath,
             sizeX = sizeX,
             sizeY = sizeY,
@@ -706,8 +798,8 @@ syncVolumeEntities = function()
 
     volumeEnts = {};
     for _, bx in ipairs(boxes) do
-        -- No material: nothing to draw, so no entity either.
-        local e = bx.material ~= "" and ents.CreateClientside("wl_volume_draw") or nil;
+        -- Every volume has an entity: the debug view can draw any of them.
+        local e = ents.CreateClientside("wl_volume_draw");
         if IsValid(e) then
             local centre = (bx.mins + bx.maxs) * 0.5;
             e:SetModel("models/error.mdl");
