@@ -261,7 +261,7 @@ glitchy underwater sound can play about every tick. With the client module insta
 everything works. Binary modules cannot be sent by the server, so every player who should see
 volumes correctly needs the client module (`gmcl_waterlevelercore_win64.dll` or `gmcl_waterlevelercore_linux64.dll`) in `garrysmod/lua/bin`.
 
-Known game bugs (not caused by this module): crowbar hit splashes are missing in multiplayer, and bubble trails are missing.
+Known game bugs (not caused by this module): crowbar hit splashes and bubble trails are missing in multiplayer.
 
 Not verified:
 - Listen servers, and a dedicated server with several clients at once.
