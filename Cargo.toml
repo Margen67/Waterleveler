@@ -66,3 +66,8 @@ cast_ptr_alignment = "allow"
 # Contradicts the rustc lint `unreachable_pub` (one asks for `pub(crate)` on exactly the
 # items the other wants plain `pub`), so only `unreachable_pub` is kept.
 redundant_pub_crate = "allow"
+# Every source file starts with `use crate::*;`: the crate root re-exports each module's
+# items (`pub(crate) use shared::*;` and so on), so the files that were once one namespace
+# can see each other without hundreds of explicit imports. Only the crate's own items are
+# glob-imported, never an external crate's.
+wildcard_imports = "allow"
