@@ -14,6 +14,7 @@ if not core then
     return;
 end
 
+---@diagnostic disable-next-line: lowercase-global
 waterleveler = waterleveler or {};
 local lib = waterleveler;
 for k, v in pairs(core) do

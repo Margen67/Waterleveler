@@ -32,9 +32,17 @@ jobs:
           find addon -name '*.lua' -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
           git diff --exit-code
 
+  luals:
+    name: LuaLS
+    uses: CFC-Servers/gmod_luals_workflow/.github/workflows/luals.yml@main
+    with:
+      style_check: true
+
   build:
     name: Windows x64
     runs-on: windows-latest
+    env:
+      POWERSHELL_TELEMETRY_OPTOUT: 1
 
     steps:
       - name: Checkout

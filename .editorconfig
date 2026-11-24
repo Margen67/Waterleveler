@@ -1,0 +1,25 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.rs]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+[.github/workflows/*.yml]
+indent_style = space
+indent_size = 2
+
+[*.lua]
+indent_style = space
+indent_size = 4
+# Match GLuaFixer's spacing when LuaLS checks style in CI.
+space_around_table_field_list = false
+space_inside_function_call_parentheses = false
+space_inside_function_param_list_parentheses = false
+space_around_table_append_operator = false

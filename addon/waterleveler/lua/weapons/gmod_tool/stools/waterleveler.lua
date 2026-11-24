@@ -153,6 +153,7 @@ end
 
 if CLIENT then
     local presets = {"nature/water_movingplane", "nature/water_movingplane_dx70", "gm_construct/water_13", "models/shadertest/predator", "models/shadertest/shader3",};
+    ---@param panel ControlPanel
     function TOOL.BuildCPanel(panel)
         panel:Help("Creates a water volume where you aim. Swimming, water level and impact splashes work like normal water.");
         local sliders = {};
@@ -169,6 +170,7 @@ if CLIENT then
         -- Sets all three axes at once.
         local all = panel:NumSlider("All axes", "", minSize, maxSize, 0);
         all:SetValue(math.max(GetConVar("waterleveler_sizex"):GetFloat(), GetConVar("waterleveler_sizey"):GetFloat(), GetConVar("waterleveler_sizez"):GetFloat()));
+        ---@diagnostic disable-next-line: inject-field
         all.OnValueChanged = function(_, value)
             value = math.Round(value);
             for _, axis in ipairs({"x", "y", "z"}) do
@@ -180,6 +182,7 @@ if CLIENT then
 
         for _, axis in ipairs({{"x", "Width (X)"}, {"y", "Length (Y)"}, {"z", "Height (Z)"}}) do
             local sl = panel:NumSlider(axis[2], "waterleveler_size" .. axis[1], minSize, maxSize, 0);
+            ---@diagnostic disable-next-line: inject-field
             sl.OnValueChanged = function() timer.Simple(0, updateOffsetRange); end;
             sliders[#sliders + 1] = sl;
         end
@@ -189,12 +192,14 @@ if CLIENT then
         panel:ControlHelp("The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).");
         updateOffsetRange();
         panel:Help("Liquid (also the fluid's physics material)");
+        ---@diagnostic disable-next-line: missing-parameter
         local liquid = panel:ComboBox("");
         liquid:SetSortItems(false);
         local current = GetConVar("waterleveler_liquid");
         local isSlime = current and current:GetString() == "slime";
         liquid:AddChoice("Water", "water", not isSlime);
         liquid:AddChoice("Slime", "slime", isSlime);
+        ---@diagnostic disable-next-line: inject-field
         liquid.OnSelect = function(_, _, _, data)
             RunConsoleCommand("waterleveler_liquid", data);
             -- The colours follow the liquid: blue for water, green for slime.
@@ -224,6 +229,7 @@ if CLIENT then
         local function materialRow(label, convar)
             panel:Help(label);
             local entry = panel:TextEntry("", convar);
+            ---@diagnostic disable-next-line: missing-parameter
             local combo = panel:ComboBox("");
             combo:SetSortItems(false);
             combo:AddChoice("Presets...", nil, true);
@@ -231,6 +237,7 @@ if CLIENT then
                 combo:AddChoice(m);
             end
 
+            ---@diagnostic disable-next-line: inject-field
             combo.OnSelect = function(_, _, value) if value ~= "Presets..." then RunConsoleCommand(convar, value); end end;
             return entry;
         end
@@ -268,17 +275,23 @@ if CLIENT then
         return act == ACT_VM_HOLSTER or act == ACT_VM_DRAW and vm:GetCycle() < 0.99;
     end
 
+    ---@param ply Player
+    ---@param tr TraceResult
+    ---@return boolean
     local function holdingProp(ply, tr)
         local used = ply:GetEntityInUse();
         if IsValid(used) and used ~= ply and used:GetClass() ~= "worldspawn" then return true; end
         local ent = tr.Entity;
-        return IsValid(ent) and ent.IsPlayerHolding ~= nil and ent:IsPlayerHolding();
+        if ent == nil or not IsValid(ent) then return false; end
+        return ent.IsPlayerHolding ~= nil and ent:IsPlayerHolding();
     end
 
     hook.Add("PostDrawTranslucentRenderables", "waterleveler_tool_preview", function(_, skybox)
         if skybox then return; end
         local ply = LocalPlayer();
-        local wep = IsValid(ply) and ply:GetActiveWeapon();
+        if not IsValid(ply) then return; end
+        ---@type Weapon|{GetMode: fun(self: Weapon): string}
+        local wep = ply:GetActiveWeapon();
         if not IsValid(wep) or wep:GetClass() ~= "gmod_tool" or wep:GetMode() ~= "waterleveler" then return; end
         if not WLWater or toolgunBusy(ply) then return; end
         local tr = ply:GetEyeTrace();

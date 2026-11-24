@@ -8,6 +8,10 @@
 -- volume as a solid colour and/or outlined (blue water, green slime), whatever it looks like.
 -- The engine side of the volumes on this client is the client module (waterlevelercore),
 -- loaded by autorun/client/waterleveler.lua.
+-- The volume this entity draws.
+---@class Entity
+---@field WLBox table
+
 -- Client half of the networked fluid entity (invisible; the volume is drawn below).
 scripted_ents.Register({
     Type = "anim",
@@ -386,12 +390,24 @@ local tile = 128; -- world units per texture repeat
 -- One tiled quad, a -> b -> c -> d. Every vertex carries a colour, a normal
 -- and tangents: leaving them unset makes lit or shader-driven materials
 -- (including water) flicker or render black.
+---@param a Vector
+---@param b Vector
+---@param c Vector
+---@param d Vector
+---@param uLen number
+---@param vLen number
+---@param cr number
+---@param cg number
+---@param cb number
+---@param ca number
+---@param outward Vector?
 local function emitQuad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
     local u, v = uLen / tile, vLen / tile;
     local s = (b - a):GetNormalized();
     local t = (d - a):GetNormalized();
     local n = s:Cross(t);
-    local verts = {{a, 0, 0}, {b, u, 0}, {c, u, v}, {d, 0, v}};
+    ---@type {pos: Vector, u: number, v: number}[]
+    local verts = {{pos = a, u = 0, v = 0}, {pos = b, u = u, v = 0}, {pos = c, u = u, v = v}, {pos = d, u = 0, v = v}};
     if outward then
         -- Culled materials: the engine's front face is the clockwise one,
         -- so wind the quad clockwise as seen from outside the box.
@@ -400,7 +416,7 @@ local function emitQuad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
     end
 
     for _, vert in ipairs(verts) do
-        mesh.Position(vert[1]);
+        mesh.Position(vert.pos);
         mesh.Color(cr, cg, cb, ca);
         mesh.Normal(n);
         mesh.TangentS(s);
@@ -408,7 +424,7 @@ local function emitQuad(a, b, c, d, uLen, vLen, cr, cg, cb, ca, outward)
         -- Bump-mapped VertexLitGeneric reads its tangent from the user data (S, then the
         -- sign of the binormal); without it the bump map has no effect on a mesh.
         mesh.UserData(s.x, s.y, s.z, 1);
-        mesh.TexCoord(0, vert[2], vert[3]);
+        mesh.TexCoord(0, vert.u, vert.v);
         mesh.AdvanceVertex();
     end
 end
@@ -420,7 +436,7 @@ local function emitFace(entry, a, b, c, d, uLen, vLen, outward)
     if entry.vcol then r, g, b2, a2 = entry.color.r, entry.color.g, entry.color.b, entry.color.a; end
     if not entry.cull then outward = nil; end
     emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward);
-    if outward and not entry.oneSided then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, -outward); end
+    if outward and not entry.oneSided then emitQuad(a, b, c, d, uLen, vLen, r, g, b2, a2, outward * -1); end
 end
 
 local function setFaceState(entry)

@@ -1,0 +1,55 @@
+{
+    "runtime.version": "LuaJIT",
+    "type.castNumberToInteger": false,
+    "type.inferParamType": true,
+    "type.checkTableShape": true,
+    "runtime.nonstandardSymbol": ["!", "!=", "&&", "||", "//", "/**/", "continue"],
+    // Every check is on (all groups), except the ones that conflict with GLuaFixer, with the
+    // code style the addon follows, or with how Garry's Mod addons are written (see below).
+    "diagnostics.groupFileStatus": {
+        "unused": "Any",
+        "unbalanced": "Any",
+        "type-check": "Any",
+        "luadoc": "Any",
+        "codestyle": "Any",
+        "ambiguity": "Any",
+        "await": "Any",
+        "strong": "Any",
+        "redefined": "Any",
+        "global": "Any",
+        "conventions": "Any",
+        "duplicate": "Any",
+        "strict": "Any"
+    },
+    "diagnostics.severity": {
+        "unused-local": "Warning",
+        "unused-function": "Warning",
+        "unused-label": "Warning",
+        "unused-vararg": "Warning",
+        "trailing-space": "Warning",
+        "redundant-return": "Warning",
+        "empty-block": "Warning",
+        "code-after-break": "Warning",
+        "unreachable-code": "Warning",
+        "redefined-local": "Warning",
+        "lowercase-global": "Warning",
+        "undefined-env-child": "Warning"
+    },
+    "diagnostics.disable": [
+        // Typo-checks identifiers and strings against an English dictionary: "waterlevelercore",
+        // "gmcl", convar names, ...
+        "spell-check",
+        // Demands snake_case locals; GLuaFixer's inconsistent-variable-style rule and GMod's own
+        // API use camelCase and PascalCase.
+        "name-style-check",
+        // Addons share state through globals (WLWater, TOOL, ENT, ...), as Garry's Mod expects.
+        "global-element",
+        // TOOL and ENT functions are set per realm (if CLIENT ... else ...).
+        "duplicate-set-field",
+        // Flags every value whose type it cannot infer; the addon is dynamically typed and the
+        // engine's tables (traces, net messages, convars) are not annotated.
+        "no-unknown"
+    ],
+    "diagnostics.globals": ["waterlevelercore"],
+    "workspace.ignoreDir": ["target", "out", "src"]
+}
