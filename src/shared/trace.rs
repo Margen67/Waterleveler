@@ -383,7 +383,7 @@ pub(crate) fn plan_trace(
         let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
         let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
         if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
-            if t < current && best.map_or(true, |b| t < b.0) {
+            if t < current && best.is_none_or(|b| t < b.0) {
                 best = Some((t, axis, min_face, i));
             }
         }

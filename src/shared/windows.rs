@@ -4,23 +4,7 @@
 #[cfg(windows)]
 use crate::*;
 #[cfg(windows)]
-use std::ffi::{c_char, c_void, CStr};
-
-#[cfg(windows)]
-pub(crate) unsafe fn find_symbol(name: &CStr) -> *mut c_void {
-    unsafe {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GetModuleHandleA(module_name: *const c_char) -> *mut c_void;
-            fn GetProcAddress(module: *mut c_void, proc_name: *const c_char) -> *mut c_void;
-        }
-        let module = GetModuleHandleA(c"lua_shared.dll".as_ptr());
-        if module.is_null() {
-            return std::ptr::null_mut();
-        }
-        GetProcAddress(module, name.as_ptr())
-    }
-}
+use std::ffi::{c_char, c_void};
 
 /// The executable parts of a loaded module as (offset from `base`, size): the
 /// executable sections of a PE image, the executable segments of an ELF one.
@@ -96,7 +80,7 @@ pub(crate) mod win {
     unsafe fn make_writable(p: *mut u8, n: usize) -> Option<u32> {
         unsafe {
             let mut old = 0u32;
-            if VirtualProtect(p.cast::<c_void>(), n, PAGE_EXECUTE_READWRITE, &mut old) != 0 {
+            if VirtualProtect(p.cast::<c_void>(), n, PAGE_EXECUTE_READWRITE, &raw mut old) != 0 {
                 Some(old)
             } else {
                 None
@@ -106,7 +90,7 @@ pub(crate) mod win {
     unsafe fn restore_protect(p: *mut u8, n: usize, old: u32) {
         unsafe {
             let mut tmp = 0u32;
-            VirtualProtect(p.cast::<c_void>(), n, old, &mut tmp);
+            VirtualProtect(p.cast::<c_void>(), n, old, &raw mut tmp);
         }
     }
     #[cfg(feature = "server")]

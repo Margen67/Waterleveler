@@ -208,7 +208,9 @@ pub(crate) unsafe fn learn_fluid_layout(at: *const u8) -> Result<(), &'static st
     unsafe {
         let flags = read_disp(at, FLUID_EFLAGS_DISP_AT);
         let event = read_disp(at, FLUID_EVENT_DISP_AT);
-        if !(0x100..0x1000).contains(&flags) || event % 8 != 0 || !(0x100..0x1000).contains(&event)
+        if !(0x100..0x1000).contains(&flags)
+            || !event.is_multiple_of(8)
+            || !(0x100..0x1000).contains(&event)
         {
             return Err("the entity layout is not the expected one (different game build?)");
         }

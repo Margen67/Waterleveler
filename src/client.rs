@@ -14,7 +14,7 @@ pub(crate) use trace::*;
 pub(crate) use windows::*;
 
 use crate::*;
-use std::ffi::c_int;
+use gmod::lua::State;
 
 /// True when this DLL is the client module. With both features built in that is decided
 /// from the file name (gmcl_*); a build with only one feature has no choice to make.
@@ -41,10 +41,9 @@ pub(crate) unsafe fn running_as_client() -> bool {
     target_arch = "x86_64",
     feature = "client"
 ))]
-pub(crate) unsafe fn open_client(l: LuaState) -> c_int {
+pub(crate) unsafe fn open_client(l: State) -> i32 {
     unsafe {
-        let a = api();
-        let base = (a.gettop)(l);
+        let base = l.get_top();
         {
             let trace = match hook_state::install_client_contents() {
                 Ok(note) => note,
@@ -53,7 +52,7 @@ pub(crate) unsafe fn open_client(l: LuaState) -> c_int {
             *HOOK_STATUS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = format!("client: {trace}");
-            (a.createtable)(l, 0, 8);
+            l.create_table(0, 8);
             let t = base + 1;
             set_fn(l, t, c"AddVolume", l_add_volume);
             set_fn(l, t, c"RemoveVolume", l_remove_volume);
@@ -66,8 +65,8 @@ pub(crate) unsafe fn open_client(l: LuaState) -> c_int {
             set_fn(l, t, c"SetDebug", l_set_debug);
             set_fn(l, t, c"TakeDebugLog", l_take_debug_log);
             set_fn(l, t, c"HookStatus", l_hook_status);
-            (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
-            (a.settop)(l, base);
+            l.set_global(c"waterlevelercore".as_ptr());
+            l.set_top(base);
             0
         }
     }
@@ -78,16 +77,15 @@ pub(crate) unsafe fn open_client(l: LuaState) -> c_int {
     target_arch = "x86_64",
     feature = "client"
 ))]
-pub(crate) unsafe fn close_client(l: LuaState) -> c_int {
+pub(crate) unsafe fn close_client(l: State) -> i32 {
     unsafe {
-        let a = api();
-        let base = (a.gettop)(l);
+        let base = l.get_top();
         hook_state::uninstall_contents();
         CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
         volumes().clear();
-        (a.pushnil)(l);
-        (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());
-        (a.settop)(l, base);
+        l.push_nil();
+        l.set_global(c"waterlevelercore".as_ptr());
+        l.set_top(base);
         0
     }
 }

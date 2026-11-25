@@ -111,60 +111,57 @@ compile_error!("waterlevelercore supports Linux and Windows only");
 // underwater sound from that distance, so the client's hooked trace (see `shared/trace.rs`)
 // is all it needs.
 
-#[no_mangle]
-pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
-    unsafe {
-        let Some(loaded) = load_api() else {
-            return 0;
-        };
-        let _ = API.set(loaded);
-        #[cfg(all(
-            any(windows, target_os = "linux"),
-            target_arch = "x86_64",
-            feature = "client"
-        ))]
-        if running_as_client() {
-            return open_client(l);
-        }
-        #[cfg(feature = "server")]
-        {
-            open_server(l)
-        }
-        #[cfg(not(feature = "server"))]
-        {
-            let _ = l;
-            0
-        }
+/// The module's entry point. The `gmod` macro loads `lua_shared` and exports it as `gmod13_open`.
+#[gmod::gmod13_open]
+pub unsafe fn gmod13_open(l: gmod::lua::State) -> i32 {
+    unsafe { open_realm(l) }
+}
+
+// The body is a separate function: the `gmod` macro cannot parse `cfg` blocks or `c"..."` literals.
+unsafe fn open_realm(l: gmod::lua::State) -> i32 {
+    #[cfg(all(
+        any(windows, target_os = "linux"),
+        target_arch = "x86_64",
+        feature = "client"
+    ))]
+    if unsafe { running_as_client() } {
+        return unsafe { open_client(l) };
+    }
+    #[cfg(feature = "server")]
+    {
+        unsafe { open_server(l) }
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = l;
+        0
     }
 }
 
-#[no_mangle]
-#[cfg_attr(
-    not(any(feature = "server", windows)),
-    allow(unused_unsafe) // a client-only build has nothing unsafe to do off Windows
-)]
-pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
-    unsafe {
-        if API.get().is_none() {
-            return 0;
-        }
-        #[cfg(all(
-            any(windows, target_os = "linux"),
-            target_arch = "x86_64",
-            feature = "client"
-        ))]
-        if running_as_client() {
-            return close_client(l);
-        }
-        #[cfg(feature = "server")]
-        {
-            close_server(l)
-        }
-        #[cfg(not(feature = "server"))]
-        {
-            let _ = l;
-            0
-        }
+/// Exported as `gmod13_close`: removes the hooks and Lua functions again.
+#[gmod::gmod13_close]
+pub unsafe fn gmod13_close(l: gmod::lua::State) -> i32 {
+    unsafe { close_realm(l) }
+}
+
+// The body is a separate function: the `gmod` macro cannot parse `cfg` blocks or `c"..."` literals.
+unsafe fn close_realm(l: gmod::lua::State) -> i32 {
+    #[cfg(all(
+        any(windows, target_os = "linux"),
+        target_arch = "x86_64",
+        feature = "client"
+    ))]
+    if unsafe { running_as_client() } {
+        return unsafe { close_client(l) };
+    }
+    #[cfg(feature = "server")]
+    {
+        unsafe { close_server(l) }
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let _ = l;
+        0
     }
 }
 

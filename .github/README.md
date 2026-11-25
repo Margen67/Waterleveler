@@ -1,7 +1,7 @@
 # waterleveler (gmsv_waterlevelercore)
 
 Per-entity water level overrides and fake water volumes for Garry's Mod, as a
-dependency-free Rust binary module for the 64-bit (x86-64) branch. The server module
+Rust binary module for the 64-bit (x86-64) branch. The server module
 (`gmsv_`) and the client module (`gmcl_`) are separate builds. The water volumes work on the
 64-bit Windows server and client and on the 64-bit Linux server (`server_srv.so`) and client
 (`client.so`).
@@ -283,8 +283,9 @@ Not verified:
 
 ## Build
 
-`./build.sh` on Linux (linux64) or `./build.ps1` in PowerShell on Windows (win64). No
-crates are fetched. Needs Rust 1.77+.
+`./build.sh` on Linux (linux64) or `./build.ps1` in PowerShell on Windows (win64). Needs Rust
+nightly (the `gmod` crate, which wraps the Lua API, uses unstable features); `cargo` fetches
+the crates it depends on.
 
 The server and the client module are separate builds of the same crate: the `server`
 and `client` cargo features (both on by default, which is what `cargo test` uses). The

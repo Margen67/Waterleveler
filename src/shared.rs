@@ -7,7 +7,6 @@ mod abi;
 pub(crate) mod hook_state;
 #[cfg(target_os = "linux")]
 mod linux;
-mod lua;
 mod lua_api;
 #[cfg(all(feature = "server", feature = "client"))]
 mod realm;
@@ -21,7 +20,6 @@ mod windows;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::*;
-pub(crate) use lua::*;
 pub(crate) use lua_api::*;
 #[cfg(all(feature = "server", feature = "client"))]
 pub(crate) use realm::*;

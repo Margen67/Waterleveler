@@ -22,6 +22,8 @@ pub(crate) mod loaded_objects {
     }
 }
 
+// Not used while `gmod` loads lua_shared; kept for the Linux fix, should its loader not find the library.
+#[allow(dead_code)]
 pub(crate) unsafe fn find_symbol(name: &CStr) -> *mut c_void {
     unsafe {
         #[link(name = "dl")]
@@ -406,7 +408,8 @@ pub(crate) mod lin {
                 sname: std::ptr::null(),
                 saddr: std::ptr::null_mut(),
             };
-            if dladdr(is_client_module as *const c_void, &mut info) == 0 || info.fname.is_null() {
+            if dladdr(is_client_module as *const c_void, &raw mut info) == 0 || info.fname.is_null()
+            {
                 return false;
             }
             let path = CStr::from_ptr(info.fname).to_bytes();

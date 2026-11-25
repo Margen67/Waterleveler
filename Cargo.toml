@@ -2,7 +2,6 @@
 name = "gmsv_waterlevelercore"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.77"
 description = "Garry's Mod binary module (server and client): per-entity water level overrides and fake water volumes"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/Margen67/Waterleveler"
@@ -10,10 +9,10 @@ readme = ".github/README.md"
 keywords = ["garrys-mod", "gmod", "water"]
 categories = ["game-development"]
 
-# No dependencies on purpose: the module resolves the Lua C API from the
-# already-loaded lua_shared library at runtime, so it builds offline and does
-# not need import libraries when cross-compiling.
+# `gmod` wraps the Lua C API (it loads lua_shared at runtime, so there is no import library).
+# Its default `hax` feature (signature scanning and detours) is not used. It needs Rust nightly.
 [dependencies]
+gmod = { version = "17", default-features = false }
 
 # One DLL per realm: `server` (gmsv_) and `client` (gmcl_). The release builds enable one
 # each (see build.sh and build.ps1), so each carries only the code it needs; the default has both,

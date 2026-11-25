@@ -65,7 +65,7 @@ pub(crate) fn clip_bubble_trail(vols: &[Volume], from: [f32; 3], to: [f32; 3]) -
                 best = Some((t0, t1));
                 starts_inside = true;
             }
-        } else if !starts_inside && best.map_or(true, |b| t0 < b.0) {
+        } else if !starts_inside && best.is_none_or(|b| t0 < b.0) {
             best = Some((t0, t1));
         }
     }

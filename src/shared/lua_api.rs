@@ -2,51 +2,57 @@
 // Copyright (C) 2026 Margen67
 
 use crate::*;
-use std::ffi::{c_int, CStr, CString};
+use gmod::lua::{State, LUA_TNIL, LUA_TNONE, LUA_TNUMBER, LUA_TSTRING};
+use std::ffi::CStr;
 use std::sync::Mutex;
 
 pub(crate) static HOOK_STATUS: Mutex<String> = Mutex::new(String::new());
 
-pub(crate) unsafe fn fail(l: LuaState, msg: &CStr) -> c_int {
+/// Pushes `nil, msg` and returns the number of results.
+pub(crate) unsafe fn fail(l: State, msg: &str) -> i32 {
     unsafe {
-        let a = api();
-        (a.pushnil)(l);
-        (a.pushstring)(l, msg.as_ptr());
+        l.push_nil();
+        l.push_string(msg);
         2
     }
 }
 
+#[cfg(feature = "server")]
+/// Pushes a C string (the Lua stack takes it by length, so a `CStr` needs no conversion).
+pub(crate) unsafe fn push_cstr(l: State, s: &CStr) {
+    unsafe { l.push_binary_string(s.to_bytes()) }
+}
+
 /// `waterleveler.HookStatus()`
-pub(crate) unsafe extern "C-unwind" fn l_hook_status(l: LuaState) -> c_int {
-    unsafe {
-        let status = HOOK_STATUS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        // The short commit hash: shows which build is really loaded.
-        let status = format!("{status} [build {}]", env!("WL_BUILD"));
-        let text = CString::new(status).unwrap_or_default();
-        (api().pushstring)(l, text.as_ptr());
-        1
-    }
+#[gmod::lua_function]
+pub(crate) unsafe fn l_hook_status(l: State) -> i32 {
+    let status = HOOK_STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    // The short commit hash: shows which build is really loaded.
+    let status = format!("{status} [build {}]", env!("WL_BUILD"));
+    unsafe { l.push_string(&status) };
+    1
 }
 
 /// The optional liquid argument at stack index `idx`: "water" (default, also nil or
 /// none) or "slime".
-pub(crate) unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'static CStr> {
+pub(crate) unsafe fn parse_liquid(l: State, idx: i32) -> Result<i32, &'static str> {
+    const BAD: &str = "liquid must be \"water\" or \"slime\"";
     unsafe {
-        let a = api();
-        match (a.type_)(l, idx) {
+        match l.lua_type(idx) {
             LUA_TNONE | LUA_TNIL => Ok(CONTENTS_WATER),
-            LUA_TSTRING => {
-                let p = (a.tolstring)(l, idx, std::ptr::null_mut());
-                match CStr::from_ptr(p).to_bytes().to_ascii_lowercase().as_slice() {
-                    b"water" => Ok(CONTENTS_WATER),
-                    b"slime" => Ok(CONTENTS_SLIME),
-                    _ => Err(c"liquid must be \"water\" or \"slime\""),
-                }
-            }
-            _ => Err(c"liquid must be \"water\" or \"slime\""),
+            LUA_TSTRING => match l
+                .get_binary_string(idx)
+                .map(<[u8]>::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some(b"water") => Ok(CONTENTS_WATER),
+                Some(b"slime") => Ok(CONTENTS_SLIME),
+                _ => Err(BAD),
+            },
+            _ => Err(BAD),
         }
     }
 }
@@ -54,18 +60,18 @@ pub(crate) unsafe fn parse_liquid(l: LuaState, idx: c_int) -> Result<c_int, &'st
 /// waterleveler.AddVolume(x1, y1, z1, x2, y2, z2 [, liquid]) -> id | nil, err
 /// Adds a world-space box in which the engine sees water, or slime when `liquid` is
 /// "slime" ("water" is the default).
-pub(crate) unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_add_volume(l: State) -> i32 {
     unsafe {
-        let a = api();
         let mut v = [0f64; 6];
         for (i, slot) in v.iter_mut().enumerate() {
-            let idx = i as c_int + 1;
-            if (a.type_)(l, idx) != LUA_TNUMBER {
-                return fail(l, c"AddVolume needs 6 numbers: x1, y1, z1, x2, y2, z2");
+            let idx = i as i32 + 1;
+            if l.lua_type(idx) != LUA_TNUMBER {
+                return fail(l, "AddVolume needs 6 numbers: x1, y1, z1, x2, y2, z2");
             }
-            *slot = (a.tonumber)(l, idx);
+            *slot = l.to_number(idx);
             if !slot.is_finite() {
-                return fail(l, c"AddVolume coordinates must be finite");
+                return fail(l, "AddVolume coordinates must be finite");
             }
         }
         let contents = match parse_liquid(l, 7) {
@@ -100,9 +106,9 @@ pub(crate) unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
             id
         };
         id.map_or_else(
-            || fail(l, c"too many volumes (limit 256)"),
+            || fail(l, "too many volumes (limit 256)"),
             |id| {
-                (a.pushnumber)(l, f64::from(id));
+                l.push_number(f64::from(id));
                 1
             },
         )
@@ -110,115 +116,112 @@ pub(crate) unsafe extern "C-unwind" fn l_add_volume(l: LuaState) -> c_int {
 }
 
 /// waterleveler.RemoveVolume(id) -> bool
-pub(crate) unsafe extern "C-unwind" fn l_remove_volume(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_remove_volume(l: State) -> i32 {
     unsafe {
-        let a = api();
-        let id = (a.tonumber)(l, 1) as u32;
+        let id = l.to_number(1) as u32;
         let removed = {
             let mut vols = volumes();
             let before = vols.len();
             vols.retain(|v| v.id != id);
             vols.len() != before
         };
-        (a.pushboolean)(l, c_int::from(removed));
+        l.push_boolean(removed);
         1
     }
 }
 
 /// `waterleveler.ClearVolumes()`
-pub(crate) unsafe extern "C-unwind" fn l_clear_volumes(_l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_clear_volumes(_l: State) {
     volumes().clear();
-    0
 }
 
 /// `waterleveler.VolumeCount()`
-pub(crate) unsafe extern "C-unwind" fn l_volume_count(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_volume_count(l: State) -> i32 {
     unsafe {
         let n = volumes().len();
-        (api().pushnumber)(l, n as f64);
+        l.push_number(n as f64);
         1
     }
 }
 
 /// waterleveler.PointInVolume(x, y, z) -> bool (pure lookup, no engine needed)
-pub(crate) unsafe extern "C-unwind" fn l_point_in_volume(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_point_in_volume(l: State) -> i32 {
     unsafe {
-        let a = api();
         let p = [
-            (a.tonumber)(l, 1) as f32,
-            (a.tonumber)(l, 2) as f32,
-            (a.tonumber)(l, 3) as f32,
+            l.to_number(1) as f32,
+            l.to_number(2) as f32,
+            l.to_number(3) as f32,
         ];
         let inside = volumes().contains(p);
-        (a.pushboolean)(l, c_int::from(inside));
+        l.push_boolean(inside);
         1
     }
 }
 
 /// `waterleveler.IsContentsHooked()`
-pub(crate) unsafe extern "C-unwind" fn l_is_contents_hooked(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_is_contents_hooked(l: State) -> i32 {
     unsafe {
-        (api().pushboolean)(l, c_int::from(hook_state::contents_active()));
+        l.push_boolean(hook_state::contents_active());
         1
     }
 }
 
 /// `waterleveler.ContentsHits()` - engine point queries answered with water
-pub(crate) unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_contents_hits(l: State) -> i32 {
     unsafe {
         let n = VOLUME_HITS.load(std::sync::atomic::Ordering::Relaxed);
-        (api().pushnumber)(l, n as f64);
+        l.push_number(n as f64);
         1
     }
 }
 
 /// `waterleveler.SetDebug(1|0)` - log what the hooks answer near a volume (read it with `TakeDebugLog`)
-pub(crate) unsafe extern "C-unwind" fn l_set_debug(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_set_debug(l: State) {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        DEBUG.store(
-            (api().tonumber)(l, 1) != 0.0,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        DEBUG.store(l.to_number(1) != 0.0, std::sync::atomic::Ordering::Relaxed);
         #[cfg(not(target_arch = "x86_64"))]
         let _ = l;
-        0
     }
 }
 
 /// `waterleveler.TakeDebugLog()` -> string: the log lines since the last call, empties the log
-pub(crate) unsafe extern "C-unwind" fn l_take_debug_log(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_take_debug_log(l: State) -> i32 {
     unsafe {
         #[cfg(target_arch = "x86_64")]
         let text = take_debug_log();
         #[cfg(not(target_arch = "x86_64"))]
         let text = String::new();
-        let text = CString::new(text.replace('\0', "")).unwrap_or_default();
-        (api().pushstring)(l, text.as_ptr());
+        l.push_string(&text);
         1
     }
 }
 
 /// `waterleveler.TraceHits()` - engine traces rewritten as water-surface hits
-pub(crate) unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
+#[gmod::lua_function]
+pub(crate) unsafe fn l_trace_hits(l: State) -> i32 {
     unsafe {
         #[cfg(target_arch = "x86_64")]
         let n = TRACE_HITS.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(not(target_arch = "x86_64"))]
         let n = 0u64;
-        (api().pushnumber)(l, n as f64);
+        l.push_number(n as f64);
         1
     }
 }
 
-// ---------------------------------------------------------------------------
-// Module entry points
-// ---------------------------------------------------------------------------
-
-pub(crate) unsafe fn set_fn(l: LuaState, table: c_int, name: &CStr, f: LuaFn) {
+/// Sets `table[name] = f` for the table at stack index `table`.
+pub(crate) unsafe fn set_fn(l: State, table: i32, name: &CStr, f: gmod::lua::LuaFunction) {
     unsafe {
-        let a = api();
-        (a.pushcclosure)(l, f, 0);
-        (a.setfield)(l, table, name.as_ptr());
+        l.push_function(f);
+        l.set_field(table, name.as_ptr());
     }
 }
