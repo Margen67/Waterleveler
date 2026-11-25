@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not $GmodDir) {
+if (!$GmodDir) {
     $GmodDir = "${env:ProgramFiles(x86)}\Steam\steamapps\common\GarrysMod\garrysmod"
 }
 $Addon = 'addon\waterleveler'
@@ -24,15 +24,15 @@ New-Item -ItemType Directory -Force -Path out | Out-Null
 # Tuned for this machine's CPU; the DLL may not run on older CPUs.
 $env:RUSTFLAGS = "$env:RUSTFLAGS -C target-cpu=native".Trim()
 
-function Build-Module([string]$Feature, [string]$Output) {
+function Invoke-ModuleBuild([string]$Feature, [string]$Output) {
     cargo build --release --no-default-features --features $Feature
     if ($LASTEXITCODE -ne 0) { throw "cargo build ($Feature) failed" }
     Copy-Item -Force 'target\release\gmsv_waterlevelercore.dll' "out\$Output"
 }
 
-Build-Module 'server' 'gmsv_waterlevelercore_win64.dll'
-Build-Module 'client' 'gmcl_waterlevelercore_win64.dll'
-Write-Host 'built out\gmsv_waterlevelercore_win64.dll and out\gmcl_waterlevelercore_win64.dll'
+Invoke-ModuleBuild 'server' 'gmsv_waterlevelercore_win64.dll'
+Invoke-ModuleBuild 'client' 'gmcl_waterlevelercore_win64.dll'
+Write-Output 'built out\gmsv_waterlevelercore_win64.dll and out\gmcl_waterlevelercore_win64.dll'
 
 # Delete the old copy first, so files removed from the addon don't linger.
 $AddonDest = Join-Path $GmodDir 'addons\waterleveler'
@@ -41,4 +41,4 @@ New-Item -ItemType Directory -Force -Path (Join-Path $GmodDir 'lua\bin'), $Addon
 Copy-Item -Force 'out\gmsv_waterlevelercore_win64.dll' (Join-Path $GmodDir 'lua\bin')
 Copy-Item -Force 'out\gmcl_waterlevelercore_win64.dll' (Join-Path $GmodDir 'lua\bin')
 Copy-Item -Recurse -Force "$Addon\*" $AddonDest
-Write-Host "server and client modules -> $GmodDir\lua\bin, addon -> $AddonDest"
+Write-Output "server and client modules -> $GmodDir\lua\bin, addon -> $AddonDest"

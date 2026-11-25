@@ -32,6 +32,44 @@ jobs:
           find addon -name '*.lua' -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
           git diff --exit-code
 
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Lint the shell scripts
+        run: shellcheck build.sh
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Lint the workflows
+        run: docker run --rm -v "${PWD}:/repo" --workdir /repo rhysd/actionlint:latest -color
+
+  psscriptanalyzer:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    env:
+      POWERSHELL_TELEMETRY_OPTOUT: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Install PSScriptAnalyzer
+        run: Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Lint the PowerShell scripts
+        run: Invoke-ScriptAnalyzer -Path . -Recurse -EnableExit -ReportSummary
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -101,23 +139,25 @@ jobs:
           cargo clippy --release --locked --no-default-features --features server
           cargo clippy --release --locked --no-default-features --features client
 
-      - name: Build the server and client modules
-        shell: bash
+      - name: Build the server module
+        run: cargo build --release --locked --no-default-features --features server
+
+      - name: Collect the server module
         run: |-
-          set -e
-          mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
-          cargo build --release --locked --no-default-features --features server
-          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
-          cargo build --release --locked --no-default-features --features client
-          cp target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmcl_waterlevelercore_win64.dll
+          New-Item -ItemType Directory -Force package/garrysmod/lua/bin, package/garrysmod/addons/waterleveler | Out-Null
+          Copy-Item target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmsv_waterlevelercore_win64.dll
+
+      - name: Build the client module
+        run: cargo build --release --locked --no-default-features --features client
+
+      - name: Collect the client module
+        run: Copy-Item target/release/gmsv_waterlevelercore.dll package/garrysmod/lua/bin/gmcl_waterlevelercore_win64.dll
 
       - name: Assemble the garrysmod folder
-        shell: bash
         run: |-
-          set -e
-          cp -r addon/waterleveler/. package/garrysmod/addons/waterleveler/
-          cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
-          find package -type f | sort
+          Copy-Item -Recurse -Force addon/waterleveler/* package/garrysmod/addons/waterleveler/
+          Copy-Item LICENSE package/garrysmod/addons/waterleveler/LICENSE
+          Get-ChildItem package -Recurse -File | Sort-Object FullName | ForEach-Object FullName
 
       - name: Create the 7z archive
         working-directory: package
