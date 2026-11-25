@@ -4,10 +4,13 @@
 
 #[macro_use]
 mod abi;
+pub(crate) mod hook_state;
 #[cfg(target_os = "linux")]
 mod linux;
 mod lua;
 mod lua_api;
+#[cfg(all(feature = "server", feature = "client"))]
+mod realm;
 mod scan;
 mod state;
 mod trace;
@@ -20,6 +23,8 @@ mod windows;
 pub(crate) use linux::*;
 pub(crate) use lua::*;
 pub(crate) use lua_api::*;
+#[cfg(all(feature = "server", feature = "client"))]
+pub(crate) use realm::*;
 pub(crate) use scan::*;
 pub(crate) use state::*;
 pub(crate) use trace::*;

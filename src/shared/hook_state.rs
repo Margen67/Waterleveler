@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Margen67
-#[allow(clippy::wildcard_imports)]
-// this code needs more names than the other builds use
-use super::*;
-#[cfg(feature = "server")]
-use crate::STOLEN;
+// Which of the crate's names this code needs depends on the build.
+use crate::*;
 
 #[cfg(feature = "server")]
 pub(crate) static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);

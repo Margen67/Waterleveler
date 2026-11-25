@@ -27,7 +27,7 @@ use std::ffi::c_int;
 pub(crate) unsafe fn running_as_client() -> bool {
     #[cfg(feature = "server")]
     unsafe {
-        client_module::is_client_module()
+        is_client_module()
     }
     #[cfg(not(feature = "server"))]
     true

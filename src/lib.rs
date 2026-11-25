@@ -108,59 +108,8 @@ compile_error!("waterlevelercore supports Linux and Windows only");
 //
 // Nothing about the water explosion is patched on the client: its effect finds the
 // surface itself with a MASK_WATER trace up from the blast point and picks the
-// underwater sound from that distance, so the client's hooked trace (see `engine_hook`)
+// underwater sound from that distance, so the client's hooked trace (see `shared/trace.rs`)
 // is all it needs.
-
-#[cfg(all(
-    any(windows, target_os = "linux"),
-    target_arch = "x86_64",
-    feature = "server",
-    feature = "client"
-))]
-mod client_module;
-
-#[cfg(all(target_arch = "x86_64", any(windows, target_os = "linux")))]
-mod hook_state;
-
-#[cfg(not(all(target_arch = "x86_64", any(windows, target_os = "linux"))))]
-mod hook_state {
-    #[cfg(feature = "server")]
-    pub(crate) const unsafe fn install() -> Result<usize, &'static str> {
-        Err("engine hook is only available for the 64-bit Windows and Linux servers")
-    }
-    #[cfg(feature = "server")]
-    pub(crate) const unsafe fn uninstall() {}
-    #[cfg(feature = "server")]
-    pub(crate) const fn active() -> bool {
-        false
-    }
-    #[cfg(feature = "server")]
-    pub(crate) const unsafe fn install_contents() -> Result<String, &'static str> {
-        Err("engine hook is only available for the 64-bit Windows and Linux servers")
-    }
-    pub(crate) const unsafe fn uninstall_contents() {}
-    pub(crate) const fn contents_active() -> bool {
-        false
-    }
-    #[cfg(feature = "server")]
-    pub(crate) const unsafe fn fluid_attach(
-        _: usize,
-        _: [f32; 4],
-        _: &super::FluidSettings,
-    ) -> Result<u32, &'static str> {
-        Err("fluids are only available for the 64-bit Windows and Linux servers")
-    }
-    #[cfg(feature = "server")]
-    pub(crate) const unsafe fn fluid_detach(_: u32) -> bool {
-        false
-    }
-    #[cfg(feature = "server")]
-    pub(crate) const unsafe fn fluid_detach_all() {}
-    #[cfg(feature = "server")]
-    pub(crate) const fn fluid_count() -> usize {
-        0
-    }
-}
 
 #[no_mangle]
 pub unsafe extern "C-unwind" fn gmod13_open(l: LuaState) -> c_int {
