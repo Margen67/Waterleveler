@@ -403,7 +403,7 @@ pub(crate) fn plan_trace(
         0.0
     };
     let t = (t_entry + push)
-        .min((t_entry + t_exit) * 0.5)
+        .min(f32::midpoint(t_entry, t_exit))
         .min((current - t_entry).mul_add(0.5, t_entry))
         .max(t_entry);
     let mut end = origin;

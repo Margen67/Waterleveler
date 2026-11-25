@@ -9,19 +9,21 @@ readme = ".github/README.md"
 keywords = ["garrys-mod", "gmod", "water"]
 categories = ["game-development"]
 
-# `gmod` wraps the Lua C API (it loads lua_shared at runtime, so there is no import library).
-# `region` changes code protection and allocates trampolines, `libloading` gets engine functions.
-# Its default `hax` feature (signature scanning and detours) is not used. It needs Rust nightly.
+# `gmod` wraps the Lua C API (it loads lua_shared at runtime, so there is no import library);
+# its default `hax` feature (signature scanning and detours) is not used, and it needs Rust
+# nightly. `object` reads the PE and ELF headers and `region` changes code protection.
+# `detour` (the server's inline hooks) and `libloading` (the client's `CreateInterface`) are
+# only built for the realm that uses them.
 [dependencies]
-detour = "0.11.1"
+detour = { version = "0.11.1", optional = true }
 gmod = { version = "17", default-features = false }
-libloading = "0.9.1"
+libloading = { version = "0.9.1", optional = true }
 object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }
 region = "4.0.2"
 
-# Windows: the engine modules, the code protection and the instruction cache.
+# Windows: the engine modules and the module that loaded this one.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 # Linux: the loaded-object list (`dl_iterate_phdr`) and `dladdr`.
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -32,8 +34,8 @@ libc = "0.2.191"
 # which is what the tests need, and then the realm is chosen from the DLL's file name.
 [features]
 default = ["server", "client"]
-server = []
-client = []
+server = ["dep:detour"]
+client = ["dep:libloading"]
 
 [lib]
 name = "gmsv_waterlevelercore"
