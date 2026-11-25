@@ -2,18 +2,26 @@
 // Copyright (C) 2026 Margen67
 // Code shared by the server and the client module.
 
+#[macro_use]
+mod abi;
 #[cfg(target_os = "linux")]
 mod linux;
 mod lua;
 mod lua_api;
+mod scan;
 mod state;
-#[cfg(windows)]
+mod trace;
+// The Windows code also builds under `cfg(test)`: the tests run a Windows server.dll's
+// machine code on whatever host runs them.
+#[cfg(any(windows, test))]
 mod windows;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::*;
 pub(crate) use lua::*;
 pub(crate) use lua_api::*;
+pub(crate) use scan::*;
 pub(crate) use state::*;
-#[cfg(windows)]
+pub(crate) use trace::*;
+#[cfg(any(windows, test))]
 pub(crate) use windows::*;

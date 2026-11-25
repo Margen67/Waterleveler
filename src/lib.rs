@@ -75,11 +75,12 @@ pub(crate) use std::ffi::{c_char, c_int, c_void, CStr, CString};
 #[allow(unused_imports)]
 pub(crate) use std::sync::{Arc, Mutex};
 
+#[macro_use]
+mod shared;
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "server")]
 mod server;
-mod shared;
 #[cfg(feature = "client")]
 pub(crate) use client::*;
 #[cfg(feature = "server")]
@@ -100,9 +101,6 @@ compile_error!("waterlevelercore supports Linux and Windows only");
 //   * m_nWaterLevel is a byte at this+0x2ab.
 //   * The entity index is `*(i16*)(*(void**)(this + 0x30) + 6)` (m_pPev ->
 //     m_EdictIndex); this is exactly what the Lua binding Entity:EntIndex does.
-
-#[cfg(target_arch = "x86_64")]
-mod engine_hook;
 
 // ---------------------------------------------------------------------------
 // Client realm (gmcl_waterlevelercore)

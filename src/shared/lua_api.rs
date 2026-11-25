@@ -176,7 +176,7 @@ pub(crate) unsafe extern "C-unwind" fn l_contents_hits(l: LuaState) -> c_int {
 pub(crate) unsafe extern "C-unwind" fn l_set_debug(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        engine_hook::DEBUG.store(
+        DEBUG.store(
             (api().tonumber)(l, 1) != 0.0,
             std::sync::atomic::Ordering::Relaxed,
         );
@@ -190,7 +190,7 @@ pub(crate) unsafe extern "C-unwind" fn l_set_debug(l: LuaState) -> c_int {
 pub(crate) unsafe extern "C-unwind" fn l_take_debug_log(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        let text = engine_hook::take_debug_log();
+        let text = take_debug_log();
         #[cfg(not(target_arch = "x86_64"))]
         let text = String::new();
         let text = CString::new(text.replace('\0', "")).unwrap_or_default();
@@ -203,7 +203,7 @@ pub(crate) unsafe extern "C-unwind" fn l_take_debug_log(l: LuaState) -> c_int {
 pub(crate) unsafe extern "C-unwind" fn l_trace_hits(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        let n = engine_hook::TRACE_HITS.load(std::sync::atomic::Ordering::Relaxed);
+        let n = TRACE_HITS.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(not(target_arch = "x86_64"))]
         let n = 0u64;
         (api().pushnumber)(l, n as f64);

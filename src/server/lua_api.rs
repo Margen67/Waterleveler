@@ -13,7 +13,7 @@ pub(crate) const ORIG_KEY: &CStr = c"__waterlevel_orig";
 pub(crate) fn hook_hits() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
-        engine_hook::HITS.load(std::sync::atomic::Ordering::Relaxed)
+        HITS.load(std::sync::atomic::Ordering::Relaxed)
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -322,7 +322,7 @@ pub(crate) unsafe extern "C-unwind" fn l_fluid_count(l: LuaState) -> c_int {
 pub(crate) unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        let n = engine_hook::BUBBLE_CLIPS.load(std::sync::atomic::Ordering::Relaxed);
+        let n = BUBBLE_CLIPS.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(not(target_arch = "x86_64"))]
         let n = 0u64;
         (api().pushnumber)(l, n as f64);
@@ -334,7 +334,7 @@ pub(crate) unsafe extern "C-unwind" fn l_bubble_clips(l: LuaState) -> c_int {
 pub(crate) unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        let n = engine_hook::EXPLOSION_FIXES.load(std::sync::atomic::Ordering::Relaxed);
+        let n = EXPLOSION_FIXES.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(not(target_arch = "x86_64"))]
         let n = 0u64;
         (api().pushnumber)(l, n as f64);
@@ -346,7 +346,7 @@ pub(crate) unsafe extern "C-unwind" fn l_explosion_fixes(l: LuaState) -> c_int {
 pub(crate) unsafe extern "C-unwind" fn l_explosions_redirected(l: LuaState) -> c_int {
     unsafe {
         #[cfg(target_arch = "x86_64")]
-        let n = engine_hook::EXPLOSIONS_REDIRECTED.load(std::sync::atomic::Ordering::Relaxed);
+        let n = EXPLOSIONS_REDIRECTED.load(std::sync::atomic::Ordering::Relaxed);
         #[cfg(not(target_arch = "x86_64"))]
         let n = 0u64;
         (api().pushnumber)(l, n as f64);

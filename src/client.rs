@@ -1,6 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Margen67
 
+#[cfg(not(any(windows, test)))]
+mod linux;
+mod trace;
+#[cfg(any(windows, test))]
+mod windows;
+
+#[cfg(not(any(windows, test)))]
+pub(crate) use linux::*;
+pub(crate) use trace::*;
+#[cfg(any(windows, test))]
+pub(crate) use windows::*;
+
 use crate::*;
 use std::ffi::c_int;
 
@@ -71,7 +83,7 @@ pub(crate) unsafe fn close_client(l: LuaState) -> c_int {
         let a = api();
         let base = (a.gettop)(l);
         hook_state::uninstall_contents();
-        engine_hook::CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
+        CLIENT_ENTITY_LIST.store(0, std::sync::atomic::Ordering::SeqCst);
         volumes().clear();
         (a.pushnil)(l);
         (a.setfield)(l, LUA_GLOBALSINDEX, c"waterlevelercore".as_ptr());

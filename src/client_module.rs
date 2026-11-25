@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Margen67
-#[allow(clippy::wildcard_imports)]
-// the Windows code needs more names than the Linux server uses
-use super::*;
 
 /// True when this DLL was loaded as the client module (file name gmcl_*).
 #[cfg(windows)]
@@ -33,5 +30,5 @@ pub(crate) unsafe fn is_client_module() -> bool {
 
 #[cfg(not(windows))]
 pub(crate) unsafe fn is_client_module() -> bool {
-    unsafe { engine_hook::os::is_client_module() }
+    unsafe { crate::os::is_client_module() }
 }

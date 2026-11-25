@@ -3,7 +3,6 @@
 // Exact float comparisons are on values the code copies or sets, items sit next to the
 // test that uses them.
 #![allow(clippy::float_cmp, clippy::items_after_statements)]
-use super::engine_hook::*;
 use super::*;
 use std::sync::atomic::Ordering;
 
