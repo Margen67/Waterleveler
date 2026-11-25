@@ -15,7 +15,7 @@ pub(crate) unsafe fn install() -> Result<usize, &'static str> {
         }
         let target = scan_image(base)?;
         learn_water_level_layout(target)?;
-        let original = crate::install(target, &os::PLATFORM)?;
+        let original = crate::install(target, &PLATFORM)?;
         *TARGET
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((target as usize, original));
@@ -31,7 +31,7 @@ pub(crate) unsafe fn uninstall() {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some((target, original)) = taken {
-            crate::uninstall(target as *mut u8, &original, &os::PLATFORM);
+            crate::uninstall(target as *mut u8, &original, &PLATFORM);
         }
     }
 }
@@ -59,7 +59,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
         }
         let func = scan_sig(base, UPDATE_WATER_STATE_SIG)?;
         let trace = trace_global_from(func).read();
-        let (slot, original) = install_contents_hook(trace, &os::PLATFORM)?;
+        let (slot, original) = install_contents_hook(trace, &PLATFORM)?;
         let mut hooks = vec![(
             slot,
             original,
@@ -93,7 +93,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
             TRACE_RAY_SLOT,
             trace_hook,
             &ORIGINAL_TRACE_RAY,
-            &os::PLATFORM,
+            &PLATFORM,
         ) {
             Ok((entry, orig)) => {
                 hooks.push((entry, orig, trace_hook));
@@ -112,7 +112,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
                 BUBBLE_TRAIL_SIG,
                 BUBBLE_TRAIL_STOLEN,
                 hook_bubble_trail as *const () as usize,
-                &os::PLATFORM,
+                &PLATFORM,
             )
         }) {
             Ok(patch) => {
@@ -132,7 +132,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
                 FLUID_END_TOUCH_SIG,
                 FLUID_END_TOUCH_STOLEN,
                 hook_fluid_end_touch as *const () as usize,
-                &os::PLATFORM,
+                &PLATFORM,
             )
         }) {
             Ok(patch) => {
@@ -163,7 +163,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
                 TE_CREATE_STOLEN,
                 TE_CREATE_RIP_LEAS,
                 hook_te_create as *const () as usize,
-                &os::PLATFORM,
+                &PLATFORM,
             )?;
             ORIGINAL_TE_CREATE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
             *TE_HOOK
@@ -191,7 +191,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
         let mut patches = Vec::new();
         for i in 0..EXPLOSION_TARGETS.len() {
             let r = find_explosion_target(base, i).and_then(|(t, sig, stolen)| {
-                install_patch(t, sig, stolen, EXPLOSION_HOOKS[i] as usize, &os::PLATFORM)
+                install_patch(t, sig, stolen, EXPLOSION_HOOKS[i] as usize, &PLATFORM)
             });
             if let Ok(patch) = r {
                 EXPLOSION_TRAMPOLINES[i]
@@ -343,7 +343,7 @@ pub(crate) unsafe fn uninstall_contents() {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
             if let Some(patch) = te_patch {
-                uninstall_patch(&patch, &os::PLATFORM);
+                uninstall_patch(&patch, &PLATFORM);
             }
             TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
             let explosion_patches = std::mem::take(
@@ -352,14 +352,14 @@ pub(crate) unsafe fn uninstall_contents() {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
             for patch in explosion_patches {
-                uninstall_patch(&patch, &os::PLATFORM);
+                uninstall_patch(&patch, &PLATFORM);
             }
             let patch = FLUID_END_TOUCH
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
             if let Some(patch) = patch {
-                uninstall_patch(&patch, &os::PLATFORM);
+                uninstall_patch(&patch, &PLATFORM);
             }
             forget_dead_fluids();
             // Bubble detour first: it calls through the trampoline, not the slots.
@@ -368,7 +368,7 @@ pub(crate) unsafe fn uninstall_contents() {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
             if let Some(patch) = patch {
-                uninstall_patch(&patch, &os::PLATFORM);
+                uninstall_patch(&patch, &PLATFORM);
             }
         }
         let taken = std::mem::take(
@@ -377,7 +377,7 @@ pub(crate) unsafe fn uninstall_contents() {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
         for (entry, original, hook) in taken.into_iter().rev() {
-            uninstall_slot_hook(entry, hook, original, &os::PLATFORM);
+            uninstall_slot_hook(entry, hook, original, &PLATFORM);
         }
     }
 }
@@ -401,7 +401,7 @@ pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
         }
         let at = scan_sig(base, CLIENT_TRACE_SIG)?;
         let trace = trace_global_from_load(at).read();
-        let (slot, original) = install_contents_hook(trace, &os::PLATFORM)?;
+        let (slot, original) = install_contents_hook(trace, &PLATFORM)?;
         let mut hooks = vec![(
             slot,
             original,
@@ -433,7 +433,7 @@ pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
                     TRACE_RAY_SLOT,
                     trace_hook,
                     &ORIGINAL_TRACE_RAY,
-                    &os::PLATFORM,
+                    &PLATFORM,
                 ) {
                     Ok((entry, orig)) => {
                         hooks.push((entry, orig, trace_hook));

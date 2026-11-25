@@ -4,18 +4,16 @@
 /// True when this DLL was loaded as the client module (file name gmcl_*).
 #[cfg(windows)]
 pub(crate) unsafe fn is_client_module() -> bool {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleFileNameA, GetModuleHandleExA, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
     unsafe {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn GetModuleHandleExA(flags: u32, addr: *const c_void, out: *mut *mut c_void) -> i32;
-            fn GetModuleFileNameA(module: *mut c_void, buf: *mut u8, size: u32) -> u32;
-        }
-        const FROM_ADDRESS_UNCHANGED: u32 = 0x4 | 0x2;
-        let mut module: *mut c_void = std::ptr::null_mut();
+        let mut module = std::ptr::null_mut();
         if GetModuleHandleExA(
-            FROM_ADDRESS_UNCHANGED,
-            is_client_module as *const c_void,
-            &mut module,
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            is_client_module as *const u8,
+            &raw mut module,
         ) == 0
         {
             return false;

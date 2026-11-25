@@ -10,9 +10,20 @@ keywords = ["garrys-mod", "gmod", "water"]
 categories = ["game-development"]
 
 # `gmod` wraps the Lua C API (it loads lua_shared at runtime, so there is no import library).
+# `region` changes code protection and allocates trampolines, `libloading` gets engine functions.
 # Its default `hax` feature (signature scanning and detours) is not used. It needs Rust nightly.
 [dependencies]
 gmod = { version = "17", default-features = false }
+libloading = "0.9.1"
+region = "4.0.2"
+
+# Windows: the engine modules, the code protection and the instruction cache.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Diagnostics_Debug", "Win32_System_Threading"] }
+
+# Linux: the loaded-object list (`dl_iterate_phdr`) and `dladdr`.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.191"
 
 # One DLL per realm: `server` (gmsv_) and `client` (gmcl_). The release builds enable one
 # each (see build.sh and build.ps1), so each carries only the code it needs; the default has both,

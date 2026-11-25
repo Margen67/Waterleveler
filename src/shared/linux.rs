@@ -1,94 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Margen67
 
-use crate::*;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
-
-/// glibc's `dl_iterate_phdr` and the start of its `struct dl_phdr_info` (all that is read).
-pub(crate) mod loaded_objects {
-    use std::ffi::{c_char, c_int, c_void};
-
-    #[repr(C)]
-    pub(crate) struct DlPhdrInfo {
-        pub(crate) addr: usize,
-        pub(crate) name: *const c_char,
-    }
-
-    extern "C" {
-        pub(crate) fn dl_iterate_phdr(
-            callback: unsafe extern "C" fn(*const DlPhdrInfo, usize, *mut c_void) -> c_int,
-            data: *mut c_void,
-        ) -> c_int;
-    }
-}
-
-// Not used while `gmod` loads lua_shared; kept for the Linux fix, should its loader not find the library.
-#[allow(dead_code)]
-pub(crate) unsafe fn find_symbol(name: &CStr) -> *mut c_void {
-    unsafe {
-        #[link(name = "dl")]
-        extern "C" {
-            fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
-            fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-        }
-        use loaded_objects::{dl_iterate_phdr, DlPhdrInfo};
-        // lua_shared is already loaded by the game; RTLD_NOLOAD never loads anything new.
-        const CANDIDATES: &[&CStr] = &[
-            c"lua_shared.so",
-            c"lua_shared_srv.so",
-            c"bin/linux64/lua_shared.so",
-            c"bin/linux64/lua_shared_srv.so",
-            c"garrysmod/bin/linux64/lua_shared.so",
-            c"garrysmod/bin/lua_shared_srv.so",
-            c"garrysmod/bin/lua_shared.so",
-            c"bin/linux32/lua_shared.so",
-        ];
-        const RTLD_LAZY: c_int = 0x1;
-        const RTLD_NOLOAD: c_int = 0x4;
-
-        // The game loads lua_shared by path, and dlopen only matches a bare name against a
-        // loaded library's soname, so look the loaded library up by its full path first.
-        unsafe extern "C" fn collect(
-            info: *const DlPhdrInfo,
-            _size: usize,
-            data: *mut c_void,
-        ) -> c_int {
-            unsafe {
-                let name = (*info).name;
-                if !name.is_null() {
-                    let name = CStr::from_ptr(name);
-                    if name.to_bytes().windows(10).any(|w| w == b"lua_shared") {
-                        (*data.cast::<Vec<CString>>()).push(name.to_owned());
-                    }
-                }
-                0
-            }
-        }
-        let mut loaded: Vec<CString> = Vec::new();
-        dl_iterate_phdr(collect, (&raw mut loaded).cast::<c_void>());
-        for path in &loaded {
-            let handle = dlopen(path.as_ptr(), RTLD_LAZY | RTLD_NOLOAD);
-            if !handle.is_null() {
-                let sym = dlsym(handle, name.as_ptr());
-                if !sym.is_null() {
-                    return sym;
-                }
-            }
-        }
-
-        for lib in CANDIDATES {
-            let handle = dlopen(lib.as_ptr(), RTLD_LAZY | RTLD_NOLOAD);
-            if !handle.is_null() {
-                let sym = dlsym(handle, name.as_ptr());
-                if !sym.is_null() {
-                    return sym;
-                }
-            }
-        }
-        // Fall back to the global scope (RTLD_DEFAULT == NULL on Linux).
-        dlsym(std::ptr::null_mut(), name.as_ptr())
-    }
-}
+use std::ffi::{c_int, c_void, CStr, CString};
 
 /// The 64-bit Linux server's signatures. Always compiled (the tests check them against a
 /// real `server_srv.so`), used only by the Linux build.
@@ -156,7 +69,7 @@ pub(crate) unsafe fn executable_regions(
     unsafe {
         #[cfg(test)]
         if std::slice::from_raw_parts(base, 2) == b"MZ" {
-            return pe_regions(base);
+            return crate::pe_regions(base);
         }
         elf_regions(base)
     }
@@ -191,120 +104,11 @@ pub(crate) unsafe fn elf_regions(base: *const u8) -> Result<Vec<(usize, usize)>,
     }
 }
 
-// ---- Windows glue (thin on purpose) ----------------------------------
-
 // ---- Linux glue (thin on purpose) -------------------------------------
 
 pub(crate) mod lin {
     #[allow(clippy::wildcard_imports)]
     use super::*;
-
-    const PROT_READ: c_int = 1;
-    const PROT_WRITE: c_int = 2;
-    const PROT_EXEC: c_int = 4;
-    const MAP_PRIVATE: c_int = 2;
-    const MAP_ANONYMOUS: c_int = 0x20;
-    const PAGE: usize = 4096;
-
-    extern "C" {
-        #[cfg(feature = "server")]
-        fn mmap(
-            addr: *mut c_void,
-            len: usize,
-            prot: c_int,
-            flags: c_int,
-            fd: c_int,
-            off: i64,
-        ) -> *mut c_void;
-        fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
-    }
-
-    #[cfg(feature = "server")]
-    unsafe fn alloc_exec(size: usize) -> *mut u8 {
-        unsafe {
-            let p = mmap(
-                std::ptr::null_mut(),
-                size,
-                PROT_READ | PROT_WRITE | PROT_EXEC,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            );
-            if p as isize == -1 {
-                std::ptr::null_mut()
-            } else {
-                p.cast::<u8>()
-            }
-        }
-    }
-
-    /// Protection bits (`PROT_*`) of the mapping that holds `addr`.
-    fn protection_of(addr: usize) -> Option<c_int> {
-        let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
-        for line in maps.lines() {
-            let mut it = line.split_whitespace();
-            let (range, perms) = (it.next()?, it.next()?);
-            let (lo, hi) = range.split_once('-')?;
-            let (lo, hi) = (
-                usize::from_str_radix(lo, 16).ok()?,
-                usize::from_str_radix(hi, 16).ok()?,
-            );
-            if (lo..hi).contains(&addr) {
-                let p = perms.as_bytes();
-                return Some(
-                    if p.first() == Some(&b'r') {
-                        PROT_READ
-                    } else {
-                        0
-                    } | if p.get(1) == Some(&b'w') {
-                        PROT_WRITE
-                    } else {
-                        0
-                    } | if p.get(2) == Some(&b'x') {
-                        PROT_EXEC
-                    } else {
-                        0
-                    },
-                );
-            }
-        }
-        None
-    }
-
-    fn page_span(p: *mut u8, n: usize) -> (*mut c_void, usize) {
-        let start = p as usize & !(PAGE - 1);
-        let end = (p as usize + n).div_ceil(PAGE) * PAGE;
-        (start as *mut c_void, end - start)
-    }
-
-    unsafe fn make_writable(p: *mut u8, n: usize) -> Option<u32> {
-        unsafe {
-            let old = protection_of(p as usize)?;
-            let (start, len) = page_span(p, n);
-            (mprotect(start, len, old | PROT_WRITE) == 0).then_some(old as u32)
-        }
-    }
-    unsafe fn restore_protect(p: *mut u8, n: usize, old: u32) {
-        unsafe {
-            let (start, len) = page_span(p, n);
-            mprotect(start, len, old as c_int);
-        }
-    }
-    #[cfg(feature = "server")]
-    const unsafe fn flush(_p: *mut u8, _n: usize) {
-        // x86 keeps instruction fetches coherent with stores
-    }
-
-    pub(crate) const PLATFORM: Platform = Platform {
-        #[cfg(feature = "server")]
-        alloc_exec,
-        make_writable,
-        restore_protect,
-        #[cfg(feature = "server")]
-        flush,
-    };
-
-    use crate::loaded_objects::{dl_iterate_phdr, DlPhdrInfo};
 
     /// Load address and full path of the loaded library whose path ends with one of
     /// `suffixes` (for example `/server_srv.so`).
@@ -315,19 +119,19 @@ pub(crate) mod lin {
                 found: Option<(usize, CString)>,
             }
             unsafe extern "C" fn find(
-                info: *const DlPhdrInfo,
+                info: *mut libc::dl_phdr_info,
                 _size: usize,
                 data: *mut c_void,
             ) -> c_int {
                 unsafe {
                     let search = &mut *data.cast::<Search<'_>>();
-                    let name = (*info).name;
+                    let name = (*info).dlpi_name;
                     if name.is_null() {
                         return 0;
                     }
                     let name = CStr::from_ptr(name);
                     if search.suffixes.iter().any(|s| name.to_bytes().ends_with(s)) {
-                        search.found = Some(((*info).addr, name.to_owned()));
+                        search.found = Some(((*info).dlpi_addr as usize, name.to_owned()));
                         return 1;
                     }
                     0
@@ -337,7 +141,7 @@ pub(crate) mod lin {
                 suffixes,
                 found: None,
             };
-            dl_iterate_phdr(find, (&raw mut search).cast::<c_void>());
+            libc::dl_iterate_phdr(Some(find), (&raw mut search).cast::<c_void>());
             search.found
         }
     }
@@ -363,26 +167,23 @@ pub(crate) mod lin {
     /// An interface of client.so (`CreateInterface("VClientEntityList003")`).
     pub(crate) unsafe fn client_interface(name: &CStr) -> usize {
         unsafe {
-            #[link(name = "dl")]
-            extern "C" {
-                fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
-                fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-            }
-            const RTLD_LAZY: c_int = 0x1;
-            const RTLD_NOLOAD: c_int = 0x4;
+            use libloading::os::unix::{Library, RTLD_LAZY};
+            use std::ffi::c_char;
             let Some((_, path)) = loaded_module(&[b"/client.so"]) else {
                 return 0;
             };
-            let handle = dlopen(path.as_ptr(), RTLD_LAZY | RTLD_NOLOAD);
-            if handle.is_null() {
+            // The library is already loaded, so this only takes a reference that is dropped
+            // again below.
+            let Ok(lib) =
+                Library::open(Some(path.as_c_str().to_string_lossy().as_ref()), RTLD_LAZY)
+            else {
                 return 0;
-            }
-            let create = dlsym(handle, c"CreateInterface".as_ptr());
-            if create.is_null() {
+            };
+            let Ok(create) =
+                lib.get::<engine_fn!((*const c_char, *mut c_int) -> usize)>(b"CreateInterface\0")
+            else {
                 return 0;
-            }
-            let create: engine_fn!((*const c_char, *mut c_int) -> usize) =
-                std::mem::transmute(create);
+            };
             create(name.as_ptr(), std::ptr::null_mut())
         }
     }
@@ -391,28 +192,13 @@ pub(crate) mod lin {
     #[cfg(feature = "client")]
     pub(crate) unsafe fn is_client_module() -> bool {
         unsafe {
-            #[repr(C)]
-            struct DlInfo {
-                fname: *const c_char,
-                fbase: *mut c_void,
-                sname: *const c_char,
-                saddr: *mut c_void,
-            }
-            #[link(name = "dl")]
-            extern "C" {
-                fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
-            }
-            let mut info = DlInfo {
-                fname: std::ptr::null(),
-                fbase: std::ptr::null_mut(),
-                sname: std::ptr::null(),
-                saddr: std::ptr::null_mut(),
-            };
-            if dladdr(is_client_module as *const c_void, &raw mut info) == 0 || info.fname.is_null()
+            let mut info: libc::Dl_info = std::mem::zeroed();
+            if libc::dladdr(is_client_module as *const c_void, &raw mut info) == 0
+                || info.dli_fname.is_null()
             {
                 return false;
             }
-            let path = CStr::from_ptr(info.fname).to_bytes();
+            let path = CStr::from_ptr(info.dli_fname).to_bytes();
             let name = path.rsplit(|&c| c == b'/').next().unwrap_or(path);
             name.starts_with(b"gmcl_")
         }

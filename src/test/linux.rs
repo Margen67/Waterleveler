@@ -169,7 +169,7 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
             l::SIG,
             14,
             hook_set_water_level as *const () as usize,
-            &lin::PLATFORM,
+            &PLATFORM,
         )
         .expect("install SetWaterLevel");
         let written = std::slice::from_raw_parts(text, 14);
@@ -200,7 +200,7 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
             })
             .unwrap();
         assert_eq!(line.split_whitespace().nth(1), Some("r-xp"));
-        uninstall_patch(&patch, &lin::PLATFORM);
+        uninstall_patch(&patch, &PLATFORM);
         assert_eq!(std::slice::from_raw_parts(text, 14), &before[..]);
 
         // CBaseTempEntity::Create: its first lea is rewritten in the trampoline
@@ -212,7 +212,7 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
             15,
             &[8], // the Linux build's TE_CREATE_RIP_LEAS (tests use the Windows constants)
             hook_te_create as *const () as usize,
-            &lin::PLATFORM,
+            &PLATFORM,
         )
         .expect("install Create");
         let t = std::slice::from_raw_parts(patch.trampoline as *const u8, 18 + 14);
@@ -227,7 +227,7 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
             u64::from_le_bytes(t[24..32].try_into().unwrap()) as usize,
             create as usize + 15
         );
-        uninstall_patch(&patch, &lin::PLATFORM);
+        uninstall_patch(&patch, &PLATFORM);
 
         // globals (the tests build with the Windows constants, so the Linux displacement
         // positions are spelled out here: 95 / 3 / 3)

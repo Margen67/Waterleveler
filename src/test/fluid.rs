@@ -14,6 +14,7 @@ pub(crate) unsafe extern "win64" fn fake_end_touch(_: *mut c_void, _: *mut c_voi
     END_TOUCH_ORIGINAL_CALLS.fetch_add(1, Ordering::SeqCst);
 }
 
+#[allow(clippy::missing_const_for_fn)] // a stand-in for an engine function
 pub(crate) unsafe extern "win64" fn fake_get_game_data(object: *mut c_void) -> *mut u8 {
     unsafe { *(object as *const *mut u8).add(1) }
 }
