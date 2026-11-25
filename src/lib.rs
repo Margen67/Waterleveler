@@ -234,4 +234,4 @@ pub unsafe extern "C-unwind" fn gmod13_close(l: LuaState) -> c_int {
     feature = "server",
     feature = "client"
 ))]
-mod tests;
+mod test;
