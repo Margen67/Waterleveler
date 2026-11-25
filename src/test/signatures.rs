@@ -178,7 +178,7 @@ pub(crate) fn find_all_agrees_with_the_naive_matcher() {
     };
     for round in 0..4000 {
         let hay: Vec<u8> = (0..next() % 200).map(|_| (next() % 3) as u8).collect();
-        let pat: Vec<Option<u8>> = (0..1 + next() % 8)
+        let pat: Vec<Option<u8>> = (0..=next() % 8)
             .map(|_| (next() % 4 != 0).then(|| (next() % 3) as u8))
             .collect();
         assert_eq!(
