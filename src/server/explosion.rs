@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 pub(crate) unsafe fn find_explosion_target(
     base: *const u8,
     i: usize,
-) -> Result<(*mut u8, &'static str, usize), &'static str> {
+) -> Result<*mut u8, &'static str> {
     unsafe {
         let mut last = "signature not found (different server.dll build?)";
-        for (sig, stolen) in EXPLOSION_TARGETS[i] {
+        for sig in EXPLOSION_TARGETS[i] {
             match scan_sig(base, sig) {
-                Ok(at) => return Ok((at, *sig, *stolen)),
+                Ok(at) => return Ok(at),
                 Err(e) => last = e,
             }
         }
@@ -81,9 +81,6 @@ pub(crate) unsafe fn hook_explosion2(
 
 pub(crate) const EXPLOSION_HOOKS: [ExplosionFn; 3] =
     [hook_explosion0, hook_explosion1, hook_explosion2];
-
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) const DISPATCH_EFFECT_STOLEN: usize = 16;
 
 // ---- Explosion events (CTEExplosion::Create) -------------------------
 //

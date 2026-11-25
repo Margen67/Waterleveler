@@ -103,20 +103,13 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
 
         // Third hook: bubble trails are clipped to the volume they are in.
-        let bubble = match scan_sig(base, BUBBLE_TRAIL_SIG).and_then(|t| {
-            install_patch(
-                t,
-                BUBBLE_TRAIL_SIG,
-                BUBBLE_TRAIL_STOLEN,
-                hook_bubble_trail as *const () as usize,
-                &PLATFORM,
-            )
-        }) {
-            Ok(patch) => {
-                BUBBLE_TRAMPOLINE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+        let bubble = match scan_sig(base, BUBBLE_TRAIL_SIG)
+            .and_then(|t| install_detour(t, hook_bubble_trail as *const (), &BUBBLE_TRAMPOLINE))
+        {
+            Ok(detour) => {
                 *BUBBLE
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detour);
                 " + UTIL_BubbleTrail".to_string()
             }
             Err(why) => format!(" (bubble-trail clipping inactive: {why})"),
@@ -124,20 +117,16 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
         // Fluids destroyed while props are in them must not crash FluidEndTouch.
         let end_touch = match scan_sig(base, FLUID_END_TOUCH_SIG).and_then(|t| {
             learn_fluid_layout(t)?;
-            install_patch(
+            install_detour(
                 t,
-                FLUID_END_TOUCH_SIG,
-                FLUID_END_TOUCH_STOLEN,
-                hook_fluid_end_touch as *const () as usize,
-                &PLATFORM,
+                hook_fluid_end_touch as *const (),
+                &FLUID_END_TOUCH_TRAMPOLINE,
             )
         }) {
-            Ok(patch) => {
-                FLUID_END_TOUCH_TRAMPOLINE
-                    .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+            Ok(detour) => {
                 *FLUID_END_TOUCH
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detour);
                 " + FluidEndTouch".to_string()
             }
             Err(why) => format!(" (removing a volume with props in it may crash: {why})"),
@@ -154,18 +143,10 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
             let vtable = te_explosion_vtable(base)?;
             TE_EXPLOSION_VTABLE.store(vtable, std::sync::atomic::Ordering::SeqCst);
             let create = scan_sig(base, TE_CREATE_SIG)?;
-            let patch = install_patch_relocating(
-                create,
-                TE_CREATE_SIG,
-                TE_CREATE_STOLEN,
-                TE_CREATE_RIP_LEAS,
-                hook_te_create as *const () as usize,
-                &PLATFORM,
-            )?;
-            ORIGINAL_TE_CREATE.store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
+            let detour = install_detour(create, hook_te_create as *const (), &ORIGINAL_TE_CREATE)?;
             *TE_HOOK
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(patch);
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detour);
             Ok(())
         })();
         let te_note = match te_note {
@@ -187,13 +168,15 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
         // Fourth: explosives in a volume take the water explosion.
         let mut patches = Vec::new();
         for i in 0..EXPLOSION_TARGETS.len() {
-            let r = find_explosion_target(base, i).and_then(|(t, sig, stolen)| {
-                install_patch(t, sig, stolen, EXPLOSION_HOOKS[i] as usize, &PLATFORM)
+            let r = find_explosion_target(base, i).and_then(|t| {
+                install_detour(
+                    t,
+                    EXPLOSION_HOOKS[i] as *const (),
+                    &EXPLOSION_TRAMPOLINES[i],
+                )
             });
-            if let Ok(patch) = r {
-                EXPLOSION_TRAMPOLINES[i]
-                    .store(patch.trampoline, std::sync::atomic::Ordering::SeqCst);
-                patches.push(patch);
+            if let Ok(detour) = r {
+                patches.push(detour);
             }
         }
         // A parenthesis marks a part that is not working (`hook_state::install` callers
@@ -217,14 +200,14 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
 }
 
 #[cfg(feature = "server")]
-pub(crate) static EXPLOSIONS: Mutex<Vec<Patch>> = Mutex::new(Vec::new());
+pub(crate) static EXPLOSIONS: Mutex<Vec<detour::RawDetour>> = Mutex::new(Vec::new());
 #[cfg(feature = "server")]
-pub(crate) static TE_HOOK: Mutex<Option<Patch>> = Mutex::new(None);
+pub(crate) static TE_HOOK: Mutex<Option<detour::RawDetour>> = Mutex::new(None);
 
 #[cfg(feature = "server")]
-pub(crate) static BUBBLE: Mutex<Option<Patch>> = Mutex::new(None);
+pub(crate) static BUBBLE: Mutex<Option<detour::RawDetour>> = Mutex::new(None);
 #[cfg(feature = "server")]
-pub(crate) static FLUID_END_TOUCH: Mutex<Option<Patch>> = Mutex::new(None);
+pub(crate) static FLUID_END_TOUCH: Mutex<Option<detour::RawDetour>> = Mutex::new(None);
 
 #[cfg(feature = "server")]
 /// (id, controller pointer, contents) for every fluid this module created.
@@ -339,34 +322,26 @@ pub(crate) unsafe fn uninstall_contents() {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            if let Some(patch) = te_patch {
-                uninstall_patch(&patch, &PLATFORM);
-            }
+            drop(te_patch);
             TE_EXPLOSION_VTABLE.store(0, std::sync::atomic::Ordering::SeqCst);
             let explosion_patches = std::mem::take(
                 &mut *EXPLOSIONS
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
-            for patch in explosion_patches {
-                uninstall_patch(&patch, &PLATFORM);
-            }
+            drop(explosion_patches);
             let patch = FLUID_END_TOUCH
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            if let Some(patch) = patch {
-                uninstall_patch(&patch, &PLATFORM);
-            }
+            drop(patch);
             forget_dead_fluids();
             // Bubble detour first: it calls through the trampoline, not the slots.
             let patch = BUBBLE
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
-            if let Some(patch) = patch {
-                uninstall_patch(&patch, &PLATFORM);
-            }
+            drop(patch);
         }
         let taken = std::mem::take(
             &mut *CONTENTS

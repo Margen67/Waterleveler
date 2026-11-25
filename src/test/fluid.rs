@@ -106,9 +106,6 @@ pub(crate) fn fluid_end_touch_signature_is_unique_in_server_dll() {
         pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
     let hits = find_all(&d[text_raw..text_raw + text_size], &pat);
     assert_eq!(hits.len(), 1, "must match exactly once");
-    // The stolen bytes end on an instruction boundary (`inc dword [rcx+0x1f0]`).
-    let o = text_raw + hits[0] + FLUID_END_TOUCH_STOLEN;
-    assert_eq!(&d[o..o + 3], &[0xFF, 0x81, 0xF0]);
 }
 
 #[test]

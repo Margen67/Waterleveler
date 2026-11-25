@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Margen67
 
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
 pub(crate) fn client_trace_signature_and_ray_helper_match_once_in_client_dll() {
@@ -88,5 +89,66 @@ pub(crate) fn ray_helper_signature_gives_the_swept_offset() {
             off == 0x41 || off == 0x49,
             "unexpected m_IsSwept offset {off:#x}"
         );
+    }
+}
+
+#[test]
+pub(crate) fn every_hook_target_can_be_detoured_and_restored() {
+    let Some(d) = server_dll() else {
+        eprintln!("SERVER_DLL_X64 not set; skipping");
+        return;
+    };
+    let pe = parse_pe(&d);
+    unsafe {
+        let base = map_image_exec(&d, &pe);
+        let slot = AtomicUsize::new(0);
+        let mut targets = vec![
+            (
+                "SetWaterLevel",
+                scan_sig(base, SIG),
+                hook_set_water_level as *const (),
+            ),
+            (
+                "UTIL_BubbleTrail",
+                scan_sig(base, BUBBLE_TRAIL_SIG),
+                hook_bubble_trail as *const (),
+            ),
+            (
+                "FluidEndTouch",
+                scan_sig(base, FLUID_END_TOUCH_SIG),
+                hook_fluid_end_touch as *const (),
+            ),
+            (
+                "CBaseTempEntity::Create",
+                scan_sig(base, TE_CREATE_SIG),
+                hook_te_create as *const (),
+            ),
+        ];
+        for (i, hook) in EXPLOSION_HOOKS.iter().enumerate() {
+            targets.push((
+                "explosion check",
+                find_explosion_target(base, i),
+                *hook as *const (),
+            ));
+        }
+        for (name, target, hook) in targets {
+            let target = target.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let before = std::slice::from_raw_parts(target, 32).to_vec();
+            let detour =
+                install_detour(target, hook, &slot).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_ne!(slot.load(Ordering::SeqCst), 0, "{name}: trampoline");
+            assert_ne!(
+                std::slice::from_raw_parts(target, 5),
+                &before[..5],
+                "{name}"
+            );
+            drop(detour);
+            assert_eq!(
+                std::slice::from_raw_parts(target, 32),
+                &before[..],
+                "{name}"
+            );
+            slot.store(0, Ordering::SeqCst);
+        }
     }
 }

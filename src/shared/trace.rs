@@ -5,15 +5,11 @@ use crate::*;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-/// The handful of OS services needed to patch code.
+/// The handful of OS services needed to change code protection.
 pub(crate) struct Platform {
-    #[cfg(feature = "server")]
-    pub alloc_exec: unsafe fn(usize) -> *mut u8,
     /// Makes the range writable; returns the previous protection.
     pub make_writable: unsafe fn(*mut u8, usize) -> Option<u32>,
     pub restore_protect: unsafe fn(*mut u8, usize, u32),
-    #[cfg(feature = "server")]
-    pub flush: unsafe fn(*mut u8, usize),
 }
 
 pub(crate) static ORIGINAL_GPC: AtomicUsize = AtomicUsize::new(0);

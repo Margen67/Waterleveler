@@ -72,6 +72,16 @@ pub(crate) fn map_image(d: &[u8], pe: &Pe) -> Vec<u8> {
     img
 }
 
+/// The mapped image in executable memory, so code in it can be detoured in place.
+pub(crate) unsafe fn map_image_exec(d: &[u8], pe: &Pe) -> *mut u8 {
+    unsafe {
+        let img = map_image(d, pe);
+        let p = rwx(img.len());
+        std::ptr::copy_nonoverlapping(img.as_ptr(), p, img.len());
+        p
+    }
+}
+
 pub(crate) unsafe fn rwx(len: usize) -> *mut u8 {
     unsafe {
         // PROT_READ|WRITE|EXEC, MAP_PRIVATE|MAP_ANONYMOUS
@@ -79,10 +89,6 @@ pub(crate) unsafe fn rwx(len: usize) -> *mut u8 {
         assert_ne!(p as isize, -1, "mmap failed");
         p.cast::<u8>()
     }
-}
-
-pub(crate) unsafe fn t_alloc(n: usize) -> *mut u8 {
-    unsafe { rwx(n.max(4096)) }
 }
 
 // Same signature as the Windows implementation it stands in for.
@@ -93,11 +99,7 @@ pub(crate) const unsafe fn t_writable(_: *mut u8, _: usize) -> Option<u32> {
 
 pub(crate) const unsafe fn t_restore(_: *mut u8, _: usize, _: u32) {}
 
-pub(crate) const unsafe fn t_flush(_: *mut u8, _: usize) {}
-
 pub(crate) const TEST_PLATFORM: Platform = Platform {
-    alloc_exec: t_alloc,
     make_writable: t_writable,
     restore_protect: t_restore,
-    flush: t_flush,
 };

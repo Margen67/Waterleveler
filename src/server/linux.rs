@@ -42,8 +42,6 @@ pub(crate) const OBJ_GET_CALLBACK_FLAGS_SLOT: usize = 0xc0 / 8;
 
 pub(crate) const FLUID_END_TOUCH_SIG: &str = linux_sigs::FLUID_END_TOUCH_SIG;
 
-pub(crate) const FLUID_END_TOUCH_STOLEN: usize = 14;
-
 pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x90 / 8;
 
 pub(crate) const ENTITY_EFLAGS_OFFSET: usize = 0x1b8;
@@ -52,9 +50,7 @@ pub(crate) const ENTITY_EVENT_SLOT: usize = 0x2f0 / 8;
 
 pub(crate) const BUBBLE_TRAIL_SIG: &str = linux_sigs::BUBBLE_TRAIL_SIG;
 
-pub(crate) const BUBBLE_TRAIL_STOLEN: usize = 15;
-
-pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = linux_sigs::EXPLOSION_TARGETS;
+pub(crate) const EXPLOSION_TARGETS: [&[&str]; 3] = linux_sigs::EXPLOSION_TARGETS;
 
 pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2d3;
 
@@ -77,8 +73,6 @@ pub(crate) const TE_SCALE_OFFSET: usize = 0x24;
 pub(crate) const TE_FLAGS_OFFSET: usize = 0x28;
 
 pub(crate) const TE_MAGNITUDE_OFFSET: usize = 0x30;
-
-pub(crate) const TE_CREATE_RIP_LEAS: &[usize] = &[8];
 
 /// `CBaseTempEntity::m_pszName` (a `const char*`).
 pub(crate) const TE_NAME_OFFSET: usize = 8;
@@ -105,5 +99,3 @@ pub(crate) const unsafe fn te_explosion_vtable(_base: *const u8) -> Result<usize
 }
 
 pub(crate) const TE_CREATE_SIG: &str = linux_sigs::TE_CREATE_SIG;
-
-pub(crate) const TE_CREATE_STOLEN: usize = 15;

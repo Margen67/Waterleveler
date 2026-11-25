@@ -114,9 +114,6 @@ pub(crate) const FLUID_EFLAGS_DISP_AT: usize = 106;
 
 pub(crate) const FLUID_EVENT_DISP_AT: usize = 139;
 
-/// Whole instructions covered by the 14-byte jump.
-pub(crate) const FLUID_END_TOUCH_STOLEN: usize = 16;
-
 /// `IPhysicsObject::GetGameData` (the entity), vtable offset 0x88.
 pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x88 / 8;
 
@@ -146,9 +143,6 @@ pub(crate) const BUBBLE_TRAIL_SIG: &str =
                                     F3 0F 58 15 ?? ?? ?? ?? 0F 29 78 D8 48 8B FA \
                                     44 0F 29 48 B8 48 8B D9 E8";
 
-/// Whole instructions covered by the 14-byte jump.
-pub(crate) const BUBBLE_TRAIL_STOLEN: usize = 19;
-
 // ---- Explosions ------------------------------------------------------
 //
 // Several explosive entities choose between the normal explosion and the
@@ -163,18 +157,18 @@ pub(crate) const BUBBLE_TRAIL_STOLEN: usize = 19;
 
 /// Per function: the prologue of each known build (tried in order).
 /// Newer builds store rbx at [rsp+0x10] and reshuffle the pushes.
-pub(crate) const EXPLOSION_TARGETS: [&[(&str, usize)]; 3] = [
+pub(crate) const EXPLOSION_TARGETS: [&[&str]; 3] = [
     &[
-        ("48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 02", 18),
-        ("48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 02", 18),
+        "48 89 5C 24 08 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 02",
+        "48 89 5C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 02",
     ],
     &[
-        ("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 ?? 02 00 00", 19),
-        ("48 8B C4 48 89 58 10 48 89 70 18 55 57 41 56 48 8D 68 C8 48 81 EC 20 01 00 00 0F 29 70 D8 48 8B D9 8B 89 ?? 02 00 00", 15),
+        "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 4C 89 70 20 55 48 8D 68 D8 48 81 EC 20 01 00 00 0F 29 70 E8 48 8B D9 8B 89 ?? 02 00 00",
+        "48 8B C4 48 89 58 10 48 89 70 18 55 57 41 56 48 8D 68 C8 48 81 EC 20 01 00 00 0F 29 70 D8 48 8B D9 8B 89 ?? 02 00 00",
     ],
     &[
-        ("48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 00", 16),
-        ("48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 00", 16),
+        "48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 00",
+        "48 89 5C 24 10 48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 80 B9 ?? 02 00 00 00",
     ],
 ];
 
@@ -227,9 +221,6 @@ pub(crate) const TE_SCALE_OFFSET: usize = 0x28;
 pub(crate) const TE_FLAGS_OFFSET: usize = 0x2c;
 
 pub(crate) const TE_MAGNITUDE_OFFSET: usize = 0x34;
-
-/// Offsets in the `Create` prologue of `lea r64,[rip+disp32]` instructions.
-pub(crate) const TE_CREATE_RIP_LEAS: &[usize] = &[];
 
 /// True for a `CTEExplosion`: Windows compares the vtable (found through RTTI); Linux has
 /// no RTTI for it and compares the temp entity's name, "Explosion".
@@ -313,5 +304,3 @@ pub(crate) unsafe fn rtti_vtable(base: *const u8, name: &[u8]) -> Result<usize, 
 pub(crate) const TE_CREATE_SIG: &str =
     "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 \
                                  48 8B 05 ?? ?? ?? ?? 48 8B EA 0F 29 74 24 30";
-
-pub(crate) const TE_CREATE_STOLEN: usize = 20;

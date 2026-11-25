@@ -17,10 +17,6 @@ pub(crate) fn bubble_trail_signature_is_unique_in_server_dll() {
     let hits = find_all(&d[text_raw..text_raw + text_size], &pat);
     assert_eq!(hits.len(), 1, "must match exactly once");
     println!("UTIL_BubbleTrail at server.dll+{:#x}", text_rva + hits[0]);
-    // The stolen bytes end on an instruction boundary: the next byte is
-    // the `movss xmm1,[rcx+8]` that follows the 7-byte `sub rsp,0xe0`.
-    let o = text_raw + hits[0] + BUBBLE_TRAIL_STOLEN;
-    assert_eq!(&d[o..o + 3], &[0xF3, 0x0F, 0x10]);
 }
 
 #[test]
@@ -168,64 +164,5 @@ pub(crate) fn bubble_hook_clips_count_and_releases_the_lock() {
         assert!(BUBBLE_CALLS.lock().unwrap().is_empty());
 
         volumes().clear();
-    }
-}
-
-#[test]
-pub(crate) fn install_patch_on_real_bubble_trail_bytes() {
-    let Some(d) = server_dll() else {
-        eprintln!("SERVER_DLL_X64 not set; skipping");
-        return;
-    };
-    let pe = parse_pe(&d);
-    let (_, _text_rva, _, text_raw, _, _) =
-        pe.sections.iter().find(|s| s.0 == ".text").unwrap().clone();
-    let pat = parse_sig(BUBBLE_TRAIL_SIG);
-    let at = find_all(&d[text_raw..], &pat)[0];
-    let func = &d[text_raw + at..][..0x8f];
-    unsafe {
-        let target = rwx(4096);
-        std::ptr::copy_nonoverlapping(func.as_ptr(), target, func.len());
-        let patch = install_patch(
-            target,
-            BUBBLE_TRAIL_SIG,
-            BUBBLE_TRAIL_STOLEN,
-            hook_bubble_trail as *const () as usize,
-            &TEST_PLATFORM,
-        )
-        .expect("install_patch");
-        let written = std::slice::from_raw_parts(target, BUBBLE_TRAIL_STOLEN);
-        assert_eq!(&written[..6], &[0xFF, 0x25, 0, 0, 0, 0], "jmp [rip+0]");
-        assert_eq!(
-            u64::from_le_bytes(written[6..14].try_into().unwrap()),
-            hook_bubble_trail as *const () as usize as u64
-        );
-        assert!(written[14..].iter().all(|&b| b == 0x90));
-        // Trampoline = stolen bytes + absolute jump back past them.
-        let t = std::slice::from_raw_parts(patch.trampoline as *const u8, BUBBLE_TRAIL_STOLEN + 14);
-        assert_eq!(&t[..BUBBLE_TRAIL_STOLEN], &func[..BUBBLE_TRAIL_STOLEN]);
-        assert_eq!(
-            &t[BUBBLE_TRAIL_STOLEN..BUBBLE_TRAIL_STOLEN + 6],
-            &[0xFF, 0x25, 0, 0, 0, 0]
-        );
-        assert_eq!(
-            u64::from_le_bytes(t[BUBBLE_TRAIL_STOLEN + 6..].try_into().unwrap()),
-            target as u64 + BUBBLE_TRAIL_STOLEN as u64
-        );
-        // A wrong prologue is refused and nothing is written.
-        let bad = rwx(4096);
-        std::ptr::write_bytes(bad, 0xCC, 64);
-        assert!(install_patch(
-            bad,
-            BUBBLE_TRAIL_SIG,
-            BUBBLE_TRAIL_STOLEN,
-            1,
-            &TEST_PLATFORM
-        )
-        .is_err());
-        assert_eq!(*bad, 0xCC);
-
-        uninstall_patch(&patch, &TEST_PLATFORM);
-        assert_eq!(std::slice::from_raw_parts(target, func.len()), func);
     }
 }

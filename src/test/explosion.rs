@@ -121,7 +121,7 @@ pub(crate) fn redirected_explosion_carries_the_blast_point_in_the_effect_start()
 }
 
 #[test]
-pub(crate) fn te_create_signature_is_unique_and_stolen_bytes_are_whole_instructions() {
+pub(crate) fn te_create_signature_is_unique_and_is_the_vtable_slot_4_function() {
     let Some(d) = server_dll() else {
         eprintln!("SERVER_DLL_X64 not set; skipping");
         return;
@@ -130,12 +130,6 @@ pub(crate) fn te_create_signature_is_unique_and_stolen_bytes_are_whole_instructi
     let img = map_image(&d, &pe);
     unsafe {
         let at = scan_sig(img.as_ptr(), TE_CREATE_SIG).expect("must match once");
-        let b = std::slice::from_raw_parts(at, TE_CREATE_STOLEN + 7);
-        // The instruction after the stolen bytes is the rip-relative `mov rax, [rip+x]`.
-        assert_eq!(
-            &b[TE_CREATE_STOLEN..TE_CREATE_STOLEN + 3],
-            &[0x48, 0x8B, 0x05]
-        );
         // and it is the very function the CTEExplosion vtable names in slot 4.
         let vt = te_explosion_vtable(img.as_ptr()).unwrap();
         let slot4 = (vt as *const usize).add(4).read();
@@ -159,13 +153,12 @@ pub(crate) fn dispatch_effect_signature_is_unique() {
     let img = map_image(&d, &pe);
     unsafe {
         let at = scan_sig(img.as_ptr(), DISPATCH_EFFECT_SIG).expect("must match once");
-        let b = std::slice::from_raw_parts(at, DISPATCH_EFFECT_STOLEN + 5);
-        assert_eq!(b[DISPATCH_EFFECT_STOLEN], 0x48); // next instruction starts here (lea rcx,[rsp+30h])
+        let _ = at;
     }
 }
 
 #[test]
-pub(crate) fn explosion_signatures_are_unique_and_stolen_bytes_are_whole_instructions() {
+pub(crate) fn explosion_signatures_are_unique() {
     let Some(d) = server_dll() else {
         eprintln!("SERVER_DLL_X64 not set; skipping");
         return;
@@ -174,17 +167,8 @@ pub(crate) fn explosion_signatures_are_unique_and_stolen_bytes_are_whole_instruc
     let img = map_image(&d, &pe);
     for i in 0..EXPLOSION_TARGETS.len() {
         unsafe {
-            let (at, _sig, stolen) = find_explosion_target(img.as_ptr(), i)
+            find_explosion_target(img.as_ptr(), i)
                 .expect("explosion signature must match exactly once");
-            assert!(stolen >= 14);
-            let bytes = std::slice::from_raw_parts(at, stolen + 8);
-            // No rip-relative operands or relative branches in the stolen part.
-            assert!(
-                !bytes[..stolen]
-                    .windows(1)
-                    .any(|b| b[0] == 0xE8 || b[0] == 0xE9),
-                "call/jmp in stolen bytes"
-            );
         }
     }
 }

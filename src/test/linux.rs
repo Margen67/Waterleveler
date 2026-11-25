@@ -39,29 +39,6 @@ pub(crate) fn elf_matches(d: &[u8], sig: &str) -> Vec<usize> {
 }
 
 #[test]
-pub(crate) fn relocated_rip_lea_loads_the_same_address() {
-    // lea r14,[rip+0x1000] at offset 8 of a function at 0x5000_0000
-    let mut code = vec![0x90u8; 8];
-    code.extend_from_slice(&[0x4C, 0x8D, 0x35, 0x00, 0x10, 0x00, 0x00]);
-    let abs = relocate_rip_lea(&code, 8, 0x5000_0000).expect("a lea");
-    assert_eq!(&abs[..2], &[0x49, 0xBE], "movabs r14");
-    assert_eq!(
-        u64::from_le_bytes(abs[2..].try_into().unwrap()),
-        0x5000_0000 + 8 + 7 + 0x1000
-    );
-    // lea rax,[rip-0x10]: no REX.B/R, register 0, negative displacement
-    let code = [0x48, 0x8D, 0x05, 0xF0, 0xFF, 0xFF, 0xFF];
-    let abs = relocate_rip_lea(&code, 0, 0x1000).unwrap();
-    assert_eq!(&abs[..2], &[0x48, 0xB8]);
-    assert_eq!(
-        u64::from_le_bytes(abs[2..].try_into().unwrap()),
-        0x1000 + 7 - 0x10
-    );
-    // not a rip-relative lea
-    assert!(relocate_rip_lea(&[0x48, 0x89, 0xE5, 0, 0, 0, 0], 0, 0).is_none());
-}
-
-#[test]
 pub(crate) fn linux_signatures_are_unique_in_server_so() {
     let Some(d) = server_so() else {
         eprintln!("SERVER_SO_X64 not set; skipping");
@@ -78,7 +55,7 @@ pub(crate) fn linux_signatures_are_unique_in_server_so() {
         ("physenv user", l::PHYSENV_SIG),
     ];
     for t in l::EXPLOSION_TARGETS {
-        sigs.push(("explosion target", t[0].0));
+        sigs.push(("explosion target", t[0]));
     }
     for (name, sig) in sigs {
         let m = elf_matches(&d, sig);
@@ -163,27 +140,16 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
         let page = (text as usize & !4095) as *mut c_void;
         assert_eq!(mprotect(page, 4096, 5), 0, "r-x");
 
-        let before = std::slice::from_raw_parts(text, 14).to_vec();
-        let patch = install_patch(
-            text,
-            l::SIG,
-            14,
-            hook_set_water_level as *const () as usize,
-            &PLATFORM,
-        )
-        .expect("install SetWaterLevel");
-        let written = std::slice::from_raw_parts(text, 14);
-        assert_eq!(&written[..6], &[0xFF, 0x25, 0, 0, 0, 0]);
-        assert_eq!(
-            u64::from_le_bytes(written[6..14].try_into().unwrap()),
-            hook_set_water_level as *const () as usize as u64
+        let before = std::slice::from_raw_parts(text, 32).to_vec();
+        let slot = std::sync::atomic::AtomicUsize::new(0);
+        let detour = install_detour(text, hook_set_water_level as *const (), &slot)
+            .expect("detour SetWaterLevel");
+        assert_ne!(
+            slot.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "trampoline recorded"
         );
-        let tramp = std::slice::from_raw_parts(patch.trampoline as *const u8, 28);
-        assert_eq!(&tramp[..14], &before[..]);
-        assert_eq!(
-            u64::from_le_bytes(tramp[20..28].try_into().unwrap()),
-            text as u64 + 14
-        );
+        assert_ne!(std::slice::from_raw_parts(text, 5), &before[..5]);
         // the page is r-x again
         let perms = std::fs::read_to_string("/proc/self/maps").unwrap();
         let line = perms
@@ -200,34 +166,18 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
             })
             .unwrap();
         assert_eq!(line.split_whitespace().nth(1), Some("r-xp"));
-        uninstall_patch(&patch, &PLATFORM);
-        assert_eq!(std::slice::from_raw_parts(text, 14), &before[..]);
+        drop(detour);
+        assert_eq!(std::slice::from_raw_parts(text, 32), &before[..]);
 
-        // CBaseTempEntity::Create: its first lea is rewritten in the trampoline
+        // CBaseTempEntity::Create: its prologue holds a rip-relative lea, which the
+        // trampoline has to rewrite
         let create = scan_sig(base, l::TE_CREATE_SIG).expect("Create");
-        let orig15 = std::slice::from_raw_parts(create, 15).to_vec();
-        let patch = install_patch_relocating(
-            create,
-            l::TE_CREATE_SIG,
-            15,
-            &[8], // the Linux build's TE_CREATE_RIP_LEAS (tests use the Windows constants)
-            hook_te_create as *const () as usize,
-            &PLATFORM,
-        )
-        .expect("install Create");
-        let t = std::slice::from_raw_parts(patch.trampoline as *const u8, 18 + 14);
-        assert_eq!(&t[..8], &orig15[..8]);
-        assert_eq!(&t[8..10], &[0x49, 0xBE], "movabs r14");
-        let disp = i32::from_le_bytes(orig15[11..15].try_into().unwrap());
-        assert_eq!(
-            u64::from_le_bytes(t[10..18].try_into().unwrap()),
-            (create as usize + 15).wrapping_add_signed(disp as isize) as u64
-        );
-        assert_eq!(
-            u64::from_le_bytes(t[24..32].try_into().unwrap()) as usize,
-            create as usize + 15
-        );
-        uninstall_patch(&patch, &PLATFORM);
+        let before = std::slice::from_raw_parts(create, 32).to_vec();
+        let detour =
+            install_detour(create, hook_te_create as *const (), &slot).expect("detour Create");
+        assert_ne!(std::slice::from_raw_parts(create, 5), &before[..5]);
+        drop(detour);
+        assert_eq!(std::slice::from_raw_parts(create, 32), &before[..]);
 
         // globals (the tests build with the Windows constants, so the Linux displacement
         // positions are spelled out here: 95 / 3 / 3)
@@ -241,24 +191,4 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
             assert_eq!(rva_of(at.offset(7 + disp)), 0x0189_8d50);
         }
     }
-}
-
-#[test]
-pub(crate) fn linux_create_prologue_relocates_its_lea() {
-    let Some(d) = server_so() else {
-        eprintln!("SERVER_SO_X64 not set; skipping");
-        return;
-    };
-    let at = elf_matches(&d, linux_sigs::TE_CREATE_SIG)[0];
-    // single PT_LOAD at vaddr == file offset is not guaranteed: find the file offset
-    let pat = parse_sig(linux_sigs::TE_CREATE_SIG);
-    let off = find_all(&d, &pat)[0];
-    let code = &d[off..off + 15];
-    let abs = relocate_rip_lea(code, 8, at as u64).expect("lea r14");
-    let disp = i32::from_le_bytes(code[11..15].try_into().unwrap());
-    assert_eq!(&abs[..2], &[0x49, 0xBE]);
-    assert_eq!(
-        u64::from_le_bytes(abs[2..].try_into().unwrap()),
-        (at + 8 + 7).wrapping_add_signed(isize::try_from(disp).unwrap()) as u64
-    );
 }
