@@ -15,6 +15,7 @@ categories = ["game-development"]
 [dependencies]
 gmod = { version = "17", default-features = false }
 libloading = "0.9.1"
+object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }
 region = "4.0.2"
 
 # Windows: the engine modules, the code protection and the instruction cache.

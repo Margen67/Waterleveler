@@ -6,44 +6,6 @@ use crate::*;
 #[cfg(all(windows, feature = "client"))]
 use std::ffi::{c_char, c_int};
 
-/// The executable parts of a loaded module as (offset from `base`, size): the
-/// executable sections of a PE image, the executable segments of an ELF one.
-#[cfg(all(windows, any(feature = "server", feature = "client")))]
-pub(crate) unsafe fn executable_regions(
-    base: *const u8,
-) -> Result<Vec<(usize, usize)>, &'static str> {
-    unsafe { pe_regions(base) }
-}
-
-#[cfg(all(any(windows, test), any(feature = "server", feature = "client")))]
-pub(crate) unsafe fn pe_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
-    unsafe {
-        let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-        let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-        if rd16(0) != 0x5A4D {
-            return Err("module has no MZ header");
-        }
-        let nt = rd32(0x3C) as usize;
-        if rd32(nt) != 0x0000_4550 {
-            return Err("module has no PE header");
-        }
-        if rd16(nt + 24) != 0x20B {
-            return Err("module is not a 64-bit PE image");
-        }
-        let nsec = rd16(nt + 6) as usize;
-        let optsz = rd16(nt + 20) as usize;
-        let sections = nt + 24 + optsz;
-        let mut regions = Vec::new();
-        for i in 0..nsec {
-            let s = sections + i * 40;
-            if rd32(s + 36) & 0x2000_0000 != 0 {
-                regions.push((rd32(s + 12) as usize, rd32(s + 8) as usize));
-            }
-        }
-        Ok(regions)
-    }
-}
-
 #[cfg(windows)]
 pub(crate) mod win {
     #[cfg(feature = "client")]

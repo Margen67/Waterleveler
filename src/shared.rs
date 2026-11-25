@@ -5,6 +5,7 @@
 #[macro_use]
 mod abi;
 pub(crate) mod hook_state;
+mod image;
 #[cfg(target_os = "linux")]
 mod linux;
 mod lua_api;
@@ -14,11 +15,10 @@ mod realm;
 mod scan;
 mod state;
 mod trace;
-// The Windows code also builds under `cfg(test)`: the tests run a Windows server.dll's
-// machine code on whatever host runs them.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 mod windows;
 
+pub(crate) use image::*;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::*;
 pub(crate) use lua_api::*;
@@ -28,5 +28,5 @@ pub(crate) use realm::*;
 pub(crate) use scan::*;
 pub(crate) use state::*;
 pub(crate) use trace::*;
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub(crate) use windows::*;

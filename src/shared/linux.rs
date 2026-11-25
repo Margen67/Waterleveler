@@ -61,49 +61,6 @@ pub(crate) mod linux_sigs {
     ];
 }
 
-/// The tests scan mapped Windows images on a Linux host too.
-#[cfg(all(any(feature = "server", feature = "client"), not(windows)))]
-pub(crate) unsafe fn executable_regions(
-    base: *const u8,
-) -> Result<Vec<(usize, usize)>, &'static str> {
-    unsafe {
-        #[cfg(test)]
-        if std::slice::from_raw_parts(base, 2) == b"MZ" {
-            return crate::pe_regions(base);
-        }
-        elf_regions(base)
-    }
-}
-
-#[cfg(all(any(feature = "server", feature = "client"), not(windows)))]
-pub(crate) unsafe fn elf_regions(base: *const u8) -> Result<Vec<(usize, usize)>, &'static str> {
-    unsafe {
-        const PT_LOAD: u32 = 1;
-        const PF_X: u32 = 1;
-        let rd64 = |off: usize| base.add(off).cast::<u64>().read_unaligned();
-        let rd32 = |off: usize| base.add(off).cast::<u32>().read_unaligned();
-        let rd16 = |off: usize| base.add(off).cast::<u16>().read_unaligned();
-        if std::slice::from_raw_parts(base, 4) != b"\x7fELF" {
-            return Err("module has no ELF header");
-        }
-        if *base.add(4) != 2 || rd16(18) != 62 {
-            return Err("module is not a 64-bit x86-64 ELF image");
-        }
-        let phoff = rd64(0x20) as usize;
-        let phentsize = rd16(0x36) as usize;
-        let phnum = rd16(0x38) as usize;
-        let mut regions = Vec::new();
-        for i in 0..phnum {
-            let ph = phoff + i * phentsize;
-            if rd32(ph) == PT_LOAD && rd32(ph + 4) & PF_X != 0 {
-                // p_vaddr, p_memsz
-                regions.push((rd64(ph + 0x10) as usize, rd64(ph + 0x28) as usize));
-            }
-        }
-        Ok(regions)
-    }
-}
-
 // ---- Linux glue (thin on purpose) -------------------------------------
 
 pub(crate) mod lin {
