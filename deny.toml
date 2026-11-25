@@ -9,6 +9,8 @@ version = 2
 
 [licenses]
 version = 2
+# The allow-list covers licenses the dependencies may use in the future too.
+unused-allowed-license = "allow"
 allow = [
     "AGPL-3.0-or-later",
     "Apache-2.0",

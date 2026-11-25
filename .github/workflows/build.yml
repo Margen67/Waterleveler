@@ -68,7 +68,10 @@ jobs:
         run: Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
 
       - name: Lint the PowerShell scripts
-        run: Invoke-ScriptAnalyzer -Path . -Recurse -EnableExit -ReportSummary
+        run: |-
+          $findings = Invoke-ScriptAnalyzer -Path . -Recurse
+          $findings | Format-List
+          if ($findings) { exit 1 }
 
   deny:
     name: cargo-deny
@@ -84,7 +87,7 @@ jobs:
           tool: cargo-deny
 
       - name: Check advisories, licenses, bans and sources
-        run: cargo deny check
+        run: cargo deny check --deny warnings
 
   outdated:
     name: cargo-outdated
@@ -116,9 +119,13 @@ jobs:
 
   build:
     name: Windows x64
+    needs: [ lua, luals, shellcheck, actionlint, psscriptanalyzer, deny, outdated ]
     runs-on: windows-latest
     env:
       POWERSHELL_TELEMETRY_OPTOUT: 1
+      # Any warning from rustc, clippy or cargo itself fails the build.
+      RUSTFLAGS: -D warnings
+      CARGO_BUILD_WARNINGS: deny
 
     steps:
       - name: Checkout
