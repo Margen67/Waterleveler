@@ -4,7 +4,7 @@
 use crate::*;
 
 #[cfg(feature = "server")]
-pub(crate) static TARGET: Mutex<Option<(usize, [u8; STOLEN])>> = Mutex::new(None);
+pub(crate) static WATER_LEVEL_DETOUR: Mutex<Option<detour::RawDetour>> = Mutex::new(None);
 
 #[cfg(feature = "server")]
 pub(crate) unsafe fn install() -> Result<usize, &'static str> {
@@ -15,30 +15,27 @@ pub(crate) unsafe fn install() -> Result<usize, &'static str> {
         }
         let target = scan_image(base)?;
         learn_water_level_layout(target)?;
-        let original = crate::install(target, &PLATFORM)?;
-        *TARGET
+        let detour = install_detour(target, hook_set_water_level as *const (), &TRAMPOLINE)?;
+        *WATER_LEVEL_DETOUR
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((target as usize, original));
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detour);
         Ok(target as usize - base as usize)
     }
 }
 
 #[cfg(feature = "server")]
 pub(crate) unsafe fn uninstall() {
-    unsafe {
-        let taken = TARGET
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some((target, original)) = taken {
-            crate::uninstall(target as *mut u8, &original, &PLATFORM);
-        }
-    }
+    let taken = WATER_LEVEL_DETOUR
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    // Dropping the detour restores the function's original bytes.
+    drop(taken);
 }
 
 #[cfg(feature = "server")]
 pub(crate) fn active() -> bool {
-    TARGET
+    WATER_LEVEL_DETOUR
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .is_some()

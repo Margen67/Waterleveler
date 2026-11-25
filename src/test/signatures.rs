@@ -19,19 +19,6 @@ pub(crate) fn client_trace_signature_and_ray_helper_match_once_in_client_dll() {
 }
 
 #[test]
-pub(crate) fn detour_and_trampoline_layout() {
-    let d = build_detour(0x1122_3344_5566_7788);
-    assert_eq!(&d[..6], &[0xFF, 0x25, 0, 0, 0, 0]);
-    assert_eq!(&d[6..14], &0x1122_3344_5566_7788u64.to_le_bytes());
-    assert_eq!(d[14], 0x90);
-    let stolen = [0xAAu8; STOLEN];
-    let t = build_trampoline(&stolen, 0x0102_0304_0506_0708);
-    assert_eq!(&t[..STOLEN], &stolen);
-    assert_eq!(&t[STOLEN..STOLEN + 6], &[0xFF, 0x25, 0, 0, 0, 0]);
-    assert_eq!(&t[STOLEN + 6..], &0x0102_0304_0506_0708u64.to_le_bytes());
-}
-
-#[test]
 pub(crate) fn signature_matcher_handles_wildcards() {
     let pat = parse_sig("01 ?? 03");
     assert_eq!(find_all(&[9, 1, 7, 3, 1, 8, 3, 1], &pat), vec![1, 4]);

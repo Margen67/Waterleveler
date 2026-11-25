@@ -2,35 +2,12 @@
 // Copyright (C) 2026 Margen67
 
 use crate::*;
+use detour::RawDetour;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-pub(crate) const TRAMPOLINE_SIZE: usize = STOLEN + 14;
 
 pub(crate) static TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) static HITS: AtomicU64 = AtomicU64::new(0);
-
-/// `jmp [rip+0]; dq hook; nop` - 15 bytes written over the function entry.
-pub(crate) fn build_detour(hook: u64) -> [u8; STOLEN] {
-    let mut b = [0x90u8; STOLEN];
-    b[0] = 0xFF;
-    b[1] = 0x25;
-    b[2..6].copy_from_slice(&0u32.to_le_bytes());
-    b[6..14].copy_from_slice(&hook.to_le_bytes());
-    b
-}
-
-/// The stolen instructions followed by `jmp [rip+0]; dq resume`.
-pub(crate) fn build_trampoline(stolen: &[u8], resume: u64) -> [u8; TRAMPOLINE_SIZE] {
-    assert_eq!(stolen.len(), STOLEN);
-    let mut b = [0u8; TRAMPOLINE_SIZE];
-    b[..STOLEN].copy_from_slice(stolen);
-    b[STOLEN] = 0xFF;
-    b[STOLEN + 1] = 0x25;
-    b[STOLEN + 2..STOLEN + 6].copy_from_slice(&0u32.to_le_bytes());
-    b[STOLEN + 6..STOLEN + 14].copy_from_slice(&resume.to_le_bytes());
-    b
-}
 
 /// Walks the executable sections of a loaded PE image (`base` = module
 /// base) and returns the single match of [`SIG`].
@@ -38,47 +15,23 @@ pub(crate) unsafe fn scan_image(base: *const u8) -> Result<*mut u8, &'static str
     unsafe { scan_sig(base, SIG) }
 }
 
-/// Detours `target`. Returns the original bytes for [`uninstall`].
-pub(crate) unsafe fn install(target: *mut u8, p: &Platform) -> Result<[u8; STOLEN], &'static str> {
+/// Detours `target` to `hook` with the `detour` crate, which relocates the stolen
+/// instructions itself and pauses the other threads while it patches. The address of the
+/// original function (the trampoline) is stored in `trampoline` *before* the detour is
+/// enabled, so `hook` can call it from its first run. Dropping the detour restores the
+/// original bytes.
+pub(crate) unsafe fn install_detour(
+    target: *mut u8,
+    hook: *const (),
+    trampoline: &AtomicUsize,
+) -> Result<RawDetour, &'static str> {
     unsafe {
-        let pat = parse_sig(SIG);
-        let mut original = [0u8; STOLEN];
-        original.copy_from_slice(std::slice::from_raw_parts(target, STOLEN));
-        for (i, want) in pat.iter().take(STOLEN).enumerate() {
-            if let Some(w) = want {
-                if original[i] != *w {
-                    return Err("function prologue does not match");
-                }
-            }
-        }
-
-        let tramp = (p.alloc_exec)(64);
-        if tramp.is_null() {
-            return Err("could not allocate executable memory");
-        }
-        let tb = build_trampoline(&original, target as u64 + STOLEN as u64);
-        std::ptr::copy_nonoverlapping(tb.as_ptr(), tramp, tb.len());
-        (p.flush)(tramp, tb.len());
-        TRAMPOLINE.store(tramp as usize, Ordering::SeqCst);
-
-        let Some(old) = (p.make_writable)(target, STOLEN) else {
-            return Err("could not make the function writable");
-        };
-        let detour = build_detour(hook_set_water_level as *const () as usize as u64);
-        std::ptr::copy_nonoverlapping(detour.as_ptr(), target, STOLEN);
-        (p.restore_protect)(target, STOLEN, old);
-        (p.flush)(target, STOLEN);
-        Ok(original)
-    }
-}
-
-pub(crate) unsafe fn uninstall(target: *mut u8, original: &[u8; STOLEN], p: &Platform) {
-    unsafe {
-        if let Some(old) = (p.make_writable)(target, STOLEN) {
-            std::ptr::copy_nonoverlapping(original.as_ptr(), target, STOLEN);
-            (p.restore_protect)(target, STOLEN, old);
-            (p.flush)(target, STOLEN);
-        }
+        // The error text is leaked: it is read once, to report why a hook is inactive.
+        let leak = |e: detour::Error| -> &'static str { Box::leak(e.to_string().into_boxed_str()) };
+        let detour = RawDetour::new(target.cast_const().cast(), hook).map_err(leak)?;
+        trampoline.store(detour.trampoline() as usize, Ordering::SeqCst);
+        detour.enable().map_err(leak)?;
+        Ok(detour)
     }
 }
 

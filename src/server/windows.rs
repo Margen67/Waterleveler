@@ -4,10 +4,6 @@
 use crate::*;
 use std::sync::atomic::Ordering;
 
-/// Bytes overwritten at the function entry (14-byte absolute jmp, and on Windows 1 nop
-/// to end on an instruction boundary; the Linux prologue ends on one at 14).
-pub(crate) const STOLEN: usize = 15;
-
 pub(crate) const OFF_PEV: usize = 0x30;
 
 pub(crate) const OFF_EDICT_INDEX: usize = 6;

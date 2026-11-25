@@ -13,6 +13,7 @@ categories = ["game-development"]
 # `region` changes code protection and allocates trampolines, `libloading` gets engine functions.
 # Its default `hax` feature (signature scanning and detours) is not used. It needs Rust nightly.
 [dependencies]
+detour = "0.11.1"
 gmod = { version = "17", default-features = false }
 libloading = "0.9.1"
 object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }

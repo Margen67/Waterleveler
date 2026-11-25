@@ -36,10 +36,11 @@ pub(crate) fn hook_substitutes_override_on_real_function_bytes() {
         assert!(WATER_LEVEL_DISP_AT
             .iter()
             .all(|&i| read_disp(target, i) == wl));
-        let original = install(target, &TEST_PLATFORM).expect("install failed");
-        assert_eq!(&original[..5], &[0x48, 0x89, 0x5C, 0x24, 0x08]);
-        // The entry now starts with the detour.
-        assert_eq!(std::slice::from_raw_parts(target, 2), &[0xFF, 0x25]);
+        let detour = install_detour(target, hook_set_water_level as *const (), &TRAMPOLINE)
+            .expect("install failed");
+        // The entry now starts with a jump (a relative one when the trampoline is in reach).
+        assert!(matches!(*target, 0xE9 | 0xFF));
+        assert_ne!(std::slice::from_raw_parts(target, 5), &func[..5]);
 
         // Fake CBaseEntity: edict index 5, current m_nWaterLevel = 1.
         let mut edict = [0u8; 32];
@@ -77,7 +78,7 @@ pub(crate) fn hook_substitutes_override_on_real_function_bytes() {
         assert_eq!(bare[wl], 2);
 
         // 4) Uninstall restores the original bytes exactly.
-        uninstall(target, &original, &TEST_PLATFORM);
+        drop(detour);
         assert_eq!(std::slice::from_raw_parts(target, FUNC_LEN), func);
     }
 }

@@ -4,8 +4,6 @@
 use crate::*;
 use std::sync::atomic::Ordering;
 
-pub(crate) const STOLEN: usize = 14;
-
 pub(crate) unsafe fn entity_index(this: *const u8) -> Option<i32> {
     unsafe {
         let handle = this

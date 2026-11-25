@@ -25,6 +25,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "detour"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f58e3f3b205316162dc120362f84b23aac210e06893e059257afa3334736000"
+dependencies = [
+ "iced-x86",
+ "libc",
+ "mach2",
+ "region",
+ "windows-sys",
+]
+
+[[package]]
 name = "gmod"
 version = "17.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -51,12 +64,22 @@ dependencies = [
 name = "gmsv_waterlevelercore"
 version = "0.1.0"
 dependencies = [
+ "detour",
  "gmod",
  "libc",
  "libloading",
  "object",
  "region",
  "windows-sys",
+]
+
+[[package]]
+name = "iced-x86"
+version = "1.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c23ad4d19dca41180e835ef6fbd2c1ee655777eca086ad80dd517e0513322879"
+dependencies = [
+ "lazy_static",
 ]
 
 [[package]]
