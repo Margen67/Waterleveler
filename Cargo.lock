@@ -68,6 +68,7 @@ dependencies = [
  "gmod",
  "libc",
  "libloading",
+ "memchr",
  "object",
  "region",
  "windows-sys",

@@ -18,6 +18,7 @@ categories = ["game-development"]
 detour = { version = "0.11.1", optional = true }
 gmod = { version = "17", default-features = false }
 libloading = { version = "0.9.1", optional = true }
+memchr = "2.8.3"
 object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }
 region = "4.0.2"
 

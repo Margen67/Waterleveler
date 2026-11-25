@@ -15,27 +15,52 @@ pub(crate) fn parse_sig(sig: &str) -> Vec<Option<u8>> {
         .collect()
 }
 
-/// Offsets of every match of `pat` in `hay`.
-pub(crate) fn find_all(hay: &[u8], pat: &[Option<u8>]) -> Vec<usize> {
-    let mut out = Vec::new();
-    if pat.is_empty() || hay.len() < pat.len() {
-        return out;
+/// The longest run of fixed (non-wildcard) bytes of `pat` as (start, length).
+fn longest_fixed_run(pat: &[Option<u8>]) -> (usize, usize) {
+    let (mut best, mut start) = ((0, 0), 0);
+    for (i, b) in pat.iter().enumerate() {
+        if b.is_none() {
+            start = i + 1;
+        } else if i + 1 - start > best.1 {
+            best = (start, i + 1 - start);
+        }
     }
-    let first = pat[0];
-    'outer: for i in 0..=(hay.len() - pat.len()) {
-        if let Some(b) = first {
-            if hay[i] != b {
-                continue;
-            }
+    best
+}
+
+/// Offsets of every match of `pat` in `hay`, in order. `memchr` finds the longest fixed run
+/// of the pattern (SIMD), and only the places where it occurs are checked against the
+/// whole pattern, wildcards included.
+pub(crate) fn find_all(hay: &[u8], pat: &[Option<u8>]) -> Vec<usize> {
+    if pat.is_empty() || hay.len() < pat.len() {
+        return Vec::new();
+    }
+    let last = hay.len() - pat.len();
+    let (start, len) = longest_fixed_run(pat);
+    if len == 0 {
+        // nothing but wildcards: every position matches
+        return (0..=last).collect();
+    }
+    let anchor: Vec<u8> = pat[start..start + len].iter().flatten().copied().collect();
+    let finder = memchr::memmem::Finder::new(&anchor);
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = finder.find(&hay[from..]) {
+        let at = from + rel;
+        from = at + 1; // matches may overlap
+        let Some(i) = at.checked_sub(start) else {
+            continue;
+        };
+        if i > last {
+            break;
         }
-        for (j, p) in pat.iter().enumerate().skip(1) {
-            if let Some(b) = p {
-                if hay[i + j] != *b {
-                    continue 'outer;
-                }
-            }
+        if pat
+            .iter()
+            .zip(&hay[i..])
+            .all(|(p, h)| p.is_none_or(|b| b == *h))
+        {
+            out.push(i);
         }
-        out.push(i);
     }
     out
 }
