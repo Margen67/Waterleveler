@@ -118,15 +118,7 @@ pub(crate) fn water_explosion_effect_data_with(
     scale: f32,
     magnitude: f32,
 ) -> [u8; 0xa0] {
-    let mut d = [0u8; 0xa0];
-    for (i, v) in origin.iter().enumerate() {
-        d[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
-    }
-    d[0x30..0x34].copy_from_slice(&flags.to_le_bytes());
-    d[0x38..0x3c].copy_from_slice(&scale.to_le_bytes());
-    d[0x3c..0x40].copy_from_slice(&magnitude.to_le_bytes());
-    d[0x88] = 1;
-    d
+    zerocopy::transmute!(EffectData::new(origin, flags, scale, magnitude))
 }
 
 /// True (and the effect sent) if the explosion at `this`' origin is in a volume.
@@ -136,12 +128,7 @@ pub(crate) unsafe fn redirect_explosion(this: *const u8) -> bool {
         if this.is_null() || dispatch == 0 {
             return false;
         }
-        let o = this.add(TE_ORIGIN_OFFSET).cast::<f32>();
-        let origin = [
-            o.read_unaligned(),
-            o.add(1).read_unaligned(),
-            o.add(2).read_unaligned(),
-        ];
+        let origin = read_vec3(this.add(TE_ORIGIN_OFFSET).cast::<f32>());
         let inside =
             snapshot_if(|v| v.may_contain(origin)).is_some_and(|v| v.surface_z(origin).is_some());
         if !inside {

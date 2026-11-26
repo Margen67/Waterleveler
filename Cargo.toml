@@ -15,14 +15,15 @@ categories = ["game-development"]
 # `detour` (the server's inline hooks) and `libloading` (the client's `CreateInterface`) are
 # only built for the realm that uses them.
 [dependencies]
+arc-swap = "1.9.5"
+bitflags = "2.13.2"
 detour = { version = "0.11.1", optional = true }
 gmod = { version = "17", default-features = false }
 libloading = { version = "0.9.1", optional = true }
-arc-swap = "1.9.5"
-bitflags = "2.13.2"
 memchr = "2.8.3"
 object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }
 region = "4.0.2"
+zerocopy = { version = "0.8.66", features = ["derive"] }
 
 # Windows: the engine modules and the module that loaded this one.
 [target.'cfg(windows)'.dependencies]

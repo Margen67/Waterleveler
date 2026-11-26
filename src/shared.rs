@@ -6,6 +6,7 @@
 mod abi;
 pub(crate) mod hook_state;
 mod image;
+mod layout;
 #[cfg(target_os = "linux")]
 mod linux;
 mod lua_api;
@@ -19,6 +20,7 @@ mod trace;
 mod windows;
 
 pub(crate) use image::*;
+pub(crate) use layout::*;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::*;
 pub(crate) use lua_api::*;

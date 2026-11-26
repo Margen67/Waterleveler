@@ -1,0 +1,3 @@
+# `gmod`'s macro crate uses syn 1 and `zerocopy`'s derive syn 2; both are build-time only.
+# (deny.toml has the matching entry.)
+allowed-duplicate-crates = ["syn"]

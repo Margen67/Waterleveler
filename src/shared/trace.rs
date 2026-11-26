@@ -32,7 +32,7 @@ pub(crate) unsafe fn hook_get_point_contents(
         let mut contents = Contents::from_bits_retain(original(this, pos, a3, a4));
         if !pos.is_null() {
             // Never block inside an engine callback.
-            let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
+            let p = read_vec3(pos);
             let mut inside = snapshot_if(|v| v.may_contain(p))
                 .map_or(Contents::empty(), |vols| vols.contents_at(p));
             if inside.is_empty() {
@@ -435,64 +435,50 @@ pub(crate) unsafe fn apply_water_to_trace_at(
     mask: Contents,
 ) -> bool {
     unsafe {
+        let mut head: TraceHead = read_struct(trace);
         // A trace that reports a hit must name the entity it hit: callers
         // (the SLAM's beam, impact effects) call a virtual on `m_pEnt`. A real
         // water brush belongs to the world, so the world entity is used. If it
         // is unknown and the engine found no entity, leave the trace alone.
-        let ent_slot = trace.add(0x58).cast::<usize>();
-        let ent = if world != 0 {
-            world
-        } else {
-            ent_slot.read_unaligned()
-        };
+        let ent = if world != 0 { world as u64 } else { head.ent };
         if ent == 0 {
             return false;
         }
         if ray.add(swept_offset).read() == 0 {
             return false; // not swept: nothing travels
         }
-        let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+        let r: RayHead = read_struct(ray);
         let fields = RayFields {
-            start: [rf(0x00), rf(0x04), rf(0x08)],
-            delta: [rf(0x10), rf(0x14), rf(0x18)],
-            offset: [rf(0x20), rf(0x24), rf(0x28)],
-            extents: [rf(0x30), rf(0x34), rf(0x38)],
+            start: r.start,
+            delta: r.delta,
+            offset: r.offset,
+            extents: r.extents,
         };
-        let current = trace.add(0x2c).cast::<f32>().read_unaligned();
-        let Some(outcome) = plan_trace(vols, &fields, current, mask) else {
+        let Some(outcome) = plan_trace(vols, &fields, head.fraction, mask) else {
             return false;
         };
 
-        let wf = |o: usize, val: f32| trace.add(o).cast::<f32>().write_unaligned(val);
         match outcome {
             TraceOutcome::Inside { origin, contents } => {
-                for (i, &component) in origin.iter().enumerate() {
-                    wf(i * 4, component);
-                    wf(0x0c + i * 4, component);
-                    wf(0x18 + i * 4, 0.0);
-                }
-                wf(0x24, 0.0);
-                trace.add(0x28).write(0);
-                trace.add(0x29).write(0);
-                wf(0x2c, 0.0); // fraction
-                trace
-                    .add(0x30)
-                    .cast::<i32>()
-                    .write_unaligned(contents.bits());
-                trace.add(0x34).cast::<u16>().write_unaligned(0);
-                trace.add(0x36).write(1); // allsolid
-                trace.add(0x37).write(1); // startsolid
-                wf(0x38, 0.0);
-                trace
-                    .add(0x40)
-                    .cast::<usize>()
-                    .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
-                ent_slot.write_unaligned(ent);
+                head.start_pos = origin;
+                head.end_pos = origin;
+                head.plane_normal = [0.0; 3];
+                head.plane_dist = 0.0;
+                head.plane_type = 0;
+                head.plane_sign_bits = 0;
+                head.fraction = 0.0;
+                head.contents = contents.bits();
+                head.disp_flags = 0;
+                head.all_solid = 1;
+                head.start_solid = 1;
+                head.fraction_left_solid = 0.0;
+                head.surface_name = WATER_SURFACE_NAME.as_ptr() as u64;
+                head.ent = ent;
             }
             TraceOutcome::Leaves { left_at } => {
-                trace.add(0x37).write(1);
+                head.start_solid = 1;
                 if let Some(fraction) = left_at {
-                    wf(0x38, fraction);
+                    head.fraction_left_solid = fraction;
                 }
             }
             TraceOutcome::Enters {
@@ -504,38 +490,29 @@ pub(crate) unsafe fn apply_water_to_trace_at(
                 plane_dist,
                 contents,
             } => {
-                for i in 0..3 {
-                    wf(i * 4, origin[i]); // startpos
-                    wf(0x0c + i * 4, end[i]); // endpos
-                    wf(0x18 + i * 4, 0.0); // plane.normal
-                }
-                wf(0x18 + axis * 4, if min_face { -1.0 } else { 1.0 });
-                wf(0x24, plane_dist);
-                trace.add(0x28).write(axis as u8); // plane.type: axial
-                trace
-                    .add(0x29)
-                    .write(if min_face { 1u8 << axis } else { 0 }); // signbits
-                wf(0x2c, fraction);
-                trace
-                    .add(0x30)
-                    .cast::<i32>()
-                    .write_unaligned(contents.bits());
-                trace.add(0x34).cast::<u16>().write_unaligned(0); // dispFlags
-                trace.add(0x36).write(0); // allsolid
-                trace.add(0x37).write(0); // startsolid
-                wf(0x38, 0.0); // fractionleftsolid
-                trace
-                    .add(0x40)
-                    .cast::<usize>()
-                    .write_unaligned(WATER_SURFACE_NAME.as_ptr() as usize);
-                trace.add(0x48).cast::<i16>().write_unaligned(0); // surface.surfaceProps
-                trace.add(0x4a).cast::<u16>().write_unaligned(0); // surface.flags
-                trace.add(0x50).cast::<i32>().write_unaligned(0); // hitgroup
-                trace.add(0x54).cast::<i16>().write_unaligned(0); // physicsbone
-                trace.add(0x60).cast::<i32>().write_unaligned(0); // hitbox
-                ent_slot.write_unaligned(ent); // m_pEnt
+                head.start_pos = origin;
+                head.end_pos = end;
+                head.plane_normal = [0.0; 3];
+                head.plane_normal[axis] = if min_face { -1.0 } else { 1.0 };
+                head.plane_dist = plane_dist;
+                head.plane_type = axis as u8; // axial
+                head.plane_sign_bits = if min_face { 1u8 << axis } else { 0 };
+                head.fraction = fraction;
+                head.contents = contents.bits();
+                head.disp_flags = 0;
+                head.all_solid = 0;
+                head.start_solid = 0;
+                head.fraction_left_solid = 0.0;
+                head.surface_name = WATER_SURFACE_NAME.as_ptr() as u64;
+                head.surface_props = 0;
+                head.surface_flags = 0;
+                head.hit_group = 0;
+                head.physics_bone = 0;
+                head.hitbox = 0;
+                head.ent = ent;
             }
         }
+        write_struct(trace, &head);
         true
     }
 }
@@ -548,13 +525,8 @@ pub(crate) unsafe fn ray_misses_bounds(
     ray: *const u8,
 ) -> bool {
     unsafe {
-        let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
-        segment_misses_bounds(
-            bounds,
-            [rf(0x00), rf(0x04), rf(0x08)],
-            [rf(0x10), rf(0x14), rf(0x18)],
-            [rf(0x30), rf(0x34), rf(0x38)],
-        )
+        let r: RayHead = read_struct(ray);
+        segment_misses_bounds(bounds, r.start, r.delta, r.extents)
     }
 }
 
@@ -694,8 +666,8 @@ pub(crate) fn hull_surface_point(
 /// line reaches the surface, for `hook_get_point_contents`, and logs it when debugging.
 pub(crate) unsafe fn note_small_hull(ray: *const u8, mask: u32, trace: *const u8) {
     unsafe {
-        let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
-        let ext = [rf(0x30), rf(0x34), rf(0x38)];
+        let r: RayHead = read_struct(ray);
+        let ext = r.extents;
         if !ext.iter().all(|&e| (1.0..=5.0).contains(&e)) {
             return;
         }
@@ -706,17 +678,15 @@ pub(crate) unsafe fn note_small_hull(ray: *const u8, mask: u32, trace: *const u8
         if snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)).is_none() {
             return;
         }
-        let tf = |o: usize| trace.add(o).cast::<f32>().read_unaligned();
-        let end = [tf(0x0c), tf(0x10), tf(0x14)];
-        let normal = [tf(0x18), tf(0x1c), tf(0x20)];
-        let delta = [rf(0x10), rf(0x14), rf(0x18)];
+        let t: TraceHead = read_struct(trace);
+        let (end, normal, delta) = (t.end_pos, t.plane_normal, r.delta);
         if let Some(probe) = hull_surface_point(end, normal, delta, ext) {
             LAST_HULL.with(|c| c.set(Some((end, probe))));
         }
         if DEBUG.load(Ordering::Relaxed) {
             debug_log(format!(
                 "hull trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.1}, {:.1}, {:.1}): fraction {fraction:.5} entity {ent:#x}, end ({:.3}, {:.3}, {:.3})",
-                rf(0x00), rf(0x04), rf(0x08), delta[0], delta[1], delta[2],
+                r.start[0], r.start[1], r.start[2], delta[0], delta[1], delta[2],
                 ext[0], ext[1], ext[2],
                 end[0], end[1], end[2],
             ));
@@ -725,12 +695,10 @@ pub(crate) unsafe fn note_small_hull(ray: *const u8, mask: u32, trace: *const u8
 }
 
 /// (fraction, hit entity) of a trace result.
-pub(crate) const unsafe fn trace_summary(trace: *const u8) -> (f32, usize) {
+pub(crate) unsafe fn trace_summary(trace: *const u8) -> (f32, usize) {
     unsafe {
-        (
-            trace.add(0x2c).cast::<f32>().read_unaligned(),
-            trace.add(0x58).cast::<usize>().read_unaligned(),
-        )
+        let t: TraceHead = read_struct(trace);
+        (t.fraction, t.ent as usize)
     }
 }
 

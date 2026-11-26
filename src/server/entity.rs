@@ -84,12 +84,10 @@ pub(crate) unsafe fn raise_water_level_in_volume(this: *mut u8) {
         if this.is_null() {
             return;
         }
-        let o = this.add(ORIGIN_OFFSET.load(Ordering::Relaxed)) as *const f32;
-        let p = [
-            o.read_unaligned(),
-            o.add(1).read_unaligned(),
-            o.add(2).read_unaligned(),
-        ];
+        let p = read_vec3(
+            this.add(ORIGIN_OFFSET.load(Ordering::Relaxed))
+                .cast::<f32>(),
+        );
         // try_lock: never wait (the original calls back into the contents hook).
         let inside = snapshot_if(|v| v.may_contain(p)).is_some_and(|v| v.contains(p));
         if inside {

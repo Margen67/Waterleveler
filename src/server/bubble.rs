@@ -109,16 +109,8 @@ pub(crate) unsafe fn hook_bubble_trail(
             std::mem::transmute(BUBBLE_TRAMPOLINE.load(Ordering::Relaxed));
         let mut action = BubbleClip::Keep;
         if !from.is_null() && !to.is_null() {
-            let f = [
-                from.read_unaligned(),
-                from.add(1).read_unaligned(),
-                from.add(2).read_unaligned(),
-            ];
-            let t = [
-                to.read_unaligned(),
-                to.add(1).read_unaligned(),
-                to.add(2).read_unaligned(),
-            ];
+            let f = read_vec3(from);
+            let t = read_vec3(to);
             // A trail that stays clear of every volume is kept as it is, without a copy
             // of the snapshot. No lock is held when the original is called (it calls
             // back into the point-contents hook).

@@ -26,6 +26,11 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# `gmod`'s macro crate is on syn 1 and `zerocopy`'s derive on syn 2. Both only run at build
+# time (proc macros), so neither version reaches the DLL. Remove this when gmod moves to syn 2.
+skip = [
+    { crate = "syn@1.0.109", reason = "gmod-macros still uses syn 1; build-time only" },
+]
 
 [sources]
 unknown-registry = "deny"

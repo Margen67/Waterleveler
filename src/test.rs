@@ -8,6 +8,7 @@ use super::*;
 mod bubble;
 mod explosion;
 mod fluid;
+mod layout;
 mod linux;
 mod signatures;
 mod trace;
