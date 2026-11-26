@@ -111,6 +111,67 @@ jobs:
       - name: Check for outdated crates
         run: cargo outdated --root-deps-only --exit-code 1
 
+  machete:
+    name: cargo-machete
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@main
+        with:
+          tool: cargo-machete
+
+      - name: Check for unused dependencies
+        run: cargo machete
+
+  shear:
+    name: cargo-shear
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@main
+        with:
+          tool: cargo-shear
+
+      - name: Check for unused and misplaced dependencies
+        run: cargo shear --deny-warnings
+
+  udeps:
+    name: cargo-udeps (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each OS compiles its own target-specific dependencies (windows-sys, libc).
+        os: [ ubuntu-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Use Rust nightly
+        run: |-
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+
+      - name: Install cargo-udeps
+        uses: taiki-e/install-action@main
+        with:
+          tool: cargo-udeps
+
+      - name: Check for unused dependencies
+        run: |-
+          cargo udeps --locked --all-targets
+          cargo udeps --locked --all-targets --no-default-features --features server
+          cargo udeps --locked --all-targets --no-default-features --features client
+
   luals:
     name: LuaLS
     uses: CFC-Servers/gmod_luals_workflow/.github/workflows/luals.yml@main
@@ -119,7 +180,7 @@ jobs:
 
   build:
     name: Windows x64
-    needs: [ lua, luals, shellcheck, actionlint, psscriptanalyzer, deny, outdated ]
+    needs: [ lua, luals, shellcheck, actionlint, psscriptanalyzer, deny, outdated, machete, shear, udeps ]
     runs-on: windows-latest
     env:
       POWERSHELL_TELEMETRY_OPTOUT: 1
