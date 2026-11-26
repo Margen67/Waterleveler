@@ -5,10 +5,12 @@ use crate::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Address of the engine's `physenv` variable.
-pub(crate) const unsafe fn physenv_global_from(func: *const u8) -> *const *mut c_void {
+pub(crate) unsafe fn physenv_global_from(
+    func: *const u8,
+) -> Result<*const *mut c_void, &'static str> {
     unsafe {
-        let disp = func.add(3).cast::<i32>().read_unaligned() as isize;
-        func.offset(7 + disp).cast::<*mut c_void>()
+        let code = decode_match(func, PHYSENV_SIG);
+        only_global(&code).map(|global| global as *const *mut c_void)
     }
 }
 

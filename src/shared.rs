@@ -4,6 +4,8 @@
 
 #[macro_use]
 mod abi;
+#[cfg(any(feature = "server", feature = "client"))]
+mod decode;
 pub(crate) mod hook_state;
 mod image;
 mod layout;
@@ -19,6 +21,8 @@ mod trace;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(any(feature = "server", feature = "client"))]
+pub(crate) use decode::*;
 pub(crate) use image::*;
 pub(crate) use layout::*;
 #[cfg(target_os = "linux")]

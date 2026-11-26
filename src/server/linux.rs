@@ -19,15 +19,11 @@ pub(crate) const ENTITY_HANDLE_OFFSET: usize = 8;
 /// Linux `CBaseEntity::SetWaterLevel`: `m_nWaterLevel` is at +0x2d3 (also a layout check).
 pub(crate) const SIG: &str = linux_sigs::SIG;
 
-/// Linux `CBaseEntity::UpdateWaterState`: the `enginetrace` variable is reached with
-/// `lea r13,[rip+disp32]` (disp32 at byte 95), then `mov rdi,[r13]; mov rax,[rdi]; call [rax]`.
+/// Linux `CBaseEntity::UpdateWaterState`: the `enginetrace` variable is reached with the
+/// last `lea r13,[rip+disp32]` in the match, then `mov rdi,[r13]; mov rax,[rdi]; call [rax]`.
 pub(crate) const UPDATE_WATER_STATE_SIG: &str = linux_sigs::UPDATE_WATER_STATE_SIG;
 
-pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 95;
-
 pub(crate) const ENTITY_ARRAY_SIG: &str = linux_sigs::ENTITY_ARRAY_SIG;
-
-pub(crate) const ENTITY_ARRAY_DISP_AT: usize = 3;
 
 pub(crate) const PHYSENV_SIG: &str = linux_sigs::PHYSENV_SIG;
 

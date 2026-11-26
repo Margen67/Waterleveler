@@ -8,9 +8,10 @@ use std::sync::atomic::Ordering;
 pub(crate) fn client_trace_global_is_read_from_the_load_instruction() {
     // mov rcx,[rip+0x100]; the variable is at (instruction + 7 + 0x100).
     let mut code = vec![0x48u8, 0x8B, 0x0D, 0x00, 0x01, 0x00, 0x00, 0x90];
-    code.extend_from_slice(&[0; 16]);
+    // The decoder reads as many bytes as the signature has.
+    code.extend_from_slice(&[0; 32]);
     let at = code.as_ptr();
-    let g = unsafe { trace_global_from_load(at) };
+    let g = unsafe { trace_global_from_load(at) }.expect("a load of a global");
     assert_eq!(g as usize, at as usize + 7 + 0x100);
 }
 
@@ -32,10 +33,8 @@ pub(crate) fn hook_substitutes_override_on_real_function_bytes() {
 
         // Where this build keeps m_nWaterLevel (0x2ab or 0x2b3), from the function itself;
         // the four places that name it agree.
-        let wl = read_disp(target, WATER_LEVEL_DISP_AT[0]);
-        assert!(WATER_LEVEL_DISP_AT
-            .iter()
-            .all(|&i| read_disp(target, i) == wl));
+        let wl = water_level_offset(&decode_match(target, SIG)).expect("water level offset");
+        assert!(wl == 0x2ab || wl == 0x2b3, "unexpected offset {wl:#x}");
         let detour = install_detour(target, hook_set_water_level as *const (), &TRAMPOLINE)
             .expect("install failed");
         // The entry now starts with a jump (a relative one when the trampoline is in reach).
@@ -106,7 +105,7 @@ pub(crate) fn enginetrace_pointer_resolves_in_server_dll() {
     unsafe {
         let func = scan_sig(img.as_ptr(), UPDATE_WATER_STATE_SIG).expect("scan failed");
         // RVAs move between game updates; only the structure is checked.
-        let global = trace_global_from(func);
+        let global = trace_global_from(func).expect("a load of enginetrace");
         let grva = global as usize - img.as_ptr() as usize;
         // The `enginetrace` variable lives in a non-executable section.
         let sec = pe

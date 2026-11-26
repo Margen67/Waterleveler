@@ -85,8 +85,9 @@ pub(crate) fn linux_client_trace_signature_finds_the_enginetrace_variable() {
         assert_eq!(at as usize - base as usize, m[0]);
         // `C_BaseEntity::UpdateWaterState` loads the `enginetrace` variable at 0x12270b0
         // in this dev-branch client.so (the same one its `TraceRay` calls use).
-        let var = trace_global_from_load(at);
-        assert_eq!(var as usize - base as usize, 0x0122_70b0);
+        // (The tests build with the Windows constants, so the Linux signature is passed.)
+        let var = last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)).expect("a load");
+        assert_eq!(var - base as usize, 0x0122_70b0);
     }
 }
 
@@ -179,16 +180,17 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
         drop(detour);
         assert_eq!(std::slice::from_raw_parts(create, 32), &before[..]);
 
-        // globals (the tests build with the Windows constants, so the Linux displacement
-        // positions are spelled out here: 95 / 3 / 3)
+        // globals, decoded from the matches (the tests build with the Windows constants, so
+        // the Linux signatures are passed explicitly)
         let upd = scan_sig(base, l::UPDATE_WATER_STATE_SIG).expect("UpdateWaterState");
-        let disp = upd.add(95).cast::<i32>().read_unaligned() as isize;
-        assert_eq!(rva_of(upd.offset(95 + 4 + disp)), 0x01a7_3c58);
+        let enginetrace = last_global(&decode_match(upd, l::UPDATE_WATER_STATE_SIG)).unwrap();
+        assert_eq!(enginetrace - base as usize, 0x01a7_3c58);
         let env = scan_sig(base, l::PHYSENV_SIG).expect("physenv user");
-        assert_eq!(rva_of(physenv_global_from(env) as *mut u8), 0x0196_a670);
+        let physenv = only_global(&decode_match(env, l::PHYSENV_SIG)).unwrap();
+        assert_eq!(physenv - base as usize, 0x0196_a670);
         for at in scan_sig_all(base, l::ENTITY_ARRAY_SIG).expect("entity array idiom") {
-            let disp = at.add(3).cast::<i32>().read_unaligned() as isize;
-            assert_eq!(rva_of(at.offset(7 + disp)), 0x0189_8d50);
+            let array = only_global(&decode_match(at, l::ENTITY_ARRAY_SIG)).unwrap();
+            assert_eq!(array - base as usize, 0x0189_8d50);
         }
     }
 }

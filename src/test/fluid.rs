@@ -129,7 +129,7 @@ pub(crate) fn physenv_signature_is_unique_and_points_into_data() {
     let img = map_image(&d, &pe);
     unsafe {
         let at = scan_sig(img.as_ptr(), PHYSENV_SIG).expect("signature must match exactly once");
-        let global = physenv_global_from(at);
+        let global = physenv_global_from(at).expect("a load of physenv");
         let grva = global as usize - img.as_ptr() as usize;
         let sec = pe
             .sections

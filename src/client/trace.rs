@@ -5,10 +5,12 @@ use crate::*;
 use std::sync::atomic::AtomicUsize;
 
 /// The `enginetrace` pointer variable loaded by the instruction at `at`.
-pub(crate) const unsafe fn trace_global_from_load(at: *const u8) -> *const *mut c_void {
+pub(crate) unsafe fn trace_global_from_load(
+    at: *const u8,
+) -> Result<*const *mut c_void, &'static str> {
     unsafe {
-        let disp = at.add(3).cast::<i32>().read_unaligned() as isize;
-        at.offset(7 + disp).cast::<*mut c_void>()
+        let code = decode_match(at, CLIENT_TRACE_SIG);
+        last_global(&code).map(|global| global as *const *mut c_void)
     }
 }
 

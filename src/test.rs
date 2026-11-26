@@ -6,6 +6,7 @@
 use super::*;
 
 mod bubble;
+mod decode;
 mod explosion;
 mod fluid;
 mod layout;

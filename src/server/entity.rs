@@ -27,15 +27,13 @@ pub(crate) unsafe fn hook_set_water_level(this: *mut c_void, level: c_int) {
 }
 
 /// Address of the `enginetrace` pointer variable referenced by
-/// `UpdateWaterState` (`func` = start of that function).
-pub(crate) const unsafe fn trace_global_from(func: *const u8) -> *const *mut c_void {
+/// The `enginetrace` variable that `UpdateWaterState` loads (`func` = start of that function).
+pub(crate) unsafe fn trace_global_from(
+    func: *const u8,
+) -> Result<*const *mut c_void, &'static str> {
     unsafe {
-        let disp = func
-            .add(TRACE_GLOBAL_DISP_OFFSET)
-            .cast::<i32>()
-            .read_unaligned() as isize;
-        func.offset(TRACE_GLOBAL_DISP_OFFSET as isize + 4 + disp)
-            .cast::<*mut c_void>()
+        let code = decode_match(func, UPDATE_WATER_STATE_SIG);
+        last_global(&code).map(|global| global as *const *mut c_void)
     }
 }
 
@@ -48,8 +46,7 @@ pub(crate) unsafe fn entity_array_global(base: *const u8) -> Result<usize, &'sta
         let all = scan_sig_all(base, ENTITY_ARRAY_SIG)?;
         let mut global = 0usize;
         for at in all {
-            let disp = (at.add(ENTITY_ARRAY_DISP_AT) as *const i32).read_unaligned() as isize;
-            let g = at.offset((ENTITY_ARRAY_DISP_AT + 4) as isize + disp) as usize;
+            let g = only_global(&decode_match(at, ENTITY_ARRAY_SIG))?;
             if global != 0 && global != g {
                 return Err("entity array idiom resolves to different globals");
             }

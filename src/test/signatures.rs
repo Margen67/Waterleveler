@@ -84,7 +84,7 @@ pub(crate) fn ray_helper_signature_gives_the_swept_offset() {
     let img = map_image(&d, &pe);
     unsafe {
         let f = scan_sig(img.as_ptr(), RAY_HELPER_SIG).expect("ray helper must match exactly once");
-        let off = ray_swept_offset_from(f);
+        let off = ray_swept_offset_from(f).expect("m_IsSwept offset");
         assert!(
             off == 0x41 || off == 0x49,
             "unexpected m_IsSwept offset {off:#x}"

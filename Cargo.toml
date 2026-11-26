@@ -19,6 +19,7 @@ arc-swap = "1.9.5"
 bitflags = "2.13.2"
 detour = { version = "0.11.1", optional = true }
 gmod = { version = "17", default-features = false }
+iced-x86 = { version = "1.22.0", default-features = false, features = ["std", "decoder"] }
 libloading = { version = "0.9.1", optional = true }
 memchr = "2.8.3"
 object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }

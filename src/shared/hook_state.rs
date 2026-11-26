@@ -55,7 +55,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
             return Err("the server module is not loaded");
         }
         let func = scan_sig(base, UPDATE_WATER_STATE_SIG)?;
-        let trace = trace_global_from(func).read();
+        let trace = trace_global_from(func)?.read();
         let (slot, original) = install_contents_hook(trace, &PLATFORM)?;
         let mut hooks = vec![(
             slot,
@@ -71,9 +71,8 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
             format!(" (Ray_t m_IsSwept at +{RAY_SWEPT_OFFSET_OLD:#x})")
         };
         #[cfg(windows)]
-        let ray_note = match scan_sig(base, RAY_HELPER_SIG) {
-            Ok(f) => {
-                let off = ray_swept_offset_from(f);
+        let ray_note = match scan_sig(base, RAY_HELPER_SIG).and_then(|f| ray_swept_offset_from(f)) {
+            Ok(off) => {
                 RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
                 format!(" (Ray_t m_IsSwept at +{off:#x})")
             }
@@ -224,7 +223,7 @@ unsafe fn physenv() -> Result<*mut c_void, &'static str> {
         }
         let at = scan_sig(base, PHYSENV_SIG)
             .map_err(|_| "physics environment pointer not found in server.dll")?;
-        let env = physenv_global_from(at).read();
+        let env = physenv_global_from(at)?.read();
         if env.is_null() {
             return Err("the physics environment has not been created yet");
         }
@@ -372,7 +371,7 @@ pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
             return Err("client.dll is not loaded");
         }
         let at = scan_sig(base, CLIENT_TRACE_SIG)?;
-        let trace = trace_global_from_load(at).read();
+        let trace = trace_global_from_load(at)?.read();
         let (slot, original) = install_contents_hook(trace, &PLATFORM)?;
         let mut hooks = vec![(
             slot,
@@ -385,18 +384,11 @@ pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
         // Windows: where this build keeps m_IsSwept comes from the Ray_t helper. The
         // Linux client has the old layout (m_IsRay +0x40, m_IsSwept +0x41).
         #[cfg(windows)]
-        let ray = scan_sig(base, RAY_HELPER_SIG);
+        let ray = scan_sig(base, RAY_HELPER_SIG).and_then(|f| ray_swept_offset_from(f));
         #[cfg(not(windows))]
-        let ray: Result<*mut u8, &'static str> = Ok(std::ptr::null_mut());
+        let ray: Result<usize, &'static str> = Ok(RAY_SWEPT_OFFSET_OLD);
         let note = match (ray, entities) {
-            (Ok(f), e) if e != 0 => {
-                #[cfg(windows)]
-                let off = ray_swept_offset_from(f);
-                #[cfg(not(windows))]
-                let off = {
-                    let _ = f;
-                    RAY_SWEPT_OFFSET_OLD
-                };
+            (Ok(off), e) if e != 0 => {
                 RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
                 CLIENT_ENTITY_LIST.store(e, std::sync::atomic::Ordering::SeqCst);
                 let trace_hook = hook_trace_ray as *const () as usize;

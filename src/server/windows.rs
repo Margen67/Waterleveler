@@ -32,12 +32,9 @@ pub(crate) const SIG: &str = "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 \
                        38 91 ?? ?? 00 00 74 17 48 8B 01 48 8D 91 ?? ?? \
                        00 00 FF 90 ?? ?? 00 00 40 88 BE ?? ?? 00 00";
 
-/// Where `m_nWaterLevel`'s four displacements sit in the match of `SIG`.
-pub(crate) const WATER_LEVEL_DISP_AT: [usize; 4] = [25, 34, 46, 59];
-
 /// `CBaseEntity::UpdateWaterState` - used only to locate the engine's
-/// `enginetrace` pointer: the `mov rcx,[rip+disp32]` inside it (disp32 at
-/// byte 91) loads the `IEngineTrace` object whose vtable slot 0 is
+/// `enginetrace` pointer: the `mov rcx,[rip+disp32]` inside it loads the
+/// `IEngineTrace` object whose vtable slot 0 is
 /// `GetPointContents(const Vector&, ...)`; the result is tested against
 /// `MASK_WATER` (0x4030) to set water level 1, 2 and 3.
 pub(crate) const UPDATE_WATER_STATE_SIG: &str = "\
@@ -46,8 +43,6 @@ pub(crate) const UPDATE_WATER_STATE_SIG: &str = "\
     48 C7 40 DC 00 00 00 3F E8 ?? ?? ?? ?? 33 D2 48 8B CB E8 ?? ?? ?? ?? 33 D2 48 8B CB \
     E8 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? 48 8D 54 24 20 45 33 C0 48 8B 01 FF 10 A9 30 40 00 00";
 
-pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 91;
-
 /// `83 F9 FF  74 ??  48 8B 35 <entity array>  8B C1  25 FF 3F 00 00
 /// C1 E9 0E  48 C1 E0 05  39 4C 30 10`: the engine's "entity from handle"
 /// idiom (entries are 32 bytes: pointer at +8, serial at +0x10). It occurs
@@ -55,9 +50,6 @@ pub(crate) const TRACE_GLOBAL_DISP_OFFSET: usize = 91;
 pub(crate) const ENTITY_ARRAY_SIG: &str =
     "83 F9 FF 74 ?? 48 8B 35 ?? ?? ?? ?? 8B C1 25 FF 3F 00 00 \
                                     C1 E9 0E 48 C1 E0 05 39 4C 30 10";
-
-/// Where the rip-relative displacement of the array global sits in the idiom.
-pub(crate) const ENTITY_ARRAY_DISP_AT: usize = 8;
 
 // ---- Fluid controllers (buoyancy) --------------------------------------
 //
@@ -107,12 +99,6 @@ pub(crate) const FLUID_END_TOUCH_SIG: &str = "48 89 5C 24 10 48 89 7C 24 18 41 5
     48 8B D0 48 8B CF E8 ?? ?? ?? ?? 0F 2F 05 ?? ?? ?? ?? 72 ?? 4C 8B C6 48 8B D3 49 8B CE \
     E8 ?? ?? ?? ?? 81 A6 ?? ?? 00 00 FF FF F7 FF 49 8B CE 49 8B 06 48 8B 1E FF 50 30 \
     4C 63 C0 BA 01 00 00 00 48 8B CE FF 93 ?? ?? 00 00 FF 8F ?? ?? 00 00";
-
-/// Where `m_iEFlags`'s offset (`and [rsi+disp32], ~EFL_TOUCHING_FLUID`) and the
-/// `OnEntityEvent` vtable offset (`call [rbx+disp32]`) sit in the match of `FLUID_END_TOUCH_SIG`.
-pub(crate) const FLUID_EFLAGS_DISP_AT: usize = 106;
-
-pub(crate) const FLUID_EVENT_DISP_AT: usize = 139;
 
 /// `IPhysicsObject::GetGameData` (the entity), vtable offset 0x88.
 pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x88 / 8;
@@ -180,12 +166,7 @@ pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x33c;
 /// must agree) and derives where the origin is.
 pub(crate) unsafe fn learn_water_level_layout(at: *const u8) -> Result<usize, &'static str> {
     unsafe {
-        let off = read_disp(at, WATER_LEVEL_DISP_AT[0]);
-        if !(0x100..0x1000).contains(&off)
-            || WATER_LEVEL_DISP_AT.iter().any(|&i| read_disp(at, i) != off)
-        {
-            return Err("the entity layout is not the expected one (different game build?)");
-        }
+        let off = water_level_offset(&decode_match(at, SIG))?;
         WATER_LEVEL_OFFSET.store(off, Ordering::SeqCst);
         ORIGIN_OFFSET.store(off + ORIGIN_AFTER_WATER_LEVEL, Ordering::SeqCst);
         Ok(off)
@@ -196,16 +177,9 @@ pub(crate) unsafe fn learn_water_level_layout(at: *const u8) -> Result<usize, &'
 /// `FLUID_END_TOUCH_SIG`.
 pub(crate) unsafe fn learn_fluid_layout(at: *const u8) -> Result<(), &'static str> {
     unsafe {
-        let flags = read_disp(at, FLUID_EFLAGS_DISP_AT);
-        let event = read_disp(at, FLUID_EVENT_DISP_AT);
-        if !(0x100..0x1000).contains(&flags)
-            || !event.is_multiple_of(8)
-            || !(0x100..0x1000).contains(&event)
-        {
-            return Err("the entity layout is not the expected one (different game build?)");
-        }
+        let (flags, event_slot) = fluid_layout(&decode_match(at, FLUID_END_TOUCH_SIG))?;
         EFLAGS_OFFSET.store(flags, Ordering::SeqCst);
-        EVENT_SLOT.store(event / 8, Ordering::SeqCst);
+        EVENT_SLOT.store(event_slot, Ordering::SeqCst);
         Ok(())
     }
 }

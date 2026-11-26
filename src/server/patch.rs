@@ -34,8 +34,3 @@ pub(crate) unsafe fn install_detour(
         Ok(detour)
     }
 }
-
-#[allow(clippy::missing_const_for_fn)]
-pub(crate) unsafe fn read_disp(at: *const u8, i: usize) -> usize {
-    unsafe { at.add(i).cast::<u32>().read_unaligned() as usize }
-}

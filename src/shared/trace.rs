@@ -173,21 +173,17 @@ pub(crate) const RAY_SWEPT_OFFSET_OLD: usize = 0x41;
 pub(crate) static RAY_SWEPT_OFFSET: AtomicUsize = AtomicUsize::new(RAY_SWEPT_OFFSET_OLD);
 
 /// The engine helper that builds a `Ray_t` on its stack from two points
-/// (`UTIL_TraceLine`-style): its `mov byte [rax+disp],1` stores `m_IsSwept`.
-/// The frame is `mov rax,rsp; push rbx; sub rsp,0x90` with the `Ray_t` at
-/// rsp+0x40, so offset = disp + 0x98 - 0x40. Byte 53 is disp.
+/// (`UTIL_TraceLine`-style): its `mov byte [rax+disp],1` stores `m_IsSwept`. The offset is
+/// worked out from the decoded frame (see `ray_swept_offset`).
 pub(crate) const RAY_HELPER_SIG: &str =
     "48 8B C4 53 48 81 EC 90 00 00 00 F3 0F 10 42 08 F3 0F 10 19 \
     F3 0F 10 0A F3 0F 10 61 04 F3 0F 5C CB F3 0F 10 52 04 F3 0F 10 69 08 F3 0F 5C D4 F3 0F 5C C5 \
     C6 40 ?? 01";
 
-pub(crate) const RAY_HELPER_DISP_BYTE: usize = 53;
-
-pub(crate) const unsafe fn ray_swept_offset_from(func: *const u8) -> usize {
-    unsafe {
-        let disp = func.add(RAY_HELPER_DISP_BYTE).cast::<i8>().read() as isize;
-        (disp + 0x98 - 0x40) as usize
-    }
+/// `Ray_t::m_IsSwept`'s offset in this build (`func` = a match of `RAY_HELPER_SIG`).
+#[cfg(any(windows, test))]
+pub(crate) unsafe fn ray_swept_offset_from(func: *const u8) -> Result<usize, &'static str> {
+    unsafe { ray_swept_offset(&decode_match(func, RAY_HELPER_SIG)) }
 }
 
 /// How far inside a volume, along the axis of the face it entered through, a rewritten
