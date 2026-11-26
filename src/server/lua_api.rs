@@ -132,7 +132,9 @@ pub(crate) unsafe fn l_set(l: State) -> i32 {
             return fail(l, "level must be an integer from 0 to 3");
         }
         let level = level as u8;
-        overrides().insert(idx, level);
+        if !override_set(idx, level) {
+            return fail(l, "entity index out of range");
+        }
         apply_level(l, idx, level, save_key().as_deref());
         l.push_boolean(true);
         1
@@ -143,7 +145,7 @@ pub(crate) unsafe fn l_set(l: State) -> i32 {
 #[gmod::lua_function]
 pub(crate) unsafe fn l_get(l: State) -> i32 {
     unsafe {
-        let level = ent_index(l, 1).and_then(|idx| overrides().get(&idx).copied());
+        let level = ent_index(l, 1).and_then(override_get);
         match level {
             Some(v) => l.push_number(f64::from(v)),
             None => l.push_nil(),
@@ -156,7 +158,7 @@ pub(crate) unsafe fn l_get(l: State) -> i32 {
 #[gmod::lua_function]
 pub(crate) unsafe fn l_clear(l: State) -> i32 {
     unsafe {
-        let removed = ent_index(l, 1).is_some_and(|idx| overrides().remove(&idx).is_some());
+        let removed = ent_index(l, 1).is_some_and(override_remove);
         l.push_boolean(removed);
         1
     }
@@ -165,7 +167,7 @@ pub(crate) unsafe fn l_clear(l: State) -> i32 {
 /// `waterleveler.ClearAll()`
 #[gmod::lua_function]
 pub(crate) unsafe fn l_clear_all(_l: State) {
-    overrides().clear();
+    override_clear();
 }
 
 /// waterleveler.SetSaveKey(key) - "" disables the per-tick datamap write.
@@ -360,7 +362,7 @@ pub(crate) unsafe fn l_explosions_redirected(l: State) -> i32 {
 pub(crate) unsafe fn l_wrapped_water_level(l: State) -> i32 {
     unsafe {
         if let Some(idx) = ent_index(l, 1) {
-            let level = overrides().get(&idx).copied(); // guard dropped here
+            let level = override_get(idx);
             if let Some(level) = level {
                 l.push_number(f64::from(level));
                 return 1;
@@ -380,14 +382,14 @@ pub(crate) unsafe fn l_wrapped_water_level(l: State) -> i32 {
 #[gmod::lua_function]
 pub(crate) unsafe fn l_tick(l: State) {
     unsafe {
-        let snapshot: Vec<(i32, u8)> = overrides().iter().map(|(k, v)| (*k, *v)).collect();
+        let snapshot: Vec<(i32, u8)> = override_entries();
         if snapshot.is_empty() {
             return;
         }
         let key = save_key();
         for (idx, level) in snapshot {
             if !apply_level(l, idx, level, key.as_deref()) {
-                overrides().remove(&idx);
+                override_remove(idx);
             }
         }
     }
@@ -399,7 +401,7 @@ pub(crate) unsafe fn l_tick(l: State) {
 pub(crate) unsafe fn l_entity_removed(l: State) {
     unsafe {
         if let Some(idx) = ent_index(l, 1) {
-            overrides().remove(&idx);
+            override_remove(idx);
         }
     }
 }
@@ -549,7 +551,7 @@ pub(crate) unsafe fn close_server(l: State) -> i32 {
         // Remove the detour first so the engine never calls into unloaded code.
         hook_state::uninstall();
         hook_state::uninstall_contents();
-        overrides().clear();
+        override_clear();
         volumes().clear();
 
         hook_remove(l, c"Tick");

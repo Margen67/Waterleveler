@@ -2,16 +2,13 @@
 // Copyright (C) 2026 Margen67
 
 use crate::*;
-use std::collections::BTreeMap;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-
-/// Entity index -> overridden water level (0..=3).
-pub(crate) static OVERRIDES: Mutex<BTreeMap<i32, u8>> = Mutex::new(BTreeMap::new());
 
 /// `None` = default key, `Some("")` = engine writes disabled.
 pub(crate) static SAVE_KEY: Mutex<Option<String>> = Mutex::new(None);
@@ -45,42 +42,68 @@ impl Default for FluidSettings {
     }
 }
 
-/// How many entries `OVERRIDES` has, kept up to date by `OverridesGuard`, so the
-/// water-level hook (called for every entity) can skip the lock when there are none.
-pub(crate) static OVERRIDE_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+/// How many entity indices the override table covers: the 14 bits of an entity handle's index
+/// (Windows edict indices are far below that).
+pub(crate) const MAX_ENTITIES: usize = 1 << 14;
 
-/// The overrides map, locked. When it is released the entry count is published.
-pub(crate) struct OverridesGuard(pub(crate) std::sync::MutexGuard<'static, BTreeMap<i32, u8>>);
+/// Marks an entity without an override.
+const NO_OVERRIDE: u8 = u8::MAX;
 
-impl std::ops::Deref for OverridesGuard {
-    type Target = BTreeMap<i32, u8>;
+/// Entity index -> overridden water level (0..=3) or `NO_OVERRIDE`. A dense table of atomics,
+/// so the water-level hook (called for every entity) never takes a lock.
+static LEVELS: [AtomicU8; MAX_ENTITIES] = [const { AtomicU8::new(NO_OVERRIDE) }; MAX_ENTITIES];
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
+/// How many entities have an override, so the tick hook can skip scanning the table when
+/// there are none.
+pub(crate) static OVERRIDE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+fn slot(idx: i32) -> Option<&'static AtomicU8> {
+    usize::try_from(idx).ok().and_then(|i| LEVELS.get(i))
+}
+
+/// Overrides `idx`'s water level. Returns false if the index is outside the table.
+pub(crate) fn override_set(idx: i32, level: u8) -> bool {
+    let Some(slot) = slot(idx) else {
+        return false;
+    };
+    if slot.swap(level, Ordering::Relaxed) == NO_OVERRIDE {
+        OVERRIDE_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+    true
+}
+
+pub(crate) fn override_get(idx: i32) -> Option<u8> {
+    slot(idx)
+        .map(|s| s.load(Ordering::Relaxed))
+        .filter(|&l| l != NO_OVERRIDE)
+}
+
+/// Returns whether there was an override to remove.
+pub(crate) fn override_remove(idx: i32) -> bool {
+    let removed = slot(idx).is_some_and(|s| s.swap(NO_OVERRIDE, Ordering::Relaxed) != NO_OVERRIDE);
+    if removed {
+        OVERRIDE_COUNT.fetch_sub(1, Ordering::Relaxed);
+    }
+    removed
+}
+
+pub(crate) fn override_clear() {
+    for idx in 0..MAX_ENTITIES {
+        if OVERRIDE_COUNT.load(Ordering::Relaxed) == 0 {
+            break;
+        }
+        override_remove(idx as i32);
     }
 }
 
-impl std::ops::DerefMut for OverridesGuard {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+/// Every override, in entity order.
+pub(crate) fn override_entries() -> Vec<(i32, u8)> {
+    if OVERRIDE_COUNT.load(Ordering::Relaxed) == 0 {
+        return Vec::new();
     }
-}
-
-impl Drop for OverridesGuard {
-    fn drop(&mut self) {
-        // Runs before the mutex is released, so no reader sees a count that is
-        // older than the map it could then lock.
-        OVERRIDE_COUNT.store(self.0.len(), std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
-pub(crate) fn overrides() -> OverridesGuard {
-    OverridesGuard(
-        OVERRIDES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    )
+    (0..MAX_ENTITIES as i32)
+        .filter_map(|idx| override_get(idx).map(|level| (idx, level)))
+        .collect()
 }
 
 pub(crate) fn save_key() -> Option<CString> {

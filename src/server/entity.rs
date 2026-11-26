@@ -14,17 +14,10 @@ pub(crate) unsafe fn hook_set_water_level(this: *mut c_void, level: c_int) {
         let mut level = level;
         if !this.is_null() {
             if let Some(idx) = entity_index(this as *const u8) {
-                // Never block inside an engine callback. No overrides (the usual
-                // case): nothing to look up, so no lock either.
-                if OVERRIDE_COUNT.load(Ordering::Relaxed) == 0 {
-                    original(this, level);
-                    return;
-                }
-                if let Ok(map) = OVERRIDES.try_lock() {
-                    if let Some(&o) = map.get(&idx) {
-                        level = c_int::from(o);
-                        bump(&HITS);
-                    }
+                // A lock-free table lookup: never blocks inside an engine callback.
+                if let Some(o) = override_get(idx) {
+                    level = c_int::from(o);
+                    bump(&HITS);
                 }
             }
         }

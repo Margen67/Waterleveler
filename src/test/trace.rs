@@ -58,7 +58,7 @@ pub(crate) fn hook_substitutes_override_on_real_function_bytes() {
         //    substitute 1, which equals the current value, so the original
         //    code takes its "nothing changed" path (no vtable call, which
         //    would crash on this fake object) and the byte stays 1.
-        overrides().insert(5, 1);
+        override_set(5, 1);
         set_water_level(this, 3);
         assert_eq!(entity[wl], 1);
         assert_eq!(HITS.load(Ordering::Relaxed), hits_before + 1);
@@ -66,7 +66,7 @@ pub(crate) fn hook_substitutes_override_on_real_function_bytes() {
         // 2) No override: the call goes through the trampoline, which runs
         //    the relocated prologue and continues in the real function.
         //    level == current again so it returns without side effects.
-        overrides().remove(&5);
+        override_remove(5);
         set_water_level(this, 1);
         assert_eq!(entity[wl], 1);
         assert_eq!(HITS.load(Ordering::Relaxed), hits_before + 1);
@@ -458,19 +458,32 @@ pub(crate) fn rays_that_miss_the_bounds_never_touch_a_volume() {
 }
 
 #[test]
-pub(crate) fn override_count_follows_the_overrides_map() {
+pub(crate) fn override_table_tracks_count_and_bounds() {
     let _g = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    overrides().clear();
+    override_clear();
     assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 0);
-    overrides().insert(5, 1);
-    overrides().insert(9, 2);
+    assert!(override_set(5, 1));
+    assert!(override_set(9, 2));
+    assert!(override_set(9, 3), "replacing keeps one entry");
     assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 2);
-    overrides().remove(&5);
+    assert_eq!(override_get(9), Some(3));
+    assert_eq!(override_get(8), None);
+    assert_eq!(override_entries(), vec![(5, 1), (9, 3)]);
+    assert!(override_remove(5));
+    assert!(!override_remove(5), "already gone");
     assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 1);
-    overrides().clear();
+    // Out-of-range indices are refused and never found.
+    for idx in [-1, MAX_ENTITIES as i32, i32::MAX, i32::MIN] {
+        assert!(!override_set(idx, 1));
+        assert_eq!(override_get(idx), None);
+        assert!(!override_remove(idx));
+    }
+    assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 1);
+    override_clear();
     assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 0);
+    assert!(override_entries().is_empty());
 }
 
 #[test]

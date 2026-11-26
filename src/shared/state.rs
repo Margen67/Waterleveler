@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Margen67
 
 use std::ffi::c_int;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // Water volumes (platform neutral store)
@@ -337,7 +337,9 @@ pub(crate) static VOLUMES: Mutex<VolumeList> = Mutex::new(VolumeList::new());
 
 /// What the engine hooks read: an immutable copy of the list, replaced as a whole, so a
 /// hook never waits for (or skips because of) an edit in progress. `None` while empty.
-pub(crate) static SNAPSHOT: RwLock<Option<Arc<VolumeList>>> = RwLock::new(None);
+/// Reads and the replacement are lock-free.
+pub(crate) static SNAPSHOT: arc_swap::ArcSwapOption<VolumeList> =
+    arc_swap::ArcSwapOption::const_empty();
 
 pub(crate) static NEXT_VOLUME_ID: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
@@ -371,9 +373,7 @@ impl Drop for VolumesGuard {
         if self.changed {
             // Runs before the mutex is released, so copies are published in edit order.
             let copy = (!self.guard.is_empty()).then(|| Arc::new((*self.guard).clone()));
-            *SNAPSHOT
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = copy;
+            SNAPSHOT.store(copy);
         }
     }
 }
@@ -388,27 +388,21 @@ pub(crate) fn volumes() -> VolumesGuard {
 }
 
 /// The current volumes for an engine hook, or `None` when there are none. Never waits for an
-/// edit; the lock is only held for the instant it takes to swap the copy.
+/// edit.
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) fn snapshot() -> Option<Arc<VolumeList>> {
-    match SNAPSHOT.try_read() {
-        Ok(copy) => copy.clone(),
-        Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner().clone(),
-        Err(std::sync::TryLockError::WouldBlock) => None,
-    }
+    SNAPSHOT.load_full()
 }
 
-/// Like `snapshot`, but the copy is only taken (a pointer clone, two atomic operations) when
-/// `maybe` says the query could touch a volume, which is rare: `maybe` runs on the shared
-/// copy, so the common case costs one read lock and a comparison.
+/// Like `snapshot`, but the copy is only taken (a pointer clone) when `maybe` says the query
+/// could touch a volume, which is rare: `maybe` runs on the shared copy, so the common case
+/// costs one lock-free load and a comparison.
 pub(crate) fn snapshot_if(maybe: impl FnOnce(&VolumeList) -> bool) -> Option<Arc<VolumeList>> {
-    match SNAPSHOT.try_read() {
-        Ok(copy) => copy.as_ref().filter(|v| maybe(v)).cloned(),
-        Err(std::sync::TryLockError::Poisoned(e)) => {
-            e.into_inner().as_ref().filter(|v| maybe(v)).cloned()
-        }
-        Err(std::sync::TryLockError::WouldBlock) => None,
-    }
+    SNAPSHOT
+        .load()
+        .as_ref()
+        .filter(|v| maybe(v))
+        .map(Arc::clone)
 }
 
 /// Counts one event. A plain load and store, not an atomic add: these diagnostic counters

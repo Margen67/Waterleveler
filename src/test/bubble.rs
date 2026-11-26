@@ -138,12 +138,12 @@ pub(crate) fn bubble_hook_clips_count_and_releases_the_lock() {
         }
         assert_eq!(BUBBLE_CLIPS.load(Ordering::Relaxed), clips + 1);
 
-        // Inside the volume the original must be able to take the lock.
-        // (The fake just proves the lock is free at call time.)
+        // Inside the volume the original must be able to take the writers' lock, which
+        // edits hold. (The fake just proves the lock is free at call time.)
         unsafe extern "win64" fn lock_probe(_: *const f32, _: *const f32, _: c_int) {
             assert!(
-                SNAPSHOT.try_write().is_ok(),
-                "the volume snapshot is held across the original call"
+                VOLUMES.try_lock().is_ok(),
+                "the volumes are locked across the original call"
             );
         }
         BUBBLE_TRAMPOLINE.store(lock_probe as *const () as usize, Ordering::SeqCst);
