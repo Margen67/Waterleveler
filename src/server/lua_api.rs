@@ -529,7 +529,7 @@ pub(crate) unsafe fn open_server(l: State) -> i32 {
         };
         let status = format!("{water_level}; {contents}");
         if failed || developer_level(l) > 0.0 {
-            lua_print(l, &format!("[wl] {status}"));
+            lua_print(l, &format!("[waterleveler] {status}"));
         }
         *HOOK_STATUS
             .lock()

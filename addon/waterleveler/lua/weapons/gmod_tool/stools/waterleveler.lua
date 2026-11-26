@@ -317,6 +317,5 @@ if CLIENT then
         -- The guide outline uses the outline color picker's color.
         local r, g, b, a = convar("waterleveler_outline_r", 90), convar("waterleveler_outline_g", 190), convar("waterleveler_outline_b", 255), convar("waterleveler_outline_a", 255);
         render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, a), true);
-        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, math.min(a, 60)), false);
     end);
 end

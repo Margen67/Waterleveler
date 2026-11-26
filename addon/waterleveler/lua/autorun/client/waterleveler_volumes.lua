@@ -357,7 +357,7 @@ concommand.Add("waterleveler_material_info", function(_, _, args)
         local cv = GetConVar("waterleveler_material");
         name = cv and cv:GetString() or "";
         if name == "" then
-            print("[wl] no material is set (a volume without one is not drawn)");
+            print("[waterleveler] no material is set (a volume without one is not drawn)");
             return;
         end
     end
@@ -369,15 +369,15 @@ concommand.Add("waterleveler_material_info", function(_, _, args)
         return tostring(m:GetString(key) or "(not set)");
     end
 
-    print(("[wl] %s: shader %s, wrapped as %s"):format(name, original:GetShader(), e.mat:GetShader()));
+    print(("[waterleveler] %s: shader %s, wrapped as %s"):format(name, original:GetShader(), e.mat:GetShader()));
     for _, key in ipairs({"$basetexture", "$bumpmap", "$envmap", "$normalmapalphaenvmapmask", "$translucent", "$frame", "$bumpframe"}) do
-        print(("[wl]   %s: original %s | wrapper %s"):format(key, param(original, key), param(e.mat, key)));
+        print(("[waterleveler]   %s: original %s | wrapper %s"):format(key, param(original, key), param(e.mat, key)));
     end
 
-    print(("[wl]   flags as integers: $translucent %s, $nocull %s, $normalmapalphaenvmapmask %s"):format(tostring(original:GetInt("$translucent") or "(not set)"), tostring(original:GetInt("$nocull") or "(not set)"), tostring(original:GetInt("$normalmapalphaenvmapmask") or "(not set)")));
-    if e.info then print(("[wl]   animation frames: base texture %d, bump map %d"):format(e.info.baseFrames, e.info.bumpFrames)); end
+    print(("[waterleveler]   flags as integers: $translucent %s, $nocull %s, $normalmapalphaenvmapmask %s"):format(tostring(original:GetInt("$translucent") or "(not set)"), tostring(original:GetInt("$nocull") or "(not set)"), tostring(original:GetInt("$normalmapalphaenvmapmask") or "(not set)")));
+    if e.info then print(("[waterleveler]   animation frames: base texture %d, bump map %d"):format(e.info.baseFrames, e.info.bumpFrames)); end
     local function frames(label)
-        print(("[wl]   %s: wrapper $frame = %s, $bumpframe = %s"):format(label, param(e.mat, "$frame"), param(e.mat, "$bumpframe")));
+        print(("[waterleveler]   %s: wrapper $frame = %s, $bumpframe = %s"):format(label, param(e.mat, "$frame"), param(e.mat, "$bumpframe")));
     end
 
     frames("now");
@@ -665,21 +665,8 @@ local function solidEntry(c)
     return entry, key;
 end
 
-local faints = setmetatable({}, {
-    __mode = "k"
-});
-
-local function faint(c)
-    local f = faints[c];
-    if not f then
-        f = Color(c.r, c.g, c.b, 60);
-        faints[c] = f;
-    end
-    return f;
-end
-
 -- The edges of a volume. `over`: drawn over everything else (the debug option), otherwise it
--- is hidden by what is in front of it and a faint copy shows through.
+-- is hidden by whatever is in front of it.
 local function drawOutline(bx, c, over)
     if over then
         cam.IgnoreZ(true);
@@ -689,7 +676,6 @@ local function drawOutline(bx, c, over)
     end
 
     render.DrawWireframeBox(vector_origin, angle_zero, bx.mins, bx.maxs, c, true);
-    render.DrawWireframeBox(vector_origin, angle_zero, bx.mins, bx.maxs, faint(c), false);
 end
 
 local drawFill;
@@ -880,15 +866,15 @@ local function describe()
 end
 
 concommand.Add("waterleveler_client_status", function()
-    print("[wl] map: " .. game.GetMap());
-    if not waterlevelercore then return print("[wl] client module not loaded (gmcl_waterlevelercore missing or failed): the client's water queries do not see volumes"); end
-    print("[wl] " .. waterlevelercore.HookStatus());
-    print(("[wl] contents hook: %s | volumes: %d (script knows %d) | point queries answered with water: %d | traces stopped at the surface: %d"):format(tostring(waterlevelercore.IsContentsHooked()), waterlevelercore.VolumeCount(), #boxes, waterlevelercore.ContentsHits(), waterlevelercore.TraceHits()));
+    print("[waterleveler] map: " .. game.GetMap());
+    if not waterlevelercore then return print("[waterleveler] client module not loaded (gmcl_waterlevelercore missing or failed): the client's water queries do not see volumes"); end
+    print("[waterleveler] " .. waterlevelercore.HookStatus());
+    print(("[waterleveler] contents hook: %s | volumes: %d (script knows %d) | point queries answered with water: %d | traces stopped at the surface: %d"):format(tostring(waterlevelercore.IsContentsHooked()), waterlevelercore.VolumeCount(), #boxes, waterlevelercore.ContentsHits(), waterlevelercore.TraceHits()));
     for i, b in ipairs(boxes) do
-        print(("[wl] volume #%d %s .. %s (%s) depth %.0f"):format(i, tostring(b.mins), tostring(b.maxs), b.liquid, b.maxs.z - b.mins.z));
+        print(("[waterleveler] volume #%d %s .. %s (%s) depth %.0f"):format(i, tostring(b.mins), tostring(b.maxs), b.liquid, b.maxs.z - b.mins.z));
     end
 
-    print("[wl] " .. describe());
+    print("[waterleveler] " .. describe());
 end);
 
 local watching, lastContents, lastTraces = false, 0, 0;
@@ -896,16 +882,16 @@ concommand.Add("waterleveler_watch", function(_, _, args)
     watching = args[1] ~= nil and args[1] ~= "0" or args[1] == nil and not watching;
     if not watching then
         timer.Remove("wl_watch");
-        return print("[wl] watch off");
+        return print("[waterleveler] watch off");
     end
 
-    print("[wl] watch on: each line shows how many point queries and traces the engine made against the volumes during the last second");
+    print("[waterleveler] watch on: each line shows how many point queries and traces the engine made against the volumes during the last second");
     lastContents = waterlevelercore and waterlevelercore.ContentsHits() or 0;
     lastTraces = waterlevelercore and waterlevelercore.TraceHits() or 0;
     timer.Create("wl_watch", 1, 0, function()
         local c = waterlevelercore and waterlevelercore.ContentsHits() or 0;
         local t = waterlevelercore and waterlevelercore.TraceHits() or 0;
-        print(("[wl] +%d point queries, +%d traces | %s"):format(c - lastContents, t - lastTraces, describe()));
+        print(("[waterleveler] +%d point queries, +%d traces | %s"):format(c - lastContents, t - lastTraces, describe()));
         lastContents, lastTraces = c, t;
     end);
 end);

@@ -29,7 +29,7 @@ do
         local h = self.WLHalf;
         self:PhysicsInitBox(-h, h);
         local phys = self:GetPhysicsObject();
-        if not IsValid(phys) then return print("[wl] fluid: no physics object"); end
+        if not IsValid(phys) then return print("[waterleveler] fluid: no physics object"); end
         -- The density (and so how high props float) comes from this material:
         -- "water" is what a map's water brush uses, "slime" is the slime one.
         phys:SetMaterial(self.WLLiquid or "water");
@@ -41,16 +41,16 @@ do
         self:SetCollisionGroup(COLLISION_GROUP_DEBRIS_TRIGGER);
         local top = self:GetPos().z + h.z;
         local id, err = waterleveler.AttachFluid(phys, 0, 0, 1, top, self.WLFluidOptions);
-        if not id then return print("[wl] AttachFluid failed: " .. tostring(err)); end
+        if not id then return print("[waterleveler] AttachFluid failed: " .. tostring(err)); end
         self.WLFluid = id;
         -- Rays (crowbar, bullets, the use key) must pass through: the water
         -- is not a solid thing. The fluid controller lives on the physics
         -- object and keeps working.
         self:AddSolidFlags(FSOLID_NOT_SOLID);
         if GetConVar("developer"):GetInt() > 0 then
-            print(("[wl] fluid controller #%d attached (surface z = %.1f)"):format(id, top));
+            print(("[waterleveler] fluid controller #%d attached (surface z = %.1f)"):format(id, top));
             -- State of the fluid object right after the engine made it a fluid.
-            print(("[wl] fluid object: material=%s collisions=%s motion=%s solid=%d group=%d"):format(tostring(phys:GetMaterial()), tostring(phys:IsCollisionEnabled()), tostring(phys:IsMotionEnabled()), self:GetSolid(), self:GetCollisionGroup()));
+            print(("[waterleveler] fluid object: material=%s collisions=%s motion=%s solid=%d group=%d"):format(tostring(phys:GetMaterial()), tostring(phys:IsCollisionEnabled()), tostring(phys:IsMotionEnabled()), self:GetSolid(), self:GetCollisionGroup()));
         end
     end
 
@@ -206,14 +206,14 @@ end
 local allowed = WLWater.Allowed;
 --- Prints the server's status, and asks the caller's client to print its own.
 local function printStatus(caller)
-    print("[wl] " .. waterleveler.HookStatus());
-    print(("[wl] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d"):format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(), waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()));
-    print(("[wl] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()));
-    print(("[wl] fluid controllers: %d"):format(waterleveler.FluidCount()));
+    print("[waterleveler] " .. waterleveler.HookStatus());
+    print(("[waterleveler] contents hook: %s | volumes: %d | point queries answered with water: %d | traces stopped at the surface: %d | bubble trails clipped: %d | explosives forced into water: %d"):format(tostring(waterleveler.IsContentsHooked()), waterleveler.VolumeCount(), waterleveler.ContentsHits(), waterleveler.TraceHits(), waterleveler.BubbleClips(), waterleveler.ExplosionFixes()));
+    print(("[waterleveler] explosion events sent as the water explosion: %d"):format(waterleveler.ExplosionsRedirected()));
+    print(("[waterleveler] fluid controllers: %d"):format(waterleveler.FluidCount()));
     local ply = resolve(caller);
     if IsValid(ply) then
         local p = ply:GetPos();
-        print(("[wl] %s: WaterLevel() = %d, feet inside a volume: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))));
+        print(("[waterleveler] %s: WaterLevel() = %d, feet inside a volume: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(waterleveler.PointInVolume(p.x, p.y, p.z))));
     end
 end
 
@@ -236,13 +236,13 @@ concommand.Add("waterleveler_debug", function(caller, _, args)
             if lines ~= "" then print(lines); end
         end);
 
-        print("[wl] debug log on: every water trace near a volume, every small hull trace (shotgun pellets) and every point just outside one is printed (waterleveler_debug 0 stops it)");
+        print("[waterleveler] debug log on: every water trace near a volume, every small hull trace (shotgun pellets) and every point just outside one is printed (waterleveler_debug 0 stops it)");
     else
         waterleveler.SetDebug(0);
         timer.Remove("wl_debug");
         local lines = waterleveler.TakeDebugLog();
         if lines ~= "" then print(lines); end
-        print("[wl] debug log off");
+        print("[waterleveler] debug log off");
         status();
     end
 end);
@@ -264,16 +264,16 @@ concommand.Add("waterleveler_probe", function(caller)
         if not bestDistance or distance < bestDistance then best, bestDistance = b, distance; end
     end
 
-    print(("[wl] %s: WaterLevel() = %d, hull %s to %s, ducking: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(mins), tostring(maxs), tostring(ply:Crouching())));
+    print(("[waterleveler] %s: WaterLevel() = %d, hull %s to %s, ducking: %s"):format(ply:Nick(), ply:WaterLevel(), tostring(mins), tostring(maxs), tostring(ply:Crouching())));
     if not best then
-        print("[wl] no volumes");
+        print("[waterleveler] no volumes");
         return;
     end
 
-    print(("[wl] nearest volume: mins %s, maxs %s (surface z = %.2f)"):format(tostring(best.mins), tostring(best.maxs), best.maxs.z));
+    print(("[waterleveler] nearest volume: mins %s, maxs %s (surface z = %.2f)"):format(tostring(best.mins), tostring(best.maxs), best.maxs.z));
     for _, point in ipairs(points) do
         local p = point[2];
-        print(("[wl]   %-5s z = %.2f, %.2f below the surface, inside a volume (module): %s, inside this box (script): %s"):format(point[1], p.z, best.maxs.z - p.z, tostring(waterleveler.PointInVolume(p.x, p.y, p.z)), tostring(p:WithinAABox(best.mins, best.maxs))));
+        print(("[waterleveler]   %-5s z = %.2f, %.2f below the surface, inside a volume (module): %s, inside this box (script): %s"):format(point[1], p.z, best.maxs.z - p.z, tostring(waterleveler.PointInVolume(p.x, p.y, p.z)), tostring(p:WithinAABox(best.mins, best.maxs))));
     end
 end);
 
@@ -296,7 +296,7 @@ concommand.Add("waterleveler_explode", function(caller)
     e:Spawn();
     e:Fire("Explode", "", 0);
     e:Fire("Kill", "", 1);
-    print(("[wl] env_explosion at %s, inside a volume: %s, redirected so far: %d"):format(tostring(pos), tostring(waterleveler.PointInVolume(pos.x, pos.y, pos.z)), waterleveler.ExplosionsRedirected()));
+    print(("[waterleveler] env_explosion at %s, inside a volume: %s, redirected so far: %d"):format(tostring(pos), tostring(waterleveler.PointInVolume(pos.x, pos.y, pos.z)), waterleveler.ExplosionsRedirected()));
 end);
 
 -- "Clean up everything" (game.CleanUpMap) removes the fluid entities; the volumes
