@@ -11,6 +11,10 @@
 //! Anything the engine owns that this module does not use stays in explicit `_pad` fields,
 //! so reading a struct, changing a field and writing it back leaves the rest as it was.
 
+// The `FromBytes` derive generates empty enums to check the field types, which newer
+// nightly clippy reports (`empty_enums`) at the derive; the code is not ours.
+#![allow(clippy::empty_enums)]
+
 use std::mem::{offset_of, size_of};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
