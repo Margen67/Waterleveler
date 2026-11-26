@@ -43,7 +43,7 @@ pub(crate) fn end_touch_with_a_destroyed_fluid_skips_the_splash_code() {
     let mut entity = vec![0u8; 0x400];
     entity[..8].copy_from_slice(&(entity_vtable.as_ptr() as usize).to_le_bytes());
     entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4]
-        .copy_from_slice(&(EFL_TOUCHING_FLUID | 0x4).to_le_bytes());
+        .copy_from_slice(&(EFlags::TOUCHING_FLUID.bits() | 0x4).to_le_bytes());
     let mut object_vtable = [0usize; OBJ_GET_GAME_DATA_SLOT + 1];
     object_vtable[OBJ_GET_GAME_DATA_SLOT] = fake_get_game_data as *const () as usize;
     let object = [
@@ -52,7 +52,7 @@ pub(crate) fn end_touch_with_a_destroyed_fluid_skips_the_splash_code() {
     ];
     let live = 0x1000usize;
     let dead = 0x2000usize;
-    fluid_died(dead, CONTENTS_SLIME);
+    fluid_died(dead, Contents::SLIME.bits());
     unsafe {
         // A live fluid goes to the engine's own code.
         hook_fluid_end_touch(
@@ -73,14 +73,14 @@ pub(crate) fn end_touch_with_a_destroyed_fluid_skips_the_splash_code() {
     assert_eq!(UNTOUCH_EVENTS.load(Ordering::SeqCst), 1);
     assert_eq!(
         UNTOUCH_CONTENTS.load(Ordering::SeqCst),
-        CONTENTS_SLIME as usize
+        Contents::SLIME.bits() as usize
     );
     let flags = u32::from_le_bytes(
         entity[ENTITY_EFLAGS_OFFSET..ENTITY_EFLAGS_OFFSET + 4]
             .try_into()
             .unwrap(),
     );
-    assert_eq!(flags, 0x4, "only EFL_TOUCHING_FLUID is cleared");
+    assert_eq!(flags, 0x4, "only EFlags::TOUCHING_FLUID is cleared");
     // A new controller at the same address is live again.
     fluid_born(dead);
     unsafe {
@@ -191,18 +191,18 @@ pub(crate) fn slime_volumes_report_slime_and_only_water_is_a_surface() {
             id: 1,
             min: [0.0; 3],
             max: [100.0; 3],
-            contents: CONTENTS_SLIME,
+            contents: Contents::SLIME,
         },
         Volume {
             id: 2,
             min: [200.0, 0.0, 0.0],
             max: [300.0, 100.0, 100.0],
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER,
         },
     ];
-    assert_eq!(contents_at(&vols, [50.0; 3]), CONTENTS_SLIME);
-    assert_eq!(contents_at(&vols, [250.0, 50.0, 50.0]), CONTENTS_WATER);
-    assert_eq!(contents_at(&vols, [150.0; 3]), 0);
+    assert_eq!(contents_at(&vols, [50.0; 3]), Contents::SLIME);
+    assert_eq!(contents_at(&vols, [250.0, 50.0, 50.0]), Contents::WATER);
+    assert_eq!(contents_at(&vols, [150.0; 3]), Contents::empty());
     assert_eq!(surface_z_at(&vols, [50.0; 3]), None);
     assert_eq!(surface_z_at(&vols, [250.0, 50.0, 50.0]), Some(100.0));
     let both = [
@@ -210,13 +210,13 @@ pub(crate) fn slime_volumes_report_slime_and_only_water_is_a_surface() {
         Volume { id: 3, ..vols[0] },
         Volume {
             id: 4,
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER,
             ..vols[0]
         },
     ];
     assert_eq!(
         contents_at(&both, [50.0; 3]),
-        CONTENTS_SLIME | CONTENTS_WATER
+        Contents::SLIME | Contents::WATER
     );
 }
 
@@ -228,7 +228,7 @@ pub(crate) fn fluid_defaults_match_a_map_water_brush() {
         (0.0, 0.0, false, [0.0; 3])
     );
     assert_eq!(d.damping, 0.01);
-    assert_eq!(d.contents, CONTENTS_WATER);
+    assert_eq!(d.contents, Contents::WATER);
 }
 
 #[test]
@@ -267,7 +267,7 @@ pub(crate) fn fluid_calls_use_vtable_slots_11_and_12() {
             viscosity_factor: 0.0,
             game_data: std::ptr::null_mut(),
             use_aerodynamics: 0,
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER.bits(),
         };
         let fluid = create_fluid(env, 0x1234 as *mut c_void, &params);
         assert_eq!(fluid as usize, 0x7777);
@@ -281,7 +281,7 @@ pub(crate) fn fluid_calls_use_vtable_slots_11_and_12() {
                 0x1234,
                 [0.0, 0.0, 1.0, 192.0],
                 0.01,
-                CONTENTS_WATER
+                Contents::WATER.bits()
             )
         );
         assert_eq!(calls[1].0, "destroy");

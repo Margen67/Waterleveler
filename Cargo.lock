@@ -74,6 +74,7 @@ name = "gmsv_waterlevelercore"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
+ "bitflags",
  "detour",
  "gmod",
  "libc",

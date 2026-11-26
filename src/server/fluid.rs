@@ -72,7 +72,13 @@ pub(crate) unsafe fn destroy_fluid(env: *mut c_void, fluid: *mut c_void) {
 
 pub(crate) static FLUID_END_TOUCH_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const EFL_TOUCHING_FLUID: u32 = 0x80000;
+bitflags::bitflags! {
+    /// `CBaseEntity::m_iEFlags` bits this module touches; the rest are kept as they are.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) struct EFlags: u32 {
+        const TOUCHING_FLUID = 0x80000;
+    }
+}
 
 pub(crate) const ENTITY_EVENT_WATER_UNTOUCH: c_int = 1;
 
@@ -138,7 +144,11 @@ pub(crate) unsafe fn hook_fluid_end_touch(
             return;
         }
         let flags = entity.add(EFLAGS_OFFSET.load(Ordering::Relaxed)).cast::<u32>();
-        flags.write_unaligned(flags.read_unaligned() & !EFL_TOUCHING_FLUID);
+        flags.write_unaligned(
+            EFlags::from_bits_retain(flags.read_unaligned())
+                .difference(EFlags::TOUCHING_FLUID)
+                .bits(),
+        );
         let on_event: engine_fn!((*mut u8, c_int, *mut c_void)) =
             std::mem::transmute(
                 *(*(entity as *const *const usize)).add(EVENT_SLOT.load(Ordering::Relaxed)),

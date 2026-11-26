@@ -9,11 +9,18 @@ use std::sync::{Arc, Mutex};
 // ---------------------------------------------------------------------------
 //
 // Axis-aligned boxes in world space. With the engine hook installed, every
-// point inside a box reports CONTENTS_WATER to the engine's own water logic.
+// point inside a box reports Contents::WATER to the engine's own water logic.
 
-pub(crate) const CONTENTS_WATER: c_int = 0x20;
-
-pub(crate) const CONTENTS_SLIME: c_int = 0x10;
+bitflags::bitflags! {
+    /// The engine's content flags (`CONTENTS_*`). Values read from the engine are converted
+    /// with `from_bits_retain`, so bits this module does not name survive a round trip.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Contents: c_int {
+        const SOLID = 0x1;
+        const SLIME = 0x10;
+        const WATER = 0x20;
+    }
+}
 
 pub(crate) const MAX_VOLUMES: usize = 256;
 
@@ -22,8 +29,8 @@ pub(crate) struct Volume {
     pub(crate) id: u32,
     pub(crate) min: [f32; 3],
     pub(crate) max: [f32; 3],
-    /// What the engine sees inside: `CONTENTS_WATER` or `CONTENTS_SLIME`.
-    pub(crate) contents: c_int,
+    /// What the engine sees inside: `Contents::WATER` or `Contents::SLIME`.
+    pub(crate) contents: Contents,
 }
 
 /// The volumes plus one box around all of them, so a query far from every volume is
@@ -194,7 +201,7 @@ impl VolumeList {
             self.lanes.min[axis] = self.list.iter().map(|v| v.min[axis]).collect();
             self.lanes.max[axis] = self.list.iter().map(|v| v.max[axis]).collect();
         }
-        self.lanes.contents = self.list.iter().map(|v| v.contents).collect();
+        self.lanes.contents = self.list.iter().map(|v| v.contents.bits()).collect();
         self.tree = Bvh::build(&self.list);
         self.bounds = self.list.iter().fold(None, |acc, v| {
             Some(acc.map_or((v.min, v.max), |(lo, hi)| {
@@ -239,9 +246,9 @@ impl VolumeList {
     /// The contents of every volume containing `p`, or'ed together (0 if none). Same result
     /// as `contents_at` on the plain list, computed without a branch per volume.
     #[allow(clippy::needless_bitwise_bool)] // `&` on purpose: no early exit, so the loop vectorizes
-    pub(crate) fn contents_at(&self, p: [f32; 3]) -> c_int {
+    pub(crate) fn contents_at(&self, p: [f32; 3]) -> Contents {
         if self.list.len() > TREE_MIN_VOLUMES {
-            let mut contents = 0;
+            let mut contents = Contents::empty();
             self.tree.visit(&self.list, p, |v| contents |= v.contents);
             return contents;
         }
@@ -260,7 +267,7 @@ impl VolumeList {
                 & (p[2] <= z1[i]);
             contents |= l.contents[i] & -c_int::from(inside);
         }
-        contents
+        Contents::from_bits_retain(contents)
     }
 
     /// True if `p` is inside any volume.
@@ -292,7 +299,7 @@ impl VolumeList {
     pub(crate) fn surface_z(&self, p: [f32; 3]) -> Option<f32> {
         let mut top: Option<f32> = None;
         let mut take = |v: &Volume| {
-            if v.contents & CONTENTS_WATER != 0 {
+            if v.contents.contains(Contents::WATER) {
                 top = Some(top.map_or(v.max[2], |t| t.max(v.max[2])));
             }
         };
@@ -413,12 +420,13 @@ pub(crate) fn bump(counter: &std::sync::atomic::AtomicU64) {
 }
 
 /// Top (surface height) of the highest water volume containing `p` (slime is
-/// not water: the engine's water explosion needs `CONTENTS_WATER`).
+/// not water: the engine's water explosion needs `Contents::WATER`).
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
     vols.iter()
         .filter(|v| {
-            v.contents & CONTENTS_WATER != 0 && (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i])
+            v.contents.contains(Contents::WATER)
+                && (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i])
         })
         .map(|v| v.max[2])
         .fold(None, |a, z| Some(a.map_or(z, |a: f32| a.max(z))))
@@ -427,10 +435,10 @@ pub(crate) fn surface_z_at(vols: &[Volume], p: [f32; 3]) -> Option<f32> {
 /// The contents of every volume containing `p`, or'ed together (0 if none). The reference
 /// the tests hold `VolumeList::contents_at` to.
 #[cfg(all(test, target_os = "linux"))]
-pub(crate) fn contents_at(vols: &[Volume], p: [f32; 3]) -> c_int {
+pub(crate) fn contents_at(vols: &[Volume], p: [f32; 3]) -> Contents {
     vols.iter()
         .filter(|v| (0..3).all(|i| p[i] >= v.min[i] && p[i] <= v.max[i]))
-        .fold(0, |c, v| c | v.contents)
+        .fold(Contents::empty(), |c, v| c | v.contents)
 }
 
 #[cfg(all(test, target_os = "linux"))]

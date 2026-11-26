@@ -25,7 +25,7 @@ pub(crate) fn bubble_trail_clip_math() {
         id: 1,
         min: [0.0; 3],
         max: [128.0; 3],
-        contents: CONTENTS_WATER,
+        contents: Contents::WATER,
     }];
     // Fully inside, or nowhere near: unchanged.
     assert_eq!(
@@ -75,13 +75,13 @@ pub(crate) fn bubble_trail_clip_math() {
             id: 1,
             min: [200.0, 0.0, 0.0],
             max: [328.0, 128.0, 128.0],
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER,
         },
         Volume {
             id: 2,
             min: [0.0; 3],
             max: [128.0; 3],
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER,
         },
     ];
     let BubbleClip::Clipped(_, b, _) =
@@ -123,7 +123,7 @@ pub(crate) fn bubble_hook_clips_count_and_releases_the_lock() {
             id: 1,
             min: [0.0; 3],
             max: [128.0; 3],
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER,
         }]);
 
         let from = [64.0f32, 64.0, 64.0];

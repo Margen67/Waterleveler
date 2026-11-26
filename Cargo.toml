@@ -19,6 +19,7 @@ detour = { version = "0.11.1", optional = true }
 gmod = { version = "17", default-features = false }
 libloading = { version = "0.9.1", optional = true }
 arc-swap = "1.9.5"
+bitflags = "2.13.2"
 memchr = "2.8.3"
 object = { version = "0.41.0", default-features = false, features = ["read_core", "pe", "elf"] }
 region = "4.0.2"

@@ -25,8 +25,8 @@ pub(crate) struct FluidSettings {
     pub torque: f32,
     pub viscosity: f32,
     pub aerodynamics: bool,
-    /// `CONTENTS_WATER` or `CONTENTS_SLIME`.
-    pub contents: c_int,
+    /// `Contents::WATER` or `Contents::SLIME`.
+    pub contents: Contents,
 }
 
 impl Default for FluidSettings {
@@ -37,7 +37,7 @@ impl Default for FluidSettings {
             torque: 0.0,
             viscosity: 0.0,
             aerodynamics: false,
-            contents: CONTENTS_WATER,
+            contents: Contents::WATER,
         }
     }
 }

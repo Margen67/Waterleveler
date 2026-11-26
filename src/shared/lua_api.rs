@@ -38,18 +38,18 @@ pub(crate) unsafe fn l_hook_status(l: State) -> i32 {
 
 /// The optional liquid argument at stack index `idx`: "water" (default, also nil or
 /// none) or "slime".
-pub(crate) unsafe fn parse_liquid(l: State, idx: i32) -> Result<i32, &'static str> {
+pub(crate) unsafe fn parse_liquid(l: State, idx: i32) -> Result<Contents, &'static str> {
     const BAD: &str = "liquid must be \"water\" or \"slime\"";
     unsafe {
         match l.lua_type(idx) {
-            LUA_TNONE | LUA_TNIL => Ok(CONTENTS_WATER),
+            LUA_TNONE | LUA_TNIL => Ok(Contents::WATER),
             LUA_TSTRING => match l
                 .get_binary_string(idx)
                 .map(<[u8]>::to_ascii_lowercase)
                 .as_deref()
             {
-                Some(b"water") => Ok(CONTENTS_WATER),
-                Some(b"slime") => Ok(CONTENTS_SLIME),
+                Some(b"water") => Ok(Contents::WATER),
+                Some(b"slime") => Ok(Contents::SLIME),
                 _ => Err(BAD),
             },
             _ => Err(BAD),

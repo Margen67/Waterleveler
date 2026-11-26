@@ -29,13 +29,13 @@ pub(crate) unsafe fn hook_get_point_contents(
     unsafe {
         let original: engine_fn!((*mut c_void, *const f32, usize, usize) -> c_int) =
             std::mem::transmute(ORIGINAL_GPC.load(Ordering::Relaxed));
-        let mut contents = original(this, pos, a3, a4);
+        let mut contents = Contents::from_bits_retain(original(this, pos, a3, a4));
         if !pos.is_null() {
             // Never block inside an engine callback.
             let p = [pos.read(), pos.add(1).read(), pos.add(2).read()];
-            let mut inside =
-                snapshot_if(|v| v.may_contain(p)).map_or(0, |vols| vols.contents_at(p));
-            if inside == 0 {
+            let mut inside = snapshot_if(|v| v.may_contain(p))
+                .map_or(Contents::empty(), |vols| vols.contents_at(p));
+            if inside.is_empty() {
                 // The end point of a small-hull trace (a shotgun pellet): the engine asks
                 // whether it is in water to decide on a splash. Answer for where the
                 // bullet's own line reaches the surface instead of the hull's centre.
@@ -51,21 +51,21 @@ pub(crate) unsafe fn hook_get_point_contents(
                             debug_log(format!(
                                 "hull pellet end ({:.4}, {:.4}, {:.4}): its line reaches the surface at ({:.4}, {:.4}, {:.4}) -> {}",
                                 p[0], p[1], p[2], probe[0], probe[1], probe[2],
-                                if inside != 0 { "water" } else { "not water" }
+                                if inside.is_empty() { "not water" } else { "water" }
                             ));
                         }
                     }
                 }
             }
-            if inside != 0 {
+            if !inside.is_empty() {
                 contents |= inside;
                 bump(&VOLUME_HITS);
             }
-            if inside == 0 && DEBUG.load(Ordering::Relaxed) {
+            if inside.is_empty() && DEBUG.load(Ordering::Relaxed) {
                 // A point just outside every volume: a bullet's impact point that lands
                 // here is not "in the water", so it gets no splash.
                 if let Some(vols) = snapshot_if(|v| v.near(p, 2.0)) {
-                    if vols.contents_at(p) == 0 {
+                    if vols.contents_at(p).is_empty() {
                         debug_log(format!(
                             "point ({:.4}, {:.4}, {:.4}) is just outside a volume: not water",
                             p[0], p[1], p[2]
@@ -74,7 +74,7 @@ pub(crate) unsafe fn hook_get_point_contents(
                 }
             }
         }
-        contents
+        contents.bits()
     }
 }
 }
@@ -265,7 +265,7 @@ pub(crate) unsafe fn apply_water_to_trace(
     trace: *mut u8,
     world: usize,
 ) -> bool {
-    unsafe { apply_water_to_trace_masked(vols, ray, trace, world, u32::MAX) }
+    unsafe { apply_water_to_trace_masked(vols, ray, trace, world, Contents::from_bits_retain(!0)) }
 }
 
 /// Same, only for the volumes whose contents `mask` asks for.
@@ -274,7 +274,7 @@ pub(crate) unsafe fn apply_water_to_trace_masked(
     ray: *const u8,
     trace: *mut u8,
     world: usize,
-    mask: u32,
+    mask: Contents,
 ) -> bool {
     unsafe {
         apply_water_to_trace_at(
@@ -302,7 +302,10 @@ pub(crate) struct RayFields {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum TraceOutcome {
     /// The ray starts and ends inside a volume: allsolid, fraction 0.
-    Inside { origin: [f32; 3], contents: c_int },
+    Inside {
+        origin: [f32; 3],
+        contents: Contents,
+    },
     /// The ray starts inside a volume and leaves it: startsolid, plus the fraction at
     /// which it left (when that is earlier than what the trace already has).
     Leaves { left_at: Option<f32> },
@@ -316,7 +319,7 @@ pub(crate) enum TraceOutcome {
         axis: usize,
         min_face: bool,
         plane_dist: f32,
-        contents: c_int,
+        contents: Contents,
     },
 }
 
@@ -327,7 +330,7 @@ pub(crate) fn plan_trace(
     vols: &[Volume],
     ray: &RayFields,
     current: f32,
-    mask: u32,
+    mask: Contents,
 ) -> Option<TraceOutcome> {
     let RayFields {
         start: s,
@@ -340,13 +343,13 @@ pub(crate) fn plan_trace(
     // Rays that START inside a volume. A real water brush reports these as
     // startsolid, and when the whole ray stays inside it as allsolid with
     // fraction 0 and the end point at the start. The engine's water-height
-    // probe (a downward MASK_WATER ray from above the entity)
+    // probe (a downward water-mask ray from above the entity)
     // depends on that: without it a probe starting inside a volume looks
     // like "no water here" and the computed surface height collapses to
     // the entity's own height.
     let mut started_inside = false;
     let mut left_at = 1.0f32;
-    for v in vols.iter().filter(|v| v.contents as u32 & mask != 0) {
+    for v in vols.iter().filter(|v| v.contents.intersects(mask)) {
         let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
         let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
         let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
@@ -374,7 +377,7 @@ pub(crate) fn plan_trace(
     for (i, v) in vols
         .iter()
         .enumerate()
-        .filter(|(_, v)| v.contents as u32 & mask != 0)
+        .filter(|(_, v)| v.contents.intersects(mask))
     {
         let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
         let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
@@ -429,7 +432,7 @@ pub(crate) unsafe fn apply_water_to_trace_at(
     trace: *mut u8,
     world: usize,
     swept_offset: usize,
-    mask: u32,
+    mask: Contents,
 ) -> bool {
     unsafe {
         // A trace that reports a hit must name the entity it hit: callers
@@ -472,7 +475,10 @@ pub(crate) unsafe fn apply_water_to_trace_at(
                 trace.add(0x28).write(0);
                 trace.add(0x29).write(0);
                 wf(0x2c, 0.0); // fraction
-                trace.add(0x30).cast::<i32>().write_unaligned(contents);
+                trace
+                    .add(0x30)
+                    .cast::<i32>()
+                    .write_unaligned(contents.bits());
                 trace.add(0x34).cast::<u16>().write_unaligned(0);
                 trace.add(0x36).write(1); // allsolid
                 trace.add(0x37).write(1); // startsolid
@@ -510,7 +516,10 @@ pub(crate) unsafe fn apply_water_to_trace_at(
                     .add(0x29)
                     .write(if min_face { 1u8 << axis } else { 0 }); // signbits
                 wf(0x2c, fraction);
-                trace.add(0x30).cast::<i32>().write_unaligned(contents);
+                trace
+                    .add(0x30)
+                    .cast::<i32>()
+                    .write_unaligned(contents.bits());
                 trace.add(0x34).cast::<u16>().write_unaligned(0); // dispFlags
                 trace.add(0x36).write(0); // allsolid
                 trace.add(0x37).write(0); // startsolid
@@ -595,7 +604,8 @@ pub(crate) unsafe fn hook_trace_ray(
         if ray.is_null() || trace.is_null() {
             return;
         }
-        if mask & ((CONTENTS_WATER | CONTENTS_SLIME) as u32) == 0 {
+        let wanted = Contents::from_bits_retain(mask as c_int);
+        if !wanted.intersects(Contents::WATER | Contents::SLIME) {
             note_small_hull(ray, mask, trace);
             return;
         }
@@ -610,7 +620,7 @@ pub(crate) unsafe fn hook_trace_ray(
             };
             // Only the volumes whose contents the trace's mask asks for are considered.
             let world = world_entity();
-            let hit = apply_water_to_trace_masked(&vols, ray, trace, world, mask);
+            let hit = apply_water_to_trace_masked(&vols, ray, trace, world, wanted);
             if hit {
                 bump(&TRACE_HITS);
             }

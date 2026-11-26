@@ -49,7 +49,7 @@ pub(crate) fn explosion_in_a_volume_is_redirected_outside_is_not() {
         id: 1,
         min: [0.0; 3],
         max: [100.0; 3],
-        contents: CONTENTS_WATER,
+        contents: Contents::WATER,
     });
     static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
     unsafe extern "win64" fn fake_dispatch(name: *const u8, _data: *const u8) {
@@ -88,7 +88,7 @@ pub(crate) fn redirected_explosion_carries_the_blast_point_in_the_effect_start()
         id: 1,
         min: [0.0; 3],
         max: [1000.0; 3],
-        contents: CONTENTS_WATER,
+        contents: Contents::WATER,
     });
     static SEEN: Mutex<Vec<[f32; 6]>> = Mutex::new(Vec::new());
     unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
@@ -190,7 +190,7 @@ pub(crate) fn explosion_hook_raises_water_level_only_inside_a_volume() {
         id: 1,
         min: [0.0; 3],
         max: [100.0; 3],
-        contents: CONTENTS_WATER,
+        contents: Contents::WATER,
     });
     set(&mut ent, [500.0, 0.0, 0.0]);
     unsafe { raise_water_level_in_volume(ent.as_mut_ptr()) };

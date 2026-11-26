@@ -248,7 +248,7 @@ pub(crate) unsafe fn fluid_attach(
             viscosity_factor: fluid.viscosity,
             game_data: std::ptr::null_mut(),
             use_aerodynamics: u8::from(fluid.aerodynamics),
-            contents: fluid.contents,
+            contents: fluid.contents.bits(),
         };
         if object == 0 {
             return Err("null physics object");
@@ -262,7 +262,7 @@ pub(crate) unsafe fn fluid_attach(
         FLUIDS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((id, controller as usize, fluid.contents));
+            .push((id, controller as usize, fluid.contents.bits()));
         fluid_born(controller as usize);
         Ok(id)
     }
