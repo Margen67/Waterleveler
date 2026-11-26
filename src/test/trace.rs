@@ -84,12 +84,7 @@ pub(crate) fn hook_substitutes_override_on_real_function_bytes() {
 
 #[test]
 pub(crate) fn volume_math() {
-    let v = [Volume {
-        id: 1,
-        min: [0.0, 0.0, 0.0],
-        max: [128.0, 128.0, 128.0],
-        contents: Contents::WATER,
-    }];
+    let v = [water(1, [0.0, 0.0, 0.0], [128.0, 128.0, 128.0])];
     assert!(point_in_volumes(&v, [64.0, 64.0, 64.0]));
     assert!(point_in_volumes(&v, [0.0, 128.0, 0.0])); // edges are inside
     assert!(!point_in_volumes(&v, [129.0, 64.0, 64.0]));
@@ -142,61 +137,37 @@ pub(crate) fn rays_starting_inside_behave_like_a_real_water_brush() {
     let _g = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    unsafe {
-        let vols = cube();
+    let vols = cube();
 
-        // The engine's water-height probe: starts 256 above a point that is
-        // inside, ends at that point (also inside) -> allsolid, fraction 0,
-        // end point = start.
-        let ray = make_ray(
-            [64.0, 64.0, 100.0],
-            [0.0, 0.0, -40.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
-        let mut tr = miss_trace();
-        assert!(apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
-        assert_eq!(f32at(&tr, 0x2c), 0.0, "fraction");
-        assert_eq!(f32at(&tr, 0x0c + 8), 100.0, "endpos = start");
-        assert_eq!((tr[0x36], tr[0x37]), (1, 1), "allsolid / startsolid");
-        assert_eq!(
-            i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
-            Contents::WATER.bits()
-        );
-        assert_eq!(
-            u64::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
-            0x1234,
-            "m_pEnt = the world entity"
-        );
+    // The engine's water-height probe: starts 256 above a point that is
+    // inside, ends at that point (also inside) -> allsolid, fraction 0,
+    // end point = start.
+    let ray = line([64.0, 64.0, 100.0], [0.0, 0.0, -40.0]);
+    let mut tr = miss_trace();
+    assert!(apply(&vols, &ray, &mut tr, 0x1234));
+    assert_eq!(f32at(&tr, 0x2c), 0.0, "fraction");
+    assert_eq!(f32at(&tr, 0x0c + 8), 100.0, "endpos = start");
+    assert_eq!((tr[0x36], tr[0x37]), (1, 1), "allsolid / startsolid");
+    assert_eq!(
+        i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
+        Contents::WATER.bits()
+    );
+    assert_eq!(
+        u64::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
+        0x1234,
+        "m_pEnt = the world entity"
+    );
 
-        // Starts inside but leaves: startsolid and fractionleftsolid, the rest is the engine's.
-        let ray = make_ray(
-            [64.0, 64.0, 64.0],
-            [0.0, 0.0, 300.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
-        let mut tr = miss_trace();
-        let before = tr;
-        assert!(apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
-        assert_eq!((tr[0x36], tr[0x37]), (0, 1));
-        let mut expect = before;
-        expect[0x37] = 1;
-        expect[0x38..0x3c].copy_from_slice(&(64.0f32 / 300.0).to_le_bytes());
-        assert_eq!(tr, expect);
-    }
+    // Starts inside but leaves: startsolid and fractionleftsolid, the rest is the engine's.
+    let ray = line([64.0, 64.0, 64.0], [0.0, 0.0, 300.0]);
+    let mut tr = miss_trace();
+    let before = tr;
+    assert!(apply(&vols, &ray, &mut tr, 0x1234));
+    assert_eq!((tr[0x36], tr[0x37]), (0, 1));
+    let mut expect = before;
+    expect[0x37] = 1;
+    expect[0x38..0x3c].copy_from_slice(&(64.0f32 / 300.0).to_le_bytes());
+    assert_eq!(tr, expect);
 }
 
 #[test]
@@ -238,12 +209,7 @@ pub(crate) fn water_hit_names_the_world_entity_or_is_skipped() {
     let _g = TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let vols = [Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [100.0; 3],
-        contents: Contents::WATER,
-    }];
+    let vols = [water(1, [0.0; 3], [100.0; 3])];
     let mut ray = vec![0u8; 0x60];
     let put = |ray: &mut Vec<u8>, o: usize, v: f32| ray[o..o + 4].copy_from_slice(&v.to_le_bytes());
     for (o, v) in [
@@ -259,27 +225,15 @@ pub(crate) fn water_hit_names_the_world_entity_or_is_skipped() {
     ray[0x41] = 1;
     let mut tr = vec![0u8; 0x80];
     tr[0x2c..0x30].copy_from_slice(&1.0f32.to_le_bytes());
-    unsafe {
-        // No entity known anywhere: leave the trace alone.
-        assert!(!apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0
-        ));
-        assert_eq!(tr[0x58..0x60], [0u8; 8]);
-        // World known: the hit names it.
-        assert!(apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
-        assert_eq!(
-            usize::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
-            0x1234
-        );
-    }
+    // No entity known anywhere: leave the trace alone.
+    assert!(!apply(&vols, &ray, &mut tr, 0));
+    assert_eq!(tr[0x58..0x60], [0u8; 8]);
+    // World known: the hit names it.
+    assert!(apply(&vols, &ray, &mut tr, 0x1234));
+    assert_eq!(
+        usize::from_le_bytes(tr[0x58..0x60].try_into().unwrap()),
+        0x1234
+    );
 }
 
 pub(crate) fn make_ray(
@@ -301,6 +255,25 @@ pub(crate) fn make_ray(
     r
 }
 
+/// A swept point ray from `start` along `delta`.
+pub(crate) fn line(start: [f32; 3], delta: [f32; 3]) -> Vec<u8> {
+    make_ray(start, delta, [0.0; 3], [0.0; 3], true).to_vec()
+}
+
+pub(crate) fn apply(vols: &[Volume], ray: &[u8], tr: &mut [u8], ent: usize) -> bool {
+    unsafe { apply_water_to_trace(vols, ray.as_ptr(), tr.as_mut_ptr(), ent) }
+}
+
+pub(crate) fn apply_masked(
+    vols: &[Volume],
+    ray: &[u8],
+    tr: &mut [u8],
+    ent: usize,
+    mask: Contents,
+) -> bool {
+    unsafe { apply_water_to_trace_masked(vols, ray.as_ptr(), tr.as_mut_ptr(), ent, mask) }
+}
+
 pub(crate) fn miss_trace() -> [u8; 0x70] {
     let mut t = [0u8; 0x70];
     t[0x2c..0x30].copy_from_slice(&1.0f32.to_le_bytes()); // fraction = 1
@@ -312,72 +285,55 @@ pub(crate) fn f32at(b: &[u8], o: usize) -> f32 {
     f32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
 
+fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+/// Slime for every `n`th id, water for the rest.
+fn slime_every(id: impl TryInto<u32>, n: u32) -> Contents {
+    if id.try_into().is_ok_and(|id| id % n == 0) {
+        Contents::SLIME
+    } else {
+        Contents::WATER
+    }
+}
+
 pub(crate) const fn cube() -> [Volume; 1] {
-    [Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [128.0; 3],
-        contents: Contents::WATER,
-    }]
+    [water(1, [0.0; 3], [128.0; 3])]
 }
 
 #[test]
 pub(crate) fn trace_mask_selects_the_volumes_it_asks_for() {
-    unsafe {
-        // A water volume and a slime volume side by side along the ray.
-        let vols = [
-            cube()[0],
-            Volume {
-                id: 2,
-                min: [200.0, 0.0, 0.0],
-                max: [328.0, 128.0, 128.0],
-                contents: Contents::SLIME,
-            },
-        ];
-        let ray = make_ray(
-            [264.0, 64.0, 300.0],
-            [0.0, 0.0, -300.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
-        // Only the slime volume is under the ray: a water-only mask must leave it alone.
+    // A water volume and a slime volume side by side along the ray.
+    let vols = [
+        cube()[0],
+        vol(2, [200.0, 0.0, 0.0], [328.0, 128.0, 128.0], Contents::SLIME),
+    ];
+    let ray = line([264.0, 64.0, 300.0], [0.0, 0.0, -300.0]);
+    // Only the slime volume is under the ray: a water-only mask must leave it alone.
+    let mut tr = miss_trace();
+    assert!(!apply_masked(&vols, &ray, &mut tr, 0x1234, Contents::WATER));
+    assert_eq!(tr, miss_trace());
+    // A slime mask, and a mask with both, see it.
+    for mask in [Contents::SLIME, Contents::WATER | Contents::SLIME] {
         let mut tr = miss_trace();
-        assert!(!apply_water_to_trace_masked(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234,
-            Contents::WATER
-        ));
-        assert_eq!(tr, miss_trace());
-        // A slime mask, and a mask with both, see it.
-        for mask in [Contents::SLIME, Contents::WATER | Contents::SLIME] {
-            let mut tr = miss_trace();
-            assert!(apply_water_to_trace_masked(
-                &vols,
-                ray.as_ptr(),
-                tr.as_mut_ptr(),
-                0x1234,
-                mask
-            ));
-            assert_eq!(
-                i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
-                Contents::SLIME.bits()
-            );
-        }
+        assert!(apply_masked(&vols, &ray, &mut tr, 0x1234, mask));
+        assert_eq!(
+            i32::from_le_bytes(tr[0x30..0x34].try_into().unwrap()),
+            Contents::SLIME.bits()
+        );
     }
 }
 
 #[test]
 pub(crate) fn volume_bounds_follow_every_change_and_never_reject_a_point_inside() {
     let a = cube()[0];
-    let b = Volume {
-        id: 2,
-        min: [1000.0, -50.0, 20.0],
-        max: [1100.0, 50.0, 60.0],
-        contents: Contents::SLIME,
-    };
+    let b = vol(
+        2,
+        [1000.0, -50.0, 20.0],
+        [1100.0, 50.0, 60.0],
+        Contents::SLIME,
+    );
     let mut list = VolumeList::new();
     assert!(!list.may_contain([0.0; 3]), "empty list");
     list.push(a);
@@ -414,15 +370,15 @@ pub(crate) fn rays_that_miss_the_bounds_never_touch_a_volume() {
         let mut list = VolumeList::new();
         assert!(ray_misses_bounds(
             list.bounds,
-            make_ray([0.0; 3], [0.0, 0.0, -10.0], [0.0; 3], [0.0; 3], true).as_ptr()
+            line([0.0; 3], [0.0, 0.0, -10.0]).as_ptr()
         ));
         list.push(cube()[0]);
-        list.push(Volume {
-            id: 2,
-            min: [1000.0, -50.0, 20.0],
-            max: [1100.0, 50.0, 60.0],
-            contents: Contents::SLIME,
-        });
+        list.push(vol(
+            2,
+            [1000.0, -50.0, 20.0],
+            [1100.0, 50.0, 60.0],
+            Contents::SLIME,
+        ));
         // A deterministic spread of rays: lines, hulls, long and short, starting in and out.
         let mut seed = 0x1234_5678_u32;
         let mut next = |range: f32| {
@@ -567,20 +523,9 @@ pub(crate) fn trace_is_rewritten_as_water_surface_hit() {
         let vols = cube();
 
         // A line trace that would otherwise travel the full length.
-        let ray = make_ray(
-            [64.0, 64.0, 300.0],
-            [0.0, 0.0, -300.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
+        let ray = line([64.0, 64.0, 300.0], [0.0, 0.0, -300.0]);
         let mut tr = miss_trace();
-        assert!(apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
+        assert!(apply(&vols, &ray, &mut tr, 0x1234));
         let t = (172.0 + ENTRY_DEPTH) / 300.0;
         assert!((f32at(&tr, 0x2c) - t).abs() < 1e-6, "fraction");
         assert!(
@@ -609,20 +554,9 @@ pub(crate) fn trace_is_rewritten_as_water_surface_hit() {
         assert_eq!(CStr::from_ptr(name).to_bytes(), b"water");
 
         // Entering from below flips the normal and sets signbits.
-        let ray = make_ray(
-            [64.0, 64.0, -100.0],
-            [0.0, 0.0, 300.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
+        let ray = line([64.0, 64.0, -100.0], [0.0, 0.0, 300.0]);
         let mut tr = miss_trace();
-        assert!(apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
+        assert!(apply(&vols, &ray, &mut tr, 0x1234));
         assert_eq!(f32at(&tr, 0x20), -1.0);
         assert_eq!(tr[0x29], 1 << 2);
         assert_eq!(f32at(&tr, 0x24), -0.0);
@@ -636,12 +570,7 @@ pub(crate) fn trace_is_rewritten_as_water_surface_hit() {
             true,
         );
         let mut tr = miss_trace();
-        assert!(apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
+        assert!(apply(&vols, &ray, &mut tr, 0x1234));
         assert!((f32at(&tr, 0x2c) - 164.0 / 300.0).abs() < 1e-6);
         assert!(
             (f32at(&tr, 0x0c + 8) - 136.0).abs() < 1e-3,
@@ -654,22 +583,11 @@ pub(crate) fn trace_is_rewritten_as_water_surface_hit() {
         );
 
         // The engine already hit something nearer: leave it alone.
-        let ray = make_ray(
-            [64.0, 64.0, 300.0],
-            [0.0, 0.0, -300.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
+        let ray = line([64.0, 64.0, 300.0], [0.0, 0.0, -300.0]);
         let mut tr = miss_trace();
         tr[0x2c..0x30].copy_from_slice(&0.3f32.to_le_bytes());
         let before = tr;
-        assert!(!apply_water_to_trace(
-            &vols,
-            ray.as_ptr(),
-            tr.as_mut_ptr(),
-            0x1234
-        ));
+        assert!(!apply(&vols, &ray, &mut tr, 0x1234));
         assert_eq!(tr, before);
 
         // Not swept, or misses the box: unchanged.
@@ -680,23 +598,13 @@ pub(crate) fn trace_is_rewritten_as_water_surface_hit() {
                 [0.0; 3],
                 [0.0; 3],
                 false,
-            ),
-            make_ray(
-                [900.0, 64.0, 300.0],
-                [0.0, 0.0, -300.0],
-                [0.0; 3],
-                [0.0; 3],
-                true,
-            ),
+            )
+            .to_vec(),
+            line([900.0, 64.0, 300.0], [0.0, 0.0, -300.0]),
         ] {
             let mut tr = miss_trace();
             let before = tr;
-            assert!(!apply_water_to_trace(
-                &vols,
-                ray.as_ptr(),
-                tr.as_mut_ptr(),
-                0x1234
-            ));
+            assert!(!apply(&vols, &ray, &mut tr, 0x1234));
             assert_eq!(tr, before);
         }
     }
@@ -748,14 +656,8 @@ pub(crate) fn trace_hook_through_vtable() {
         assert_eq!(vtable[TRACE_RAY_SLOT], hook);
         assert_eq!(vtable[0], original, "other slots untouched");
 
-        let ray = make_ray(
-            [64.0, 64.0, 300.0],
-            [0.0, 0.0, -300.0],
-            [0.0; 3],
-            [0.0; 3],
-            true,
-        );
-        let call = |mask: u32, tr: &mut [u8; 0x70]| {
+        let ray = line([64.0, 64.0, 300.0], [0.0, 0.0, -300.0]);
+        let call = |mask: u32, tr: &mut [u8]| {
             let f: unsafe extern "win64" fn(*mut c_void, *const u8, u32, *mut c_void, *mut u8) =
                 std::mem::transmute(vtable[TRACE_RAY_SLOT]);
             f(
@@ -817,16 +719,7 @@ pub(crate) fn lane_scan_agrees_with_the_plain_scan() {
     for id in 0..40 {
         let lo = [next() * 800.0, next() * 800.0, next() * 800.0];
         let size = [next() * 200.0, next() * 200.0, next() * 200.0];
-        list.push(Volume {
-            id,
-            min: lo,
-            max: [lo[0] + size[0], lo[1] + size[1], lo[2] + size[2]],
-            contents: if id % 3 == 0 {
-                Contents::SLIME
-            } else {
-                Contents::WATER
-            },
-        });
+        list.push(vol(id, lo, add3(lo, size), slime_every(id, 3)));
     }
     let mut hits = 0;
     for _ in 0..20_000 {
@@ -858,16 +751,7 @@ pub(crate) fn every_point_query_agrees_with_the_plain_scan_at_every_size() {
         for id in 0..count {
             let lo = [next() * 4000.0, next() * 4000.0, next() * 4000.0];
             let size = [next() * 300.0, next() * 300.0, next() * 300.0];
-            list.push(Volume {
-                id: id as u32,
-                min: lo,
-                max: [lo[0] + size[0], lo[1] + size[1], lo[2] + size[2]],
-                contents: if id % 4 == 0 {
-                    Contents::SLIME
-                } else {
-                    Contents::WATER
-                },
-            });
+            list.push(vol(id as u32, lo, add3(lo, size), slime_every(id, 4)));
         }
         let mut inside = 0;
         for round in 0..5_000 {
@@ -910,12 +794,7 @@ pub(crate) fn trails_that_miss_the_bounds_are_never_clipped() {
     let mut list = VolumeList::new();
     for id in 0..6 {
         let lo = [next() * 500.0, next() * 500.0, next() * 500.0];
-        list.push(Volume {
-            id,
-            min: lo,
-            max: [lo[0] + 90.0, lo[1] + 90.0, lo[2] + 90.0],
-            contents: Contents::WATER,
-        });
+        list.push(water(id, lo, add3(lo, [90.0; 3])));
     }
     let mut misses = 0;
     for _ in 0..20_000 {
@@ -950,12 +829,7 @@ pub(crate) fn hooks_read_the_snapshot_published_by_every_edit() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     volumes().clear();
     assert!(snapshot().is_none());
-    volumes().push(Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [10.0; 3],
-        contents: Contents::WATER,
-    });
+    volumes().push(water(1, [0.0; 3], [10.0; 3]));
     assert_eq!(snapshot().map(|v| v.len()), Some(1));
     {
         // A read through the guard does not republish; an edit does, once released.
@@ -984,12 +858,7 @@ pub(crate) fn contents_hook_adds_water_inside_volumes() {
         let trace = object.as_mut_ptr().cast::<c_void>();
 
         volumes().clear();
-        volumes().push(Volume {
-            id: 1,
-            min: [0.0, 0.0, 0.0],
-            max: [128.0, 128.0, 128.0],
-            contents: Contents::WATER,
-        });
+        volumes().push(water(1, [0.0, 0.0, 0.0], [128.0, 128.0, 128.0]));
         let hits_before = VOLUME_HITS.load(Ordering::Relaxed);
 
         let (slot, original) = install_contents_hook(trace, &TEST_PLATFORM).expect("install");

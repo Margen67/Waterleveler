@@ -45,12 +45,7 @@ pub(crate) fn explosion_in_a_volume_is_redirected_outside_is_not() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     volumes().clear();
-    volumes().push(Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [100.0; 3],
-        contents: Contents::WATER,
-    });
+    volumes().push(water(1, [0.0; 3], [100.0; 3]));
     static NAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
     unsafe extern "win64" fn fake_dispatch(name: *const u8, _data: *const u8) {
         unsafe {
@@ -84,12 +79,7 @@ pub(crate) fn redirected_explosion_carries_the_blast_point_in_the_effect_start()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     volumes().clear();
-    volumes().push(Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [1000.0; 3],
-        contents: Contents::WATER,
-    });
+    volumes().push(water(1, [0.0; 3], [1000.0; 3]));
     static SEEN: Mutex<Vec<[f32; 6]>> = Mutex::new(Vec::new());
     unsafe extern "win64" fn fake_dispatch(_n: *const u8, data: *const u8) {
         unsafe {
@@ -186,12 +176,7 @@ pub(crate) fn explosion_hook_raises_water_level_only_inside_a_volume() {
         }
     };
     volumes().clear();
-    volumes().push(Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [100.0; 3],
-        contents: Contents::WATER,
-    });
+    volumes().push(water(1, [0.0; 3], [100.0; 3]));
     set(&mut ent, [500.0, 0.0, 0.0]);
     unsafe { raise_water_level_in_volume(ent.as_mut_ptr()) };
     assert_eq!(ent[ENTITY_WATER_LEVEL_OFFSET], 0);

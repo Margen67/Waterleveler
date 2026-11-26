@@ -21,12 +21,7 @@ pub(crate) fn bubble_trail_signature_is_unique_in_server_dll() {
 
 #[test]
 pub(crate) fn bubble_trail_clip_math() {
-    let v = [Volume {
-        id: 1,
-        min: [0.0; 3],
-        max: [128.0; 3],
-        contents: Contents::WATER,
-    }];
+    let v = [water(1, [0.0; 3], [128.0; 3])];
     // Fully inside, or nowhere near: unchanged.
     assert_eq!(
         clip_bubble_trail(&v, [10.0; 3], [100.0; 3]),
@@ -71,18 +66,8 @@ pub(crate) fn bubble_trail_clip_math() {
 
     // Two volumes: the one the trail starts in wins.
     let two = [
-        Volume {
-            id: 1,
-            min: [200.0, 0.0, 0.0],
-            max: [328.0, 128.0, 128.0],
-            contents: Contents::WATER,
-        },
-        Volume {
-            id: 2,
-            min: [0.0; 3],
-            max: [128.0; 3],
-            contents: Contents::WATER,
-        },
+        water(1, [200.0, 0.0, 0.0], [328.0, 128.0, 128.0]),
+        water(2, [0.0; 3], [128.0; 3]),
     ];
     let BubbleClip::Clipped(_, b, _) =
         clip_bubble_trail(&two, [64.0, 64.0, 64.0], [1000.0, 64.0, 64.0])
@@ -119,12 +104,7 @@ pub(crate) fn bubble_hook_clips_count_and_releases_the_lock() {
         BUBBLE_TRAMPOLINE.store(fake_bubble_trail as *const () as usize, Ordering::SeqCst);
         BUBBLE_CALLS.lock().unwrap().clear();
         let clips = BUBBLE_CLIPS.load(Ordering::Relaxed);
-        volumes().set(vec![Volume {
-            id: 1,
-            min: [0.0; 3],
-            max: [128.0; 3],
-            contents: Contents::WATER,
-        }]);
+        volumes().set(vec![water(1, [0.0; 3], [128.0; 3])]);
 
         let from = [64.0f32, 64.0, 64.0];
         let to = [1064.0f32, 64.0, 64.0];

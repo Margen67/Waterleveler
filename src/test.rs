@@ -15,6 +15,21 @@ mod signatures;
 mod trace;
 mod windows;
 
+/// A volume of the given contents.
+pub(crate) const fn vol(id: u32, min: [f32; 3], max: [f32; 3], contents: Contents) -> Volume {
+    Volume {
+        id,
+        min,
+        max,
+        contents,
+    }
+}
+
+/// A water volume.
+pub(crate) const fn water(id: u32, min: [f32; 3], max: [f32; 3]) -> Volume {
+    vol(id, min, max, Contents::WATER)
+}
+
 pub(crate) use linux::*;
 pub(crate) use signatures::*;
 pub(crate) use trace::*;

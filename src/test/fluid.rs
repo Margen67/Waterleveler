@@ -187,18 +187,8 @@ pub(crate) unsafe extern "win64" fn fake_set_flags(_: *mut c_void, f: u16) {
 #[test]
 pub(crate) fn slime_volumes_report_slime_and_only_water_is_a_surface() {
     let vols = [
-        Volume {
-            id: 1,
-            min: [0.0; 3],
-            max: [100.0; 3],
-            contents: Contents::SLIME,
-        },
-        Volume {
-            id: 2,
-            min: [200.0, 0.0, 0.0],
-            max: [300.0, 100.0, 100.0],
-            contents: Contents::WATER,
-        },
+        vol(1, [0.0; 3], [100.0; 3], Contents::SLIME),
+        water(2, [200.0, 0.0, 0.0], [300.0, 100.0, 100.0]),
     ];
     assert_eq!(contents_at(&vols, [50.0; 3]), Contents::SLIME);
     assert_eq!(contents_at(&vols, [250.0, 50.0, 50.0]), Contents::WATER);
