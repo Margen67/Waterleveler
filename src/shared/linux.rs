@@ -205,21 +205,22 @@ pub(crate) mod lin {
         }
     }
 
-    /// Load address of the 64-bit Linux client module (`client.so`).
+    /// Load address of the 64-bit Linux client module (`client.so`, or `client_client.so` on the x86-64 branch).
     #[cfg(feature = "client")]
     pub(crate) unsafe fn client_base() -> *const u8 {
         unsafe {
-            loaded_module(&[b"/client.so"]).map_or(std::ptr::null(), |(base, _)| base as *const u8)
+            loaded_module(&[b"/client.so", b"/client_client.so"])
+                .map_or(std::ptr::null(), |(base, _)| base as *const u8)
         }
     }
 
     #[cfg(feature = "client")]
-    /// An interface of client.so (`CreateInterface("VClientEntityList003")`).
+    /// An interface of the client module (`CreateInterface("VClientEntityList003")`).
     pub(crate) unsafe fn client_interface(name: &CStr) -> usize {
         unsafe {
             use libloading::os::unix::{Library, RTLD_LAZY};
             use std::ffi::c_char;
-            let Some((_, path)) = loaded_module(&[b"/client.so"]) else {
+            let Some((_, path)) = loaded_module(&[b"/client.so", b"/client_client.so"]) else {
                 return 0;
             };
             // The library is already loaded, so this only takes a reference that is dropped
