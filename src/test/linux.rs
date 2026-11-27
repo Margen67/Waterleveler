@@ -25,7 +25,7 @@ pub(crate) struct Build {
     pub(crate) upd_disp: usize,
 }
 
-pub(crate) const BUILDS: [Build; 2] = [
+pub(crate) const BUILDS: [Build; 3] = [
     Build {
         name: "dev branch",
         server_env: "SERVER_SO_X64",
@@ -51,6 +51,22 @@ pub(crate) const BUILDS: [Build; 2] = [
         enginetrace: 0x019e_17b0,
         physenv: 0x019e_1bd8,
         entity_array: 0x019e_18a0,
+        client_enginetrace: 0x012c_5f88,
+        upd_disp: 104,
+    },
+    // The x86-64 branch's `server_client.so`, the one the game client loads (the client
+    // library is the same).
+    Build {
+        name: "x86-64 branch, client's server",
+        server_env: "SERVER_SO_X86_64_CLIENT",
+        client_env: "CLIENT_SO_X86_64",
+        set_water_level: 0x0092_8f40,
+        water_level: 0x2d3,
+        eflags: 0x1b8,
+        swept: 0x49,
+        enginetrace: 0x01a4_b6f8,
+        physenv: 0x01a4_bb38,
+        entity_array: 0x01a4_b7e8,
         client_enginetrace: 0x012c_5f88,
         upd_disp: 104,
     },

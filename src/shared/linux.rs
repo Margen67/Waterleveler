@@ -196,11 +196,12 @@ pub(crate) mod lin {
         }
     }
 
-    /// Load address of the 64-bit Linux server module (`server_srv.so`, or `server.so`).
+    /// Load address of the 64-bit Linux server module (`server_srv.so`, `server.so`, or the game
+    /// client's `server_client.so`).
     #[cfg(feature = "server")]
     pub(crate) unsafe fn server_base() -> *const u8 {
         unsafe {
-            loaded_module(&[b"/server_srv.so", b"/server.so"])
+            loaded_module(&[b"/server_srv.so", b"/server.so", b"/server_client.so"])
                 .map_or(std::ptr::null(), |(base, _)| base as *const u8)
         }
     }
@@ -296,21 +297,29 @@ pub(crate) mod lin {
         result
     }
 
-    /// Loads the Lua API from the `lua_shared.so` (or a dedicated server's
-    /// `lua_shared_srv.so`) the game already has loaded.
+    /// Loads the Lua API from the Lua library the game already has loaded: `lua_shared.so`,
+    /// a dedicated server's `lua_shared_srv.so`, or the game client's `lua_shared_client.so`.
     ///
-    /// When `gmod`'s relative `bin/linux64/lua_shared.so` already resolves it is used as is;
-    /// otherwise see [`with_lua_shared_visible`]. A failed lookup would panic out of
+    /// The loaded one is always preferred, even when `gmod`'s relative
+    /// `bin/linux64/lua_shared.so` also exists: that can be another build's copy (the
+    /// dedicated server's, next to the client's), and loading it would give a second Lua
+    /// library instead of the game's. See [`with_lua_shared_visible`]. Only when none is loaded
+    /// does the relative path get its chance. A failed lookup would panic out of
     /// `gmod13_open` and abort the game, so every failure is returned instead.
     pub(crate) unsafe fn load_lua_shared() -> Result<(), String> {
         unsafe {
+            if let Some((_, loaded)) = loaded_module(&[
+                b"/lua_shared.so",
+                b"/lua_shared_srv.so",
+                b"/lua_shared_client.so",
+            ]) {
+                return with_lua_shared_visible(loaded.to_bytes(), || gmod::lua::load());
+            }
             if std::path::Path::new("bin/linux64/lua_shared.so").exists() {
                 gmod::lua::load();
                 return Ok(());
             }
-            let (_, loaded) = loaded_module(&[b"/lua_shared.so", b"/lua_shared_srv.so"])
-                .ok_or("lua_shared.so is not loaded and not in the working directory")?;
-            with_lua_shared_visible(loaded.to_bytes(), || gmod::lua::load())
+            Err("lua_shared.so is not loaded and not in the working directory".into())
         }
     }
 
