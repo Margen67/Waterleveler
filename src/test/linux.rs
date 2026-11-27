@@ -195,3 +195,45 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
         }
     }
 }
+
+#[test]
+pub(crate) fn lua_shared_dir_is_the_folder_holding_bin_linux64() {
+    use std::path::PathBuf;
+    // The 64-bit client and a listen server keep it under garrysmod/.
+    assert_eq!(
+        os::lua_shared_dir(
+            b"/home/u/.local/share/Steam/steamapps/common/GarrysMod/garrysmod/bin/linux64/lua_shared.so"
+        ),
+        Some(PathBuf::from(
+            "/home/u/.local/share/Steam/steamapps/common/GarrysMod/garrysmod/"
+        ))
+    );
+    // A dedicated server's root, and a relative path, are already what `gmod` expects.
+    assert_eq!(
+        os::lua_shared_dir(b"/srv/gmod/bin/linux64/lua_shared.so"),
+        Some(PathBuf::from("/srv/gmod/"))
+    );
+    assert_eq!(
+        os::lua_shared_dir(b"bin/linux64/lua_shared.so"),
+        Some(PathBuf::new())
+    );
+    // Not that library, or a name that merely ends the same way.
+    assert_eq!(
+        os::lua_shared_dir(b"/x/bin/linux64/lua_shared_srv.so"),
+        None
+    );
+    assert_eq!(os::lua_shared_dir(b"/x/mybin/linux64/lua_shared.so"), None);
+    assert_eq!(os::lua_shared_dir(b"/usr/lib/liblua.so"), None);
+}
+
+#[test]
+pub(crate) fn a_missing_lua_shared_is_an_error_not_a_panic() {
+    let _g = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = std::env::current_dir().unwrap();
+    // The test process has no lua_shared.so loaded.
+    let why = unsafe { load_lua_shared() }.unwrap_err();
+    assert!(why.contains("lua_shared.so"), "{why}");
+    assert_eq!(std::env::current_dir().unwrap(), before);
+}

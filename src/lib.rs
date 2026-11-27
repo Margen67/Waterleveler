@@ -115,10 +115,35 @@ compile_error!("waterlevelercore supports Linux and Windows only");
 // underwater sound from that distance, so the client's hooked trace (see `shared/trace.rs`)
 // is all it needs.
 
-/// The module's entry point. The `gmod` macro loads `lua_shared` and exports it as `gmod13_open`.
-#[gmod::gmod13_open]
-pub unsafe fn gmod13_open(l: gmod::lua::State) -> i32 {
-    unsafe { open_realm(l) }
+/// Set once the Lua API is loaded: `gmod13_close` must not touch it otherwise.
+static LUA_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Loads the Lua API (`gmod`'s own lookup is fine on Windows).
+#[cfg(not(target_os = "linux"))]
+unsafe fn load_lua_shared() -> Result<(), String> {
+    unsafe { gmod::lua::load() };
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+use shared::os::load_lua_shared;
+
+/// The module's entry point.
+///
+/// Written out instead of using `#[gmod::gmod13_open]` so that a `lua_shared` it cannot find is
+/// reported and the module skipped, not a panic out of this `extern "C"` function, which aborts
+/// the game.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn gmod13_open(l: gmod::lua::State) -> i32 {
+    unsafe {
+        if let Err(why) = load_lua_shared() {
+            eprintln!("[waterleveler] not loaded: {why}");
+            return 0;
+        }
+        LUA_LOADED.store(true, std::sync::atomic::Ordering::Release);
+        gmod::lua::__set_state__internal(l);
+        open_realm(l)
+    }
 }
 
 // The body is a separate function: the `gmod` macro cannot parse `cfg` blocks or `c"..."` literals.
@@ -150,6 +175,9 @@ pub unsafe fn gmod13_close(l: gmod::lua::State) -> i32 {
 
 // The body is a separate function: the `gmod` macro cannot parse `cfg` blocks or `c"..."` literals.
 unsafe fn close_realm(l: gmod::lua::State) -> i32 {
+    if !LUA_LOADED.load(std::sync::atomic::Ordering::Acquire) {
+        return 0;
+    }
     #[cfg(all(
         any(windows, target_os = "linux"),
         target_arch = "x86_64",

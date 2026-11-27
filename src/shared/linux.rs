@@ -154,6 +154,52 @@ pub(crate) mod lin {
         }
     }
 
+    /// The folder that makes `gmod`'s fixed, relative `bin/linux64/lua_shared.so` resolve, from the
+    /// full path of the loaded `lua_shared.so`: the game's `garrysmod` folder, in which the
+    /// 64-bit client and a listen server keep it (a dedicated server keeps it in its own root).
+    pub(crate) fn lua_shared_dir(loaded: &[u8]) -> Option<std::path::PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        const RELATIVE: &[u8] = b"bin/linux64/lua_shared.so";
+        let dir = loaded.strip_suffix(RELATIVE)?;
+        if !dir.is_empty() && !dir.ends_with(b"/") {
+            return None;
+        }
+        Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir)))
+    }
+
+    /// Loads the Lua API from the `lua_shared.so` the game already has loaded.
+    ///
+    /// `gmod` opens it as the relative `bin/linux64/lua_shared.so`, which only resolves when
+    /// the process's working directory is the one that holds it. That is a dedicated server's
+    /// root, but not the 64-bit client's or a listen server's (`GarrysMod/`, with the library
+    /// in `garrysmod/bin/linux64/`), where the lookup panicked out of `gmod13_open` and
+    /// aborted the game. So when the path does not resolve, switch to the folder the loaded
+    /// library is in for the length of the load.
+    pub(crate) unsafe fn load_lua_shared() -> Result<(), String> {
+        unsafe {
+            if std::path::Path::new("bin/linux64/lua_shared.so").exists() {
+                gmod::lua::load();
+                return Ok(());
+            }
+            let (_, loaded) = loaded_module(&[b"/lua_shared.so"])
+                .ok_or("lua_shared.so is not loaded and not in the working directory")?;
+            let dir = lua_shared_dir(loaded.to_bytes()).ok_or_else(|| {
+                format!(
+                    "unexpected lua_shared.so location {}",
+                    loaded.to_string_lossy()
+                )
+            })?;
+            let previous =
+                std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
+            std::env::set_current_dir(&dir)
+                .map_err(|e| format!("cannot enter {}: {e}", dir.display()))?;
+            let result = std::panic::catch_unwind(|| gmod::lua::load());
+            // Always put the working directory back (the game's other threads use it).
+            let _ = std::env::set_current_dir(previous);
+            result.map_err(|_| format!("cannot load {}", loaded.to_string_lossy()))
+        }
+    }
+
     /// True when this library was loaded as the client module (file name gmcl_*).
     #[cfg(all(feature = "server", feature = "client"))]
     pub(crate) unsafe fn is_client_module() -> bool {
