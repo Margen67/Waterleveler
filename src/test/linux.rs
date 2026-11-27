@@ -237,3 +237,36 @@ pub(crate) fn a_missing_lua_shared_is_an_error_not_a_panic() {
     assert!(why.contains("lua_shared.so"), "{why}");
     assert_eq!(std::env::current_dir().unwrap(), before);
 }
+
+#[test]
+pub(crate) fn a_dedicated_servers_lua_shared_srv_gets_the_expected_path_only_during_the_load() {
+    let _g = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = std::env::current_dir().unwrap();
+    let dir = std::env::temp_dir().join(format!("wl-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("lua_shared_srv.so");
+    std::fs::write(&file, b"x").unwrap();
+    let seen = unsafe {
+        os::with_lua_shared_visible(file.as_os_str().as_encoded_bytes(), || {
+            std::fs::canonicalize("bin/linux64/lua_shared.so").ok()
+        })
+    }
+    .unwrap();
+    assert_eq!(seen, Some(std::fs::canonicalize(&file).unwrap()));
+    assert_eq!(std::env::current_dir().unwrap(), before);
+    assert!(!std::env::temp_dir()
+        .join(format!("waterleveler-{}", std::process::id()))
+        .exists());
+    // A panic inside the load is an error, and still cleans up.
+    let why = unsafe {
+        os::with_lua_shared_visible(file.as_os_str().as_encoded_bytes(), || -> () {
+            panic!("boom")
+        })
+    }
+    .unwrap_err();
+    assert!(why.contains("lua_shared_srv.so"), "{why}");
+    assert_eq!(std::env::current_dir().unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}

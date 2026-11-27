@@ -167,36 +167,65 @@ pub(crate) mod lin {
         Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(dir)))
     }
 
-    /// Loads the Lua API from the `lua_shared.so` the game already has loaded.
+    /// Runs `load` with `bin/linux64/lua_shared.so` resolving from the working directory, for
+    /// the library the game loaded as `loaded` (the full path of its file).
     ///
-    /// `gmod` opens it as the relative `bin/linux64/lua_shared.so`, which only resolves when
-    /// the process's working directory is the one that holds it. That is a dedicated server's
-    /// root, but not the 64-bit client's or a listen server's (`GarrysMod/`, with the library
-    /// in `garrysmod/bin/linux64/`), where the lookup panicked out of `gmod13_open` and
-    /// aborted the game. So when the path does not resolve, switch to the folder the loaded
-    /// library is in for the length of the load.
+    /// `gmod` only ever opens that one relative path. The 64-bit client and a listen server
+    /// keep the file in `garrysmod/`, so the working directory is switched there. A dedicated
+    /// server names its copy `lua_shared_srv.so`, which that path never matches, so a temporary
+    /// folder holds a symlink of the expected name to it: the loader recognises a file it has
+    /// already loaded by identity, whatever it is opened as, and hands back the loaded library.
+    /// The working directory is always put back (the game's other threads use it) and the
+    /// temporary folder removed.
+    pub(crate) unsafe fn with_lua_shared_visible<T>(
+        loaded: &[u8],
+        load: impl FnOnce() -> T + std::panic::UnwindSafe,
+    ) -> Result<T, String> {
+        use std::os::unix::ffi::OsStrExt;
+        let target = std::path::Path::new(std::ffi::OsStr::from_bytes(loaded));
+        let mut temporary = None;
+        let dir = if let Some(dir) = lua_shared_dir(loaded) {
+            dir
+        } else {
+            let dir = std::env::temp_dir().join(format!("waterleveler-{}", std::process::id()));
+            let bin = dir.join("bin/linux64");
+            std::fs::create_dir_all(&bin)
+                .map_err(|e| format!("cannot make {}: {e}", bin.display()))?;
+            temporary = Some(dir.clone());
+            std::os::unix::fs::symlink(target, bin.join("lua_shared.so"))
+                .map_err(|e| format!("cannot link {}: {e}", target.display()))?;
+            dir
+        };
+        let result = (|| {
+            let previous =
+                std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
+            std::env::set_current_dir(&dir)
+                .map_err(|e| format!("cannot enter {}: {e}", dir.display()))?;
+            let result = std::panic::catch_unwind(load);
+            let _ = std::env::set_current_dir(previous);
+            result.map_err(|_| format!("cannot load {}", target.display()))
+        })();
+        if let Some(dir) = temporary {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        result
+    }
+
+    /// Loads the Lua API from the `lua_shared.so` (or a dedicated server's
+    /// `lua_shared_srv.so`) the game already has loaded.
+    ///
+    /// When `gmod`'s relative `bin/linux64/lua_shared.so` already resolves it is used as is;
+    /// otherwise see [`with_lua_shared_visible`]. A failed lookup would panic out of
+    /// `gmod13_open` and abort the game, so every failure is returned instead.
     pub(crate) unsafe fn load_lua_shared() -> Result<(), String> {
         unsafe {
             if std::path::Path::new("bin/linux64/lua_shared.so").exists() {
                 gmod::lua::load();
                 return Ok(());
             }
-            let (_, loaded) = loaded_module(&[b"/lua_shared.so"])
+            let (_, loaded) = loaded_module(&[b"/lua_shared.so", b"/lua_shared_srv.so"])
                 .ok_or("lua_shared.so is not loaded and not in the working directory")?;
-            let dir = lua_shared_dir(loaded.to_bytes()).ok_or_else(|| {
-                format!(
-                    "unexpected lua_shared.so location {}",
-                    loaded.to_string_lossy()
-                )
-            })?;
-            let previous =
-                std::env::current_dir().map_err(|e| format!("no working directory: {e}"))?;
-            std::env::set_current_dir(&dir)
-                .map_err(|e| format!("cannot enter {}: {e}", dir.display()))?;
-            let result = std::panic::catch_unwind(|| gmod::lua::load());
-            // Always put the working directory back (the game's other threads use it).
-            let _ = std::env::set_current_dir(previous);
-            result.map_err(|_| format!("cannot load {}", loaded.to_string_lossy()))
+            with_lua_shared_visible(loaded.to_bytes(), || gmod::lua::load())
         }
     }
 
