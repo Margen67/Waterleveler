@@ -8,6 +8,11 @@ use std::ffi::{c_char, c_int};
 
 #[cfg(windows)]
 pub(crate) mod win {
+    /// Windows modules address their globals directly (`lea`/`mov` of the variable itself).
+    pub(crate) const fn resolve_global(address: usize) -> usize {
+        address
+    }
+
     #[cfg(feature = "client")]
     #[allow(clippy::wildcard_imports)]
     use super::*;

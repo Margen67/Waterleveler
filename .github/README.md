@@ -241,7 +241,7 @@ from the engine's own ray-building helper at load time (shown in
 
 ## Verified vs not
 
-Verified by `cargo test` (the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones `server_srv.so` in `SERVER_SO_X64` and `client.so` in `CLIENT_SO_X64`):
+Verified by `cargo test` (the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones, per build, the dev branch's `server_srv.so` / `client.so` in `SERVER_SO_X64` / `CLIENT_SO_X64` and the x86-64 branch's in `SERVER_SO_X86_64` / `CLIENT_SO_X86_64`):
 the signatures match exactly once; the detour and trampoline run the **real
 `SetWaterLevel` machine code** from that DLL, substitute the override, pass other calls
 through, and uninstall restores the bytes exactly; the volume store and its lookup (lanes and
@@ -272,8 +272,7 @@ Not verified:
   Currents (`currentx`, `currenty`, `currentz`) are verified too.
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
-- Linux: only the 64-bit dedicated server (`server_srv.so`, or `server.so`) has hooks, found by
-  signature and tested against the 64-bit dev branch builds. The latest dev build (entity fields moved 8 bytes) is checked by the tests against the real binaries, but has not been run in a live game, and neither has the Linux client module (`client.so`, dev branch), which finds its `enginetrace` by signature and hooks `GetPointContents` and `TraceRay` like the Windows client.
+- Linux: the hooks (server and client) are found by signature, with one alternative per build of the 64-bit game: the dev branch and the x86-64 branch. The dev branch is verified live on the client, a listen server and a dedicated server. The x86-64 branch is checked by the tests against its real `server.so` and `client.so` but has not been run in a live game: its modules reach globals through the GOT (so the decoders follow that), its `Ray_t` flags are 8 bytes later and its `CBaseEntity` fields differ from the dev branch's. The Linux client module (`client.so`) finds its `enginetrace` by signature and hooks `GetPointContents` and `TraceRay` like the Windows client.
   The Linux server has no RTTI for `CTEExplosion`, so explosion events are recognised by the
   temp entity's name; entities are keyed by their handle's index instead of the edict's.
 - Game updates: the hooks are found by signature, so an update that changes those functions
@@ -294,7 +293,7 @@ bubble and explosion patches) and `gmcl_` only the client code; the volume store
 trace hooks are in both.
 
 Tests: `SERVER_DLL_X64=/path/to/server.dll cargo test --release`, and for the Linux
-signatures `SERVER_SO_X64=/path/to/server_srv.so cargo test --release` (and `CLIENT_SO_X64=/path/to/client.so` for the Linux client)
+signatures `SERVER_SO_X64=/path/to/server_srv.so cargo test --release` (and `CLIENT_SO_X64=/path/to/client.so` for the Linux client; `SERVER_SO_X86_64` and `CLIENT_SO_X86_64` for the x86-64 branch's)
 
 ## Removing a volume with props in it
 

@@ -10,7 +10,7 @@ pub(crate) unsafe fn trace_global_from_load(
 ) -> Result<*const *mut c_void, &'static str> {
     unsafe {
         let code = decode_match(at, CLIENT_TRACE_SIG);
-        last_global(&code).map(|global| global as *const *mut c_void)
+        last_global(&code).map(|global| os::resolve_global(global) as *const *mut c_void)
     }
 }
 

@@ -10,7 +10,7 @@ pub(crate) unsafe fn physenv_global_from(
 ) -> Result<*const *mut c_void, &'static str> {
     unsafe {
         let code = decode_match(func, PHYSENV_SIG);
-        only_global(&code).map(|global| global as *const *mut c_void)
+        only_global(&code).map(|global| os::resolve_global(global) as *const *mut c_void)
     }
 }
 

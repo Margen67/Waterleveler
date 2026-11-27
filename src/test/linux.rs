@@ -5,9 +5,65 @@ use super::*;
 
 pub(crate) const FUNC_LEN: usize = 0xbb;
 
-pub(crate) fn server_so() -> Option<Vec<u8>> {
-    let path = std::env::var("SERVER_SO_X64").ok()?;
-    std::fs::read(path).ok()
+/// A real 64-bit Linux build the tests can run against, and what is known about it. The files
+/// come from the environment (a build whose variables are unset is skipped).
+pub(crate) struct Build {
+    pub(crate) name: &'static str,
+    server_env: &'static str,
+    client_env: &'static str,
+    /// RVA of `CBaseEntity::SetWaterLevel`.
+    pub(crate) set_water_level: usize,
+    pub(crate) water_level: usize,
+    pub(crate) eflags: usize,
+    pub(crate) swept: usize,
+    /// RVAs of the variables' loads: the variable itself, or its GOT slot (x86-64 branch).
+    pub(crate) enginetrace: usize,
+    pub(crate) physenv: usize,
+    pub(crate) entity_array: usize,
+    pub(crate) client_enginetrace: usize,
+    /// Where the displacement is in the `UpdateWaterState` match.
+    pub(crate) upd_disp: usize,
+}
+
+pub(crate) const BUILDS: [Build; 2] = [
+    Build {
+        name: "dev branch",
+        server_env: "SERVER_SO_X64",
+        client_env: "CLIENT_SO_X64",
+        set_water_level: 0x00bd_b670,
+        water_level: 0x2db,
+        eflags: 0x1c0,
+        swept: 0x41,
+        enginetrace: 0x01b1_6f78,
+        physenv: 0x01a0_da30,
+        entity_array: 0x0193_b850,
+        client_enginetrace: 0x0121_0fd0,
+        upd_disp: 95,
+    },
+    Build {
+        name: "x86-64 branch",
+        server_env: "SERVER_SO_X86_64",
+        client_env: "CLIENT_SO_X86_64",
+        set_water_level: 0x0092_1590,
+        water_level: 0x2d3,
+        eflags: 0x1b8,
+        swept: 0x49,
+        enginetrace: 0x019e_17b0,
+        physenv: 0x019e_1bd8,
+        entity_array: 0x019e_18a0,
+        client_enginetrace: 0x012c_5f88,
+        upd_disp: 104,
+    },
+];
+
+impl Build {
+    pub(crate) fn server(&self) -> Option<Vec<u8>> {
+        std::fs::read(std::env::var(self.server_env).ok()?).ok()
+    }
+
+    pub(crate) fn client(&self) -> Option<Vec<u8>> {
+        std::fs::read(std::env::var(self.client_env).ok()?).ok()
+    }
 }
 
 /// Virtual addresses of every match of `sig` in the executable segments of a 64-bit ELF.
@@ -22,14 +78,13 @@ pub(crate) fn elf_matches(d: &[u8], sig: &str) -> Vec<usize> {
     };
     assert_eq!(&d[..4], b"\x7fELF");
     let (phoff, phentsize, phnum) = (rd(0x20, 8), rd(0x36, 2), rd(0x38, 2));
-    let pat = parse_sig(sig);
     let mut out = Vec::new();
     for i in 0..phnum {
         let ph = phoff + i * phentsize;
         if rd(ph, 4) == 1 && rd(ph + 4, 4) & 1 != 0 {
             let (off, va, filesz) = (rd(ph + 8, 8), rd(ph + 0x10, 8), rd(ph + 0x20, 8));
             out.extend(
-                find_all(&d[off..off + filesz], &pat)
+                find_sig(&d[off..off + filesz], sig)
                     .into_iter()
                     .map(|m| va + m),
             );
@@ -40,55 +95,59 @@ pub(crate) fn elf_matches(d: &[u8], sig: &str) -> Vec<usize> {
 
 #[test]
 pub(crate) fn linux_signatures_are_unique_in_server_so() {
-    let Some(d) = server_so() else {
-        eprintln!("SERVER_SO_X64 not set; skipping");
-        return;
-    };
     use linux_sigs as l;
-    let mut sigs = vec![
-        ("SetWaterLevel", l::SIG),
-        ("UpdateWaterState", l::UPDATE_WATER_STATE_SIG),
-        ("FluidEndTouch", l::FLUID_END_TOUCH_SIG),
-        ("UTIL_BubbleTrail", l::BUBBLE_TRAIL_SIG),
-        ("DispatchEffect", l::DISPATCH_EFFECT_SIG),
-        ("CBaseTempEntity::Create", l::TE_CREATE_SIG),
-        ("physenv user", l::PHYSENV_SIG),
-        ("ray setup", l::RAY_INIT_SIG),
-    ];
-    for t in l::EXPLOSION_TARGETS {
-        sigs.push(("explosion target", t[0]));
+    for build in &BUILDS {
+        let Some(d) = build.server() else {
+            eprintln!("{} not set; skipping", build.server_env);
+            continue;
+        };
+        let mut sigs = vec![
+            ("SetWaterLevel", l::SIG.to_string()),
+            ("UpdateWaterState", l::UPDATE_WATER_STATE_SIG.to_string()),
+            ("FluidEndTouch", l::FLUID_END_TOUCH_SIG.to_string()),
+            ("UTIL_BubbleTrail", l::BUBBLE_TRAIL_SIG.to_string()),
+            ("DispatchEffect", l::DISPATCH_EFFECT_SIG.to_string()),
+            ("CBaseTempEntity::Create", l::TE_CREATE_SIG.to_string()),
+            ("physenv user", l::PHYSENV_SIG.to_string()),
+            ("ray setup", l::RAY_INIT_SIG.to_string()),
+        ];
+        for t in l::EXPLOSION_TARGETS {
+            sigs.push(("explosion target", t.join(" | ")));
+        }
+        for (name, sig) in sigs {
+            let m = elf_matches(&d, &sig);
+            assert_eq!(m.len(), 1, "{}: {name}: {} matches", build.name, m.len());
+        }
+        // the entity array idiom has many sites, all naming one global
+        let sites = elf_matches(&d, l::ENTITY_ARRAY_SIG);
+        assert!(sites.len() > 1, "{}", build.name);
     }
-    for (name, sig) in sigs {
-        let m = elf_matches(&d, sig);
-        assert_eq!(m.len(), 1, "{name}: {} matches", m.len());
-    }
-    // the entity array idiom has many sites, all naming one global
-    let sites = elf_matches(&d, l::ENTITY_ARRAY_SIG);
-    assert!(sites.len() > 1);
-}
-
-pub(crate) fn client_so() -> Option<Vec<u8>> {
-    let path = std::env::var("CLIENT_SO_X64").ok()?;
-    std::fs::read(path).ok()
 }
 
 #[test]
 pub(crate) fn linux_client_trace_signature_finds_the_enginetrace_variable() {
-    let Some(d) = client_so() else {
-        eprintln!("CLIENT_SO_X64 not set; skipping");
-        return;
-    };
-    let m = elf_matches(&d, linux_sigs::CLIENT_TRACE_SIG);
-    assert_eq!(m.len(), 1, "{} matches", m.len());
-    unsafe {
-        let base = map_elf(&d);
-        let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).expect("matches once");
-        assert_eq!(at as usize - base as usize, m[0]);
-        // `C_BaseEntity::UpdateWaterState` loads the `enginetrace` variable at 0x1210fd0
-        // in this dev-branch client.so (the same one its `TraceRay` calls use).
-        // (The tests build with the Windows constants, so the Linux signature is passed.)
-        let var = last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)).expect("a load");
-        assert_eq!(var - base as usize, 0x0121_0fd0);
+    for build in &BUILDS {
+        let Some(d) = build.client() else {
+            eprintln!("{} not set; skipping", build.client_env);
+            continue;
+        };
+        let m = elf_matches(&d, linux_sigs::CLIENT_TRACE_SIG);
+        assert_eq!(m.len(), 1, "{}: {} matches", build.name, m.len());
+        unsafe {
+            let base = map_elf(&d);
+            let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).expect("matches once");
+            assert_eq!(at as usize - base as usize, m[0]);
+            // `C_BaseEntity::UpdateWaterState` loads the `enginetrace` variable (or its GOT
+            // slot), the one its `TraceRay` calls use. (The tests build with the Windows
+            // constants, so the Linux signature is passed.)
+            let var = last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)).expect("a load");
+            assert_eq!(
+                var - base as usize,
+                build.client_enginetrace,
+                "{}",
+                build.name
+            );
+        }
     }
 }
 
@@ -125,20 +184,25 @@ pub(crate) unsafe fn map_elf(d: &[u8]) -> *mut u8 {
 
 #[test]
 pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
-    let Some(d) = server_so() else {
-        eprintln!("SERVER_SO_X64 not set; skipping");
-        return;
-    };
+    for build in &BUILDS {
+        match build.server() {
+            Some(d) => unsafe { patches_install(build, &d) },
+            None => eprintln!("{} not set; skipping", build.server_env),
+        }
+    }
+}
+
+unsafe fn patches_install(build: &Build, d: &[u8]) {
     use linux_sigs as l;
     unsafe {
-        let base = map_elf(&d);
+        let base = map_elf(d);
         // the executable segments back to r-x so the real make_writable path is used
         extern "C" {
             fn mprotect(addr: *mut c_void, len: usize, prot: i32) -> i32;
         }
         let rva_of = |at: *mut u8| at as usize - base as usize;
         let text = scan_sig(base, l::SIG).expect("SetWaterLevel");
-        assert_eq!(rva_of(text), 0x00bd_b670);
+        assert_eq!(rva_of(text), build.set_water_level, "{}", build.name);
         let page = (text as usize & !4095) as *mut c_void;
         assert_eq!(mprotect(page, 4096, 5), 0, "r-x");
 
@@ -185,13 +249,32 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
         // the Linux signatures are passed explicitly)
         let upd = scan_sig(base, l::UPDATE_WATER_STATE_SIG).expect("UpdateWaterState");
         let enginetrace = last_global(&decode_match(upd, l::UPDATE_WATER_STATE_SIG)).unwrap();
-        assert_eq!(enginetrace - base as usize, 0x01b1_6f78);
+        assert_eq!(enginetrace - base as usize, build.enginetrace);
         let env = scan_sig(base, l::PHYSENV_SIG).expect("physenv user");
         let physenv = only_global(&decode_match(env, l::PHYSENV_SIG)).unwrap();
-        assert_eq!(physenv - base as usize, 0x01a0_da30);
+        assert_eq!(physenv - base as usize, build.physenv);
         for at in scan_sig_all(base, l::ENTITY_ARRAY_SIG).expect("entity array idiom") {
             let array = only_global(&decode_match(at, l::ENTITY_ARRAY_SIG)).unwrap();
-            assert_eq!(array - base as usize, 0x0193_b850);
+            assert_eq!(array - base as usize, build.entity_array);
+        }
+
+        // every explosion function and the other hooked prologues can be detoured and
+        // restored (the x86-64 branch's helicopter bomb starts with a rip-relative lea)
+        let mut targets: Vec<String> = l::EXPLOSION_TARGETS.iter().map(|t| t.join(" | ")).collect();
+        targets.extend([
+            l::BUBBLE_TRAIL_SIG.to_string(),
+            l::FLUID_END_TOUCH_SIG.to_string(),
+            l::DISPATCH_EFFECT_SIG.to_string(),
+            l::UPDATE_WATER_STATE_SIG.to_string(),
+        ]);
+        for sig in targets {
+            let at = scan_sig(base, &sig).expect("matches once");
+            let before = std::slice::from_raw_parts(at, 32).to_vec();
+            let detour = install_detour(at, hook_te_create as *const (), &slot)
+                .unwrap_or_else(|why| panic!("{}: detour of {sig}: {why:?}", build.name));
+            assert_ne!(std::slice::from_raw_parts(at, 5), &before[..5]);
+            drop(detour);
+            assert_eq!(std::slice::from_raw_parts(at, 32), &before[..]);
         }
     }
 }

@@ -10,6 +10,7 @@
 //! can be tested on hand-written bytes as well as on the real binaries.
 
 #[cfg(any(windows, test, target_os = "linux"))]
+use crate::{alternatives, parse_sig};
 use iced_x86::Register;
 use iced_x86::{Code, Decoder, DecoderOptions, Instruction};
 
@@ -35,7 +36,19 @@ pub(crate) fn decode_bytes(bytes: &[u8], ip: u64) -> Vec<Instruction> {
 /// # Safety
 /// `at` must be the start of a match of `sig`, so that its bytes are readable.
 pub(crate) unsafe fn decode_match(at: *const u8, sig: &str) -> Vec<Instruction> {
-    let len = sig.split_whitespace().count();
+    // The alternative that matches here (a game build has one); the bytes are compared one
+    // at a time so a mismatch stops before the end of a longer alternative.
+    let len = alternatives(sig)
+        .find_map(|alt| {
+            let pat = parse_sig(alt);
+            // SAFETY: only bytes up to the first mismatch are read, and a match is readable.
+            pat.iter()
+                .enumerate()
+                .all(|(i, b)| b.is_none_or(|b| b == unsafe { *at.add(i) }))
+                .then_some(pat.len())
+        })
+        // (callers pass real matches; the first alternative's length otherwise)
+        .unwrap_or_else(|| parse_sig(alternatives(sig).next().unwrap()).len());
     // SAFETY: the match covers `len` bytes of the image.
     let bytes = unsafe { std::slice::from_raw_parts(at, len) };
     decode_bytes(bytes, at as u64)
@@ -161,14 +174,15 @@ pub(crate) fn fluid_layout(code: &[Instruction]) -> Result<(usize, usize), &'sta
 /// From the Linux `CCollisionEvent::FluidEndTouch`: `m_iEFlags`' offset and the
 /// `OnEntityEvent` vtable slot. GCC loads the function pointer into a register
 /// (`mov r12,[rax+x]`, then `call r12` after the arguments are set up), so the slot is the
-/// first such load after the flag is cleared.
+/// first load from a plausible vtable displacement after the flag is cleared (the vtable
+/// pointer's own load, `mov rax,[r14]`, comes first in some builds).
 #[cfg(all(feature = "server", target_os = "linux"))]
 pub(crate) fn fluid_layout_via_load(code: &[Instruction]) -> Result<(usize, usize), &'static str> {
     let (at, flags) = fluid_flags(code).ok_or(LAYOUT_ERROR)?;
     let event = code[at..]
         .iter()
-        .find(|i| i.code() == Code::Mov_r64_rm64 && i.memory_base() != Register::None)
-        .and_then(entity_slot)
+        .filter(|i| i.code() == Code::Mov_r64_rm64 && i.memory_base() != Register::None)
+        .find_map(entity_slot)
         .ok_or(LAYOUT_ERROR)?;
     Ok((flags, event))
 }
@@ -214,9 +228,10 @@ pub(crate) fn ray_swept_offset(code: &[Instruction]) -> Result<usize, &'static s
 }
 
 /// `Ray_t::m_IsSwept`'s offset from the Linux code that sets a ray up inline (GCC inlines the
-/// helper): `mov byte [rbp-a],1` is `m_IsRay`, `mov [rbp-a+1],al` is `m_IsSwept`, and the
-/// `lea rax,[rbp-b]; mov rsi,rax` that hands the ray to `TraceRay` gives where the `Ray_t`
-/// starts, so the offset is the distance between the two displacements.
+/// helper): `mov byte [rbp-a],1` is `m_IsRay`, `mov [rbp-a+1],al` (or `setne [rbp-a+1]`) is
+/// `m_IsSwept`, and the `lea rax,[rbp-b]; mov rsi,rax` (or `lea rsi,[rbp-b]`) that hands the
+/// ray to `TraceRay` gives where the `Ray_t` starts, so the offset is the distance between the
+/// two displacements.
 #[cfg(target_os = "linux")]
 pub(crate) fn ray_swept_offset_inline(code: &[Instruction]) -> Result<usize, &'static str> {
     const WRONG: &str = "the ray setup is not the expected code (different game build?)";
@@ -228,19 +243,33 @@ pub(crate) fn ray_swept_offset_inline(code: &[Instruction]) -> Result<usize, &'s
         .ok_or(WRONG)?;
     let swept = code
         .iter()
-        .find(|i| i.code() == Code::Mov_rm8_r8 && on_frame(i))
+        .find(|i| matches!(i.code(), Code::Mov_rm8_r8 | Code::Setne_rm8) && on_frame(i))
         .map(|i| i.memory_displacement64() as i64)
         .ok_or(WRONG)?;
+    let is_lea = |i: &Instruction| i.code() == Code::Lea_r64_m && on_frame(i);
     let ray = code
         .windows(2)
         .find(|w| {
-            w[0].code() == Code::Lea_r64_m
-                && on_frame(&w[0])
-                && w[1].code() == Code::Mov_rm64_r64
-                && w[1].op0_register() == Register::RSI
-                && w[1].op1_register() == w[0].op0_register()
+            is_lea(&w[0])
+                && (w[0].op0_register() == Register::RSI
+                    || (w[1].code() == Code::Mov_rm64_r64
+                        && w[1].op0_register() == Register::RSI
+                        && w[1].op1_register() == w[0].op0_register()))
         })
         .map(|w| w[0].memory_displacement64() as i64)
+        // or, with the ray's address kept in a spill slot, where its first three floats
+        // (`m_Start`) are stored: `movss [rbp-d],x; movss [rbp-d+4],x; movss [rbp-d+8],x`
+        .or_else(|| {
+            let stores: Vec<i64> = code
+                .iter()
+                .take_while(|i| i.code() != Code::Mov_rm8_imm8)
+                .filter(|i| i.code() == Code::Movss_xmmm32_xmm && on_frame(i))
+                .map(|i| i.memory_displacement64() as i64)
+                .collect();
+            stores
+                .windows(3)
+                .find_map(|w| (w[1] == w[0] + 4 && w[2] == w[0] + 8).then_some(w[0]))
+        })
         .ok_or(WRONG)?;
     if swept != is_ray + 1 {
         return Err(WRONG);

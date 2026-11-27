@@ -202,7 +202,8 @@ unsafe fn close_realm(l: gmod::lua::State) -> i32 {
 // Tests (Linux x86-64 host, both features): exercise the real hook machinery against the
 // real code of the game's modules. Each test that needs a module skips itself when its path
 // is not set: the 64-bit Windows modules in SERVER_DLL_X64 and CLIENT_DLL_X64, the Linux
-// ones in SERVER_SO_X64 and CLIENT_SO_X64:
+// ones in SERVER_SO_X64 and CLIENT_SO_X64 (dev branch) and SERVER_SO_X86_64 and
+// CLIENT_SO_X86_64 (x86-64 branch):
 //   SERVER_DLL_X64=/path/to/server.dll SERVER_SO_X64=/path/to/server.so cargo test --release
 // ---------------------------------------------------------------------------
 

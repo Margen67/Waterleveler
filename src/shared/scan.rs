@@ -3,6 +3,11 @@
 
 use crate::*;
 
+/// The alternatives of a signature: one per game build, separated by `|`.
+pub(crate) fn alternatives(sig: &str) -> impl Iterator<Item = &str> {
+    sig.split('|').map(str::trim)
+}
+
 pub(crate) fn parse_sig(sig: &str) -> Vec<Option<u8>> {
     sig.split_whitespace()
         .map(|b| {
@@ -65,6 +70,17 @@ pub(crate) fn find_all(hay: &[u8], pat: &[Option<u8>]) -> Vec<usize> {
     out
 }
 
+/// Every match of any alternative of `sig` in `hay`.
+#[cfg(any(feature = "server", feature = "client", test))]
+pub(crate) fn find_sig(hay: &[u8], sig: &str) -> Vec<usize> {
+    let mut found: Vec<usize> = alternatives(sig)
+        .flat_map(|alt| find_all(hay, &parse_sig(alt)))
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 /// Every match of a signature in the executable parts of the module.
 #[cfg(any(feature = "server", feature = "client"))]
 pub(crate) unsafe fn scan_sig_all(
@@ -72,11 +88,10 @@ pub(crate) unsafe fn scan_sig_all(
     sig: &str,
 ) -> Result<Vec<*mut u8>, &'static str> {
     unsafe {
-        let pat = parse_sig(sig);
         let mut found: Vec<*mut u8> = Vec::new();
         for (va, size) in executable_regions(base)? {
             let region = std::slice::from_raw_parts(base.add(va), size);
-            for off in find_all(region, &pat) {
+            for off in find_sig(region, sig) {
                 found.push(base.add(va + off).cast_mut());
             }
         }

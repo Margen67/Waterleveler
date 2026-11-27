@@ -3,9 +3,12 @@
 
 use super::*;
 
-/// A signature's bytes with every wildcard set to zero, ready to patch.
+/// A signature's bytes (the first alternative) with every wildcard set to zero, ready to patch.
 fn bytes_of(sig: &str) -> Vec<u8> {
-    parse_sig(sig).iter().map(|b| b.unwrap_or(0)).collect()
+    parse_sig(alternatives(sig).next().unwrap())
+        .iter()
+        .map(|b| b.unwrap_or(0))
+        .collect()
 }
 
 fn put(bytes: &mut [u8], at: usize, value: &[u8]) {
@@ -123,6 +126,29 @@ pub(crate) fn linux_inline_ray_setup_gives_the_swept_offset() {
 }
 
 #[test]
+pub(crate) fn linux_ray_setup_of_the_x86_64_branch_gives_the_swept_offset() {
+    // The flags are set with `setne`, and the ray is at the first of three consecutive float
+    // stores (its `m_Start`) when its address is only kept in a spill slot.
+    let mut code = vec![
+        0xF3, 0x0F, 0x11, 0xB5, 0x10, 0xFF, 0xFF, 0xFF, // movss [rbp-0xf0],xmm6
+        0xF3, 0x0F, 0x11, 0xAD, 0x14, 0xFF, 0xFF, 0xFF, // movss [rbp-0xec],xmm5
+        0xF3, 0x0F, 0x11, 0x8D, 0x18, 0xFF, 0xFF, 0xFF, // movss [rbp-0xe8],xmm1
+        0xC6, 0x85, 0x58, 0xFF, 0xFF, 0xFF, 0x01, // mov byte [rbp-0xa8],1
+        0x0F, 0x95, 0x85, 0x59, 0xFF, 0xFF, 0xFF, // setne [rbp-0xa7]
+    ];
+    assert_eq!(
+        ray_swept_offset_inline(&decode_bytes(&code, 0x1000)),
+        Ok(0x49)
+    );
+    // `lea rsi,[ray]` passes the ray straight to `TraceRay`, and wins when there is one
+    code.extend([0x48, 0x8D, 0xB5, 0x08, 0xFF, 0xFF, 0xFF, 0x90]); // lea rsi,[rbp-0xf8]; nop
+    assert_eq!(
+        ray_swept_offset_inline(&decode_bytes(&code, 0x1000)),
+        Ok(0x51)
+    );
+}
+
+#[test]
 pub(crate) fn ray_swept_offset_follows_the_frame_of_the_helper() {
     let mut code = bytes_of(RAY_HELPER_SIG);
     put(&mut code, 53, &[0xE9]); // mov byte [rax-0x17],1
@@ -220,48 +246,64 @@ pub(crate) fn decoded_windows_client_lookups_match_the_counted_offsets() {
 
 #[test]
 pub(crate) fn decoded_linux_lookups_match_the_counted_offsets() {
-    let (Some(server), Some(client)) = (server_so(), client_so()) else {
-        eprintln!("SERVER_SO_X64 / CLIENT_SO_X64 not set; skipping");
-        return;
-    };
-    unsafe {
-        let base = map_elf(&server);
-        let upd = scan_sig(base, linux_sigs::UPDATE_WATER_STATE_SIG).unwrap();
-        assert_eq!(
-            last_global(&decode_match(upd, linux_sigs::UPDATE_WATER_STATE_SIG)),
-            Ok(legacy_rip(upd, 95))
-        );
-        let env = scan_sig(base, linux_sigs::PHYSENV_SIG).unwrap();
-        assert_eq!(
-            only_global(&decode_match(env, linux_sigs::PHYSENV_SIG)),
-            Ok(legacy_rip(env, 3))
-        );
-        let all = scan_sig_all(base, linux_sigs::ENTITY_ARRAY_SIG).unwrap();
-        assert!(all.len() > 1);
-        for at in all {
+    for build in &BUILDS {
+        let (Some(server), Some(client)) = (build.server(), build.client()) else {
+            eprintln!("{}: files not set; skipping", build.name);
+            continue;
+        };
+        unsafe {
+            let base = map_elf(&server);
+            let upd = scan_sig(base, linux_sigs::UPDATE_WATER_STATE_SIG).unwrap();
             assert_eq!(
-                only_global(&decode_match(at, linux_sigs::ENTITY_ARRAY_SIG)),
+                last_global(&decode_match(upd, linux_sigs::UPDATE_WATER_STATE_SIG)),
+                Ok(legacy_rip(upd, build.upd_disp))
+            );
+            let env = scan_sig(base, linux_sigs::PHYSENV_SIG).unwrap();
+            assert_eq!(
+                only_global(&decode_match(env, linux_sigs::PHYSENV_SIG)),
+                Ok(legacy_rip(env, 3))
+            );
+            let all = scan_sig_all(base, linux_sigs::ENTITY_ARRAY_SIG).unwrap();
+            assert!(all.len() > 1);
+            for at in all {
+                assert_eq!(
+                    only_global(&decode_match(at, linux_sigs::ENTITY_ARRAY_SIG)),
+                    Ok(legacy_rip(at, 3))
+                );
+            }
+            // the entity layout of the build, read from the matches
+            let set = scan_sig(base, linux_sigs::SIG).unwrap();
+            assert_eq!(
+                water_level_offset_in(&decode_match(set, linux_sigs::SIG), 3),
+                Ok(build.water_level),
+                "{}",
+                build.name
+            );
+            let end_touch = scan_sig(base, linux_sigs::FLUID_END_TOUCH_SIG).unwrap();
+            assert_eq!(
+                fluid_layout_via_load(&decode_match(end_touch, linux_sigs::FLUID_END_TOUCH_SIG)),
+                Ok((build.eflags, 0x2f0 / 8)),
+                "{}",
+                build.name
+            );
+            assert_eq!(
+                server_ray_swept_offset(base),
+                Ok(build.swept),
+                "{}",
+                build.name
+            );
+            let base = map_elf(&client);
+            assert_eq!(
+                client_ray_swept_offset(base),
+                Ok(build.swept),
+                "{}",
+                build.name
+            );
+            let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).unwrap();
+            assert_eq!(
+                last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)),
                 Ok(legacy_rip(at, 3))
             );
         }
-        // the entity layout of the build, read from the matches
-        let set = scan_sig(base, linux_sigs::SIG).unwrap();
-        assert_eq!(
-            water_level_offset_in(&decode_match(set, linux_sigs::SIG), 3),
-            Ok(0x2db)
-        );
-        let end_touch = scan_sig(base, linux_sigs::FLUID_END_TOUCH_SIG).unwrap();
-        assert_eq!(
-            fluid_layout_via_load(&decode_match(end_touch, linux_sigs::FLUID_END_TOUCH_SIG)),
-            Ok((0x1c0, 0x2f0 / 8))
-        );
-        assert_eq!(server_ray_swept_offset(base), Ok(0x41));
-        let base = map_elf(&client);
-        assert_eq!(client_ray_swept_offset(base), Ok(0x41));
-        let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).unwrap();
-        assert_eq!(
-            last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)),
-            Ok(legacy_rip(at, 3))
-        );
     }
 }

@@ -33,7 +33,7 @@ pub(crate) unsafe fn trace_global_from(
 ) -> Result<*const *mut c_void, &'static str> {
     unsafe {
         let code = decode_match(func, UPDATE_WATER_STATE_SIG);
-        last_global(&code).map(|global| global as *const *mut c_void)
+        last_global(&code).map(|global| os::resolve_global(global) as *const *mut c_void)
     }
 }
 
@@ -55,7 +55,7 @@ pub(crate) unsafe fn entity_array_global(base: *const u8) -> Result<usize, &'sta
         if global == 0 {
             return Err("entity array idiom not found");
         }
-        Ok(global)
+        Ok(os::resolve_global(global))
     }
 }
 
@@ -72,7 +72,8 @@ pub(crate) static EFLAGS_OFFSET: AtomicUsize = AtomicUsize::new(ENTITY_EFLAGS_OF
 pub(crate) static EVENT_SLOT: AtomicUsize = AtomicUsize::new(ENTITY_EVENT_SLOT);
 
 /// `m_vecAbsOrigin` is this far after `m_nWaterLevel` in `CBaseEntity` (0x2ab -> 0x33c in the
-/// default Windows build, 0x2d3 -> 0x364 in the dev Linux build).
+/// default Windows build, 0x2d3 -> 0x364 in the x86-64 branch's Linux build, 0x2db -> 0x36c in
+/// the dev branch's).
 pub(crate) const ORIGIN_AFTER_WATER_LEVEL: usize = 0x91;
 
 /// Raises `this`'s water level to 2 if its origin is in a volume.
