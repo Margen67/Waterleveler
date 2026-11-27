@@ -23,7 +23,7 @@ pub(crate) fn client_trace_signature_and_ray_helper_match_once_in_client_dll() {
 pub(crate) fn signature_matcher_handles_wildcards() {
     let pat = parse_sig("01 ?? 03");
     assert_eq!(find_all(&[9, 1, 7, 3, 1, 8, 3, 1], &pat), vec![1, 4]);
-    assert!(find_all(&[1, 2], &pat).is_empty());
+    assert_eq!(find_all(&[1, 2], &pat), Vec::<usize>::new());
 }
 
 /// RVA of the one place SIG matches in the file's executable sections.

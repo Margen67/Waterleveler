@@ -83,11 +83,11 @@ pub(crate) fn linux_client_trace_signature_finds_the_enginetrace_variable() {
         let base = map_elf(&d);
         let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).expect("matches once");
         assert_eq!(at as usize - base as usize, m[0]);
-        // `C_BaseEntity::UpdateWaterState` loads the `enginetrace` variable at 0x12270b0
+        // `C_BaseEntity::UpdateWaterState` loads the `enginetrace` variable at 0x1210fd0
         // in this dev-branch client.so (the same one its `TraceRay` calls use).
         // (The tests build with the Windows constants, so the Linux signature is passed.)
         let var = last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)).expect("a load");
-        assert_eq!(var - base as usize, 0x0122_70b0);
+        assert_eq!(var - base as usize, 0x0121_0fd0);
     }
 }
 
@@ -137,7 +137,7 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
         }
         let rva_of = |at: *mut u8| at as usize - base as usize;
         let text = scan_sig(base, l::SIG).expect("SetWaterLevel");
-        assert_eq!(rva_of(text), 0x00bd_9cf0);
+        assert_eq!(rva_of(text), 0x00bd_b670);
         let page = (text as usize & !4095) as *mut c_void;
         assert_eq!(mprotect(page, 4096, 5), 0, "r-x");
 
@@ -184,13 +184,13 @@ pub(crate) fn linux_patches_install_on_the_mapped_server_so() {
         // the Linux signatures are passed explicitly)
         let upd = scan_sig(base, l::UPDATE_WATER_STATE_SIG).expect("UpdateWaterState");
         let enginetrace = last_global(&decode_match(upd, l::UPDATE_WATER_STATE_SIG)).unwrap();
-        assert_eq!(enginetrace - base as usize, 0x01a7_3c58);
+        assert_eq!(enginetrace - base as usize, 0x01b1_6f78);
         let env = scan_sig(base, l::PHYSENV_SIG).expect("physenv user");
         let physenv = only_global(&decode_match(env, l::PHYSENV_SIG)).unwrap();
-        assert_eq!(physenv - base as usize, 0x0196_a670);
+        assert_eq!(physenv - base as usize, 0x01a0_da30);
         for at in scan_sig_all(base, l::ENTITY_ARRAY_SIG).expect("entity array idiom") {
             let array = only_global(&decode_match(at, l::ENTITY_ARRAY_SIG)).unwrap();
-            assert_eq!(array - base as usize, 0x0189_8d50);
+            assert_eq!(array - base as usize, 0x0193_b850);
         }
     }
 }

@@ -82,6 +82,22 @@ pub(crate) fn fluid_layout_reads_the_flags_offset_and_the_event_slot() {
 }
 
 #[test]
+pub(crate) fn linux_fluid_layout_reads_the_flag_and_the_loaded_event_slot() {
+    // and dword [r13+0x1c0],0xfff7ffff; mov r12,[rax+0x2f0]; call [rax+0x38]; call r12
+    let code: &[u8] = &[
+        0x41, 0x81, 0xA5, 0xC0, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0xF7, 0xFF, 0x4C, 0x8B, 0xA0, 0xF0,
+        0x02, 0x00, 0x00, 0xFF, 0x50, 0x38, 0x41, 0xFF, 0xD4,
+    ];
+    assert_eq!(
+        fluid_layout_via_load(&decode_bytes(code, 0x1000)),
+        Ok((0x1c0, 0x2f0 / 8))
+    );
+    // no flag clear, no layout
+    assert!(fluid_layout_via_load(&decode_bytes(&code[11..], 0x1000)).is_err());
+    assert!(fluid_layout_via_load(&[]).is_err());
+}
+
+#[test]
 pub(crate) fn ray_swept_offset_follows_the_frame_of_the_helper() {
     let mut code = bytes_of(RAY_HELPER_SIG);
     put(&mut code, 53, &[0xE9]); // mov byte [rax-0x17],1
@@ -203,6 +219,17 @@ pub(crate) fn decoded_linux_lookups_match_the_counted_offsets() {
                 Ok(legacy_rip(at, 3))
             );
         }
+        // the entity layout of the build, read from the matches
+        let set = scan_sig(base, linux_sigs::SIG).unwrap();
+        assert_eq!(
+            water_level_offset_in(&decode_match(set, linux_sigs::SIG), 3),
+            Ok(0x2db)
+        );
+        let end_touch = scan_sig(base, linux_sigs::FLUID_END_TOUCH_SIG).unwrap();
+        assert_eq!(
+            fluid_layout_via_load(&decode_match(end_touch, linux_sigs::FLUID_END_TOUCH_SIG)),
+            Ok((0x1c0, 0x2f0 / 8))
+        );
         let base = map_elf(&client);
         let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).unwrap();
         assert_eq!(

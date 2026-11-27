@@ -9,7 +9,7 @@
 //! The functions that interpret instructions take a slice of decoded instructions, so they
 //! can be tested on hand-written bytes as well as on the real binaries.
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, test, all(target_os = "linux", feature = "server")))]
 use iced_x86::Register;
 use iced_x86::{Code, Decoder, DecoderOptions, Instruction};
 
@@ -70,7 +70,7 @@ pub(crate) fn last_global(code: &[Instruction]) -> Result<usize, &'static str> {
 
 /// The displacement of a memory operand addressed off a general register (not RIP or RSP),
 /// if it is an offset into a game object rather than a stack slot or a small field.
-#[cfg(all(feature = "server", any(windows, test)))]
+#[cfg(all(feature = "server", any(windows, test, target_os = "linux")))]
 fn object_field(i: &Instruction) -> Option<usize> {
     let base = i.memory_base();
     if matches!(base, Register::None | Register::RIP | Register::RSP) {
@@ -82,14 +82,23 @@ fn object_field(i: &Instruction) -> Option<usize> {
         .filter(|d| (0x100..0x1000).contains(d))
 }
 
-#[cfg(all(feature = "server", any(windows, test)))]
+#[cfg(all(feature = "server", any(windows, test, target_os = "linux")))]
 const LAYOUT_ERROR: &str = "the entity layout is not the expected one (different game build?)";
 
-/// `m_nWaterLevel`'s offset in `CBaseEntity::SetWaterLevel`: the `movzx`, `cmp`, `lea` and
-/// `mov` that name it must all agree (the vtable `call` in between is not a field).
+/// `m_nWaterLevel`'s offset in `CBaseEntity::SetWaterLevel` on Windows: the `movzx`, `cmp`,
+/// `lea` and `mov` that name it must all agree (the vtable `call` in between is not a field).
 #[cfg(all(feature = "server", any(windows, test)))]
 pub(crate) fn water_level_offset(code: &[Instruction]) -> Result<usize, &'static str> {
-    const PLACES: usize = 4;
+    water_level_offset_in(code, 4)
+}
+
+/// The same for `places` field accesses. GCC compares the level in registers
+/// (`cmp r13b,sil`), so the Linux function names the field in three places, not four.
+#[cfg(all(feature = "server", any(windows, test, target_os = "linux")))]
+pub(crate) fn water_level_offset_in(
+    code: &[Instruction],
+    places: usize,
+) -> Result<usize, &'static str> {
     let mut offsets = code
         .iter()
         .filter(|i| {
@@ -107,31 +116,61 @@ pub(crate) fn water_level_offset(code: &[Instruction]) -> Result<usize, &'static
         }
         count += 1;
     }
-    if count == PLACES {
+    if count == places {
         Ok(first)
     } else {
         Err(LAYOUT_ERROR)
     }
 }
 
-/// From `CCollisionEvent::FluidEndTouch`: `m_iEFlags`' offset (the `and [entity+x],
-/// ~EFL_TOUCHING_FLUID`) and the `OnEntityEvent` vtable slot (the last indirect call).
+/// `m_iEFlags`' offset in `CCollisionEvent::FluidEndTouch`: the `and [entity+x],
+/// ~EFL_TOUCHING_FLUID`.
+#[cfg(all(feature = "server", any(windows, test, target_os = "linux")))]
+fn fluid_flags(code: &[Instruction]) -> Option<(usize, usize)> {
+    const NOT_TOUCHING_FLUID: u32 = 0xFFF7_FFFF;
+    let at = code
+        .iter()
+        .position(|i| i.code() == Code::And_rm32_imm32 && i.immediate32() == NOT_TOUCHING_FLUID)?;
+    object_field(&code[at]).map(|flags| (at, flags))
+}
+
+/// A vtable displacement, as a slot (the displacement is a multiple of 8, and is the
+/// engine's own entity vtable, which is large).
+#[cfg(all(feature = "server", any(windows, test, target_os = "linux")))]
+fn entity_slot(i: &Instruction) -> Option<usize> {
+    usize::try_from(i.memory_displacement64() as i64)
+        .ok()
+        .filter(|d| d.is_multiple_of(8) && (0x100..0x1000).contains(d))
+        .map(|d| d / 8)
+}
+
+/// From the Windows `CCollisionEvent::FluidEndTouch`: `m_iEFlags`' offset and the
+/// `OnEntityEvent` vtable slot (the last indirect call).
 #[cfg(all(feature = "server", any(windows, test)))]
 pub(crate) fn fluid_layout(code: &[Instruction]) -> Result<(usize, usize), &'static str> {
-    const NOT_TOUCHING_FLUID: u32 = 0xFFF7_FFFF;
-    let flags = code
-        .iter()
-        .find(|i| i.code() == Code::And_rm32_imm32 && i.immediate32() == NOT_TOUCHING_FLUID)
-        .and_then(object_field)
-        .ok_or(LAYOUT_ERROR)?;
+    let (_, flags) = fluid_flags(code).ok_or(LAYOUT_ERROR)?;
     let event = code
         .iter()
         .rev()
         .find(|i| i.code() == Code::Call_rm64 && i.memory_base() != Register::None)
-        .and_then(|i| usize::try_from(i.memory_displacement64() as i64).ok())
-        .filter(|d| d.is_multiple_of(8) && (0x100..0x1000).contains(d))
+        .and_then(entity_slot)
         .ok_or(LAYOUT_ERROR)?;
-    Ok((flags, event / 8))
+    Ok((flags, event))
+}
+
+/// From the Linux `CCollisionEvent::FluidEndTouch`: `m_iEFlags`' offset and the
+/// `OnEntityEvent` vtable slot. GCC loads the function pointer into a register
+/// (`mov r12,[rax+x]`, then `call r12` after the arguments are set up), so the slot is the
+/// first such load after the flag is cleared.
+#[cfg(all(feature = "server", any(test, target_os = "linux")))]
+pub(crate) fn fluid_layout_via_load(code: &[Instruction]) -> Result<(usize, usize), &'static str> {
+    let (at, flags) = fluid_flags(code).ok_or(LAYOUT_ERROR)?;
+    let event = code[at..]
+        .iter()
+        .find(|i| i.code() == Code::Mov_r64_rm64 && i.memory_base() != Register::None)
+        .and_then(entity_slot)
+        .ok_or(LAYOUT_ERROR)?;
+    Ok((flags, event))
 }
 
 /// Where the `Ray_t` is, relative to the stack pointer, in the engine's helper that builds

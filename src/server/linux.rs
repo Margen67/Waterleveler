@@ -16,7 +16,8 @@ pub(crate) unsafe fn entity_index(this: *const u8) -> Option<i32> {
 
 pub(crate) const ENTITY_HANDLE_OFFSET: usize = 8;
 
-/// Linux `CBaseEntity::SetWaterLevel`: `m_nWaterLevel` is at +0x2d3 (also a layout check).
+/// Linux `CBaseEntity::SetWaterLevel`. `m_nWaterLevel` (0x2db in the current dev build, 0x2d3
+/// before) is wildcarded and read from the match by `learn_water_level_layout`.
 pub(crate) const SIG: &str = linux_sigs::SIG;
 
 /// Linux `CBaseEntity::UpdateWaterState`: the `enginetrace` variable is reached with the
@@ -40,7 +41,7 @@ pub(crate) const FLUID_END_TOUCH_SIG: &str = linux_sigs::FLUID_END_TOUCH_SIG;
 
 pub(crate) const OBJ_GET_GAME_DATA_SLOT: usize = 0x90 / 8;
 
-pub(crate) const ENTITY_EFLAGS_OFFSET: usize = 0x1b8;
+pub(crate) const ENTITY_EFLAGS_OFFSET: usize = 0x1c0;
 
 pub(crate) const ENTITY_EVENT_SLOT: usize = 0x2f0 / 8;
 
@@ -48,18 +49,28 @@ pub(crate) const BUBBLE_TRAIL_SIG: &str = linux_sigs::BUBBLE_TRAIL_SIG;
 
 pub(crate) const EXPLOSION_TARGETS: [&[&str]; 3] = linux_sigs::EXPLOSION_TARGETS;
 
-pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2d3;
+pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2db;
 
-pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x364;
+pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x36c;
 
-#[allow(clippy::missing_const_for_fn, clippy::unnecessary_wraps)]
-pub(crate) unsafe fn learn_water_level_layout(_at: *const u8) -> Result<usize, &'static str> {
-    Ok(ENTITY_WATER_LEVEL_OFFSET)
+/// Reads the entity layout of this game build from the matched code (see the same function
+/// in `windows.rs`); the constants above are what the first Linux dev build had.
+pub(crate) unsafe fn learn_water_level_layout(at: *const u8) -> Result<usize, &'static str> {
+    unsafe {
+        let off = water_level_offset_in(&decode_match(at, SIG), 3)?;
+        WATER_LEVEL_OFFSET.store(off, Ordering::SeqCst);
+        ORIGIN_OFFSET.store(off + ORIGIN_AFTER_WATER_LEVEL, Ordering::SeqCst);
+        Ok(off)
+    }
 }
 
-#[allow(clippy::missing_const_for_fn, clippy::unnecessary_wraps)]
-pub(crate) unsafe fn learn_fluid_layout(_at: *const u8) -> Result<(), &'static str> {
-    Ok(())
+pub(crate) unsafe fn learn_fluid_layout(at: *const u8) -> Result<(), &'static str> {
+    unsafe {
+        let (flags, event_slot) = fluid_layout_via_load(&decode_match(at, FLUID_END_TOUCH_SIG))?;
+        EFLAGS_OFFSET.store(flags, Ordering::SeqCst);
+        EVENT_SLOT.store(event_slot, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 pub(crate) const DISPATCH_EFFECT_SIG: &str = linux_sigs::DISPATCH_EFFECT_SIG;

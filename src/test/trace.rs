@@ -435,7 +435,7 @@ pub(crate) fn override_table_tracks_count_and_bounds() {
     assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 1);
     override_clear();
     assert_eq!(OVERRIDE_COUNT.load(Ordering::Relaxed), 0);
-    assert!(override_entries().is_empty());
+    assert_eq!(override_entries(), []);
 }
 
 #[test]
@@ -799,14 +799,14 @@ pub(crate) fn trails_that_miss_the_bounds_are_never_clipped() {
     let mut misses = 0;
     for _ in 0..20_000 {
         let f = [
-            next() * 900.0 - 150.0,
-            next() * 900.0 - 150.0,
-            next() * 900.0 - 150.0,
+            next().mul_add(900.0, -150.0),
+            next().mul_add(900.0, -150.0),
+            next().mul_add(900.0, -150.0),
         ];
         let t = [
-            next() * 900.0 - 150.0,
-            next() * 900.0 - 150.0,
-            next() * 900.0 - 150.0,
+            next().mul_add(900.0, -150.0),
+            next().mul_add(900.0, -150.0),
+            next().mul_add(900.0, -150.0),
         ];
         let d = [t[0] - f[0], t[1] - f[1], t[2] - f[2]];
         if segment_misses_bounds(list.bounds, f, d, [0.0; 3]) {

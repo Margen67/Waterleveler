@@ -237,3 +237,67 @@ jobs:
           path: waterleveler.7z
           archive: false
           if-no-files-found: error
+
+  linux:
+    name: Linux x64
+    needs: [ lua, luals, shellcheck, actionlint, psscriptanalyzer, deny, outdated, machete, shear, udeps ]
+    runs-on: ubuntu-latest
+    env:
+      # Any warning from rustc, clippy or cargo itself fails the build.
+      RUSTFLAGS: -D warnings
+      CARGO_BUILD_WARNINGS: deny
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Use Rust nightly
+        run: |-
+          rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
+          rustup default nightly
+          rustc --version
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: |-
+          cargo clippy --release --locked --all-targets
+          cargo clippy --release --locked --no-default-features --features server
+          cargo clippy --release --locked --no-default-features --features client
+
+      # The tests that need the game's own server.so and client.so skip themselves when
+      # SERVER_SO_X64 and CLIENT_SO_X64 are not set (the binaries are not redistributable).
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build the server module
+        run: cargo build --release --locked --no-default-features --features server
+
+      - name: Collect the server module
+        run: |-
+          mkdir -p package/garrysmod/lua/bin package/garrysmod/addons/waterleveler
+          cp target/release/libgmsv_waterlevelercore.so package/garrysmod/lua/bin/gmsv_waterlevelercore_linux64.dll
+
+      - name: Build the client module
+        run: cargo build --release --locked --no-default-features --features client
+
+      - name: Collect the client module
+        run: cp target/release/libgmsv_waterlevelercore.so package/garrysmod/lua/bin/gmcl_waterlevelercore_linux64.dll
+
+      - name: Assemble the garrysmod folder
+        run: |-
+          cp -r addon/waterleveler/. package/garrysmod/addons/waterleveler/
+          cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
+          find package -type f | sort
+
+      - name: Create the 7z archive
+        working-directory: package
+        run: 7z a -mx9 -bb3 ../waterleveler-linux.7z garrysmod
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@main
+        with:
+          path: waterleveler-linux.7z
+          archive: false
+          if-no-files-found: error
