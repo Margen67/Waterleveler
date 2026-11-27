@@ -21,8 +21,10 @@ $Addon = 'addon\waterleveler'
 Set-Location -LiteralPath $PSScriptRoot
 New-Item -ItemType Directory -Force -Path out | Out-Null
 
-# Tuned for this machine's CPU; the DLL may not run on older CPUs.
-$env:RUSTFLAGS = "$env:RUSTFLAGS -C target-cpu=native".Trim()
+# Tuned for this machine's CPU; the DLL may not run on older CPUs. Any warning (from rustc or
+# cargo itself) fails the build, as in CI.
+$env:RUSTFLAGS = "$env:RUSTFLAGS -C target-cpu=native -D warnings".Trim()
+$env:CARGO_BUILD_WARNINGS = 'deny'
 
 function Invoke-ModuleBuild([string]$Feature, [string]$Output) {
     cargo build --release --no-default-features --features $Feature

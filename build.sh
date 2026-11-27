@@ -23,9 +23,12 @@ fi
 cd "$(dirname "${0}")"
 mkdir -p out
 
-# Tuned for this machine's CPU; the DLL may not run on older CPUs.
-RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-cpu=native"
+# Tuned for this machine's CPU; the DLL may not run on older CPUs. Any warning (from rustc or
+# cargo itself) fails the build, as in CI.
+RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-cpu=native -D warnings"
 export RUSTFLAGS
+CARGO_BUILD_WARNINGS=deny
+export CARGO_BUILD_WARNINGS
 
 cargo build --release --no-default-features --features server
 cp "target/release/libgmsv_waterlevelercore.so" "out/gmsv_waterlevelercore_linux64.dll"
