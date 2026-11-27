@@ -61,9 +61,12 @@
 //! library (dlsym / `GetProcAddress`), so there are no link-time dependencies.
 
 #![allow(clippy::missing_safety_doc)]
-// The engine hooks are wired up on Windows x64 and the Linux x64 server; on other targets
-// (32-bit) that code is compiled (and unit-tested) but not called.
-#![cfg_attr(not(windows), allow(dead_code))]
+// The unit tests need both modules (and Linux x86-64), so the test build of a one-feature
+// configuration has none, and what only the tests use is unused there.
+#![cfg_attr(
+    all(test, not(all(feature = "server", feature = "client"))),
+    allow(dead_code)
+)]
 
 #[cfg(not(any(feature = "server", feature = "client")))]
 compile_error!("enable the `server` or the `client` feature");

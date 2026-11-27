@@ -175,6 +175,7 @@ pub(crate) static RAY_SWEPT_OFFSET: AtomicUsize = AtomicUsize::new(RAY_SWEPT_OFF
 /// The engine helper that builds a `Ray_t` on its stack from two points
 /// (`UTIL_TraceLine`-style): its `mov byte [rax+disp],1` stores `m_IsSwept`. The offset is
 /// worked out from the decoded frame (see `ray_swept_offset`).
+#[cfg(any(windows, test))]
 pub(crate) const RAY_HELPER_SIG: &str =
     "48 8B C4 53 48 81 EC 90 00 00 00 F3 0F 10 42 08 F3 0F 10 19 \
     F3 0F 10 0A F3 0F 10 61 04 F3 0F 5C CB F3 0F 10 52 04 F3 0F 10 69 08 F3 0F 5C D4 F3 0F 5C C5 \

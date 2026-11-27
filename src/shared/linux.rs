@@ -155,7 +155,7 @@ pub(crate) mod lin {
     }
 
     /// True when this library was loaded as the client module (file name gmcl_*).
-    #[cfg(feature = "client")]
+    #[cfg(all(feature = "server", feature = "client"))]
     pub(crate) unsafe fn is_client_module() -> bool {
         unsafe {
             let mut info: libc::Dl_info = std::mem::zeroed();
