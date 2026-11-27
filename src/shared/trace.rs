@@ -186,6 +186,44 @@ pub(crate) unsafe fn ray_swept_offset_from(func: *const u8) -> Result<usize, &'s
     unsafe { ray_swept_offset(&decode_match(func, RAY_HELPER_SIG)) }
 }
 
+/// `Ray_t::m_IsSwept`'s offset in the server module at `base`.
+#[cfg(feature = "server")]
+pub(crate) unsafe fn server_ray_swept_offset(base: *const u8) -> Result<usize, &'static str> {
+    unsafe {
+        #[cfg(windows)]
+        return scan_sig(base, RAY_HELPER_SIG).and_then(|f| ray_swept_offset_from(f));
+        #[cfg(not(windows))]
+        return ray_swept_offset_at_all(base, linux_sigs::RAY_INIT_SIG);
+    }
+}
+
+/// `Ray_t::m_IsSwept`'s offset in the client module at `base`.
+#[cfg(feature = "client")]
+pub(crate) unsafe fn client_ray_swept_offset(base: *const u8) -> Result<usize, &'static str> {
+    unsafe {
+        #[cfg(windows)]
+        return scan_sig(base, RAY_HELPER_SIG).and_then(|f| ray_swept_offset_from(f));
+        #[cfg(not(windows))]
+        return ray_swept_offset_at_all(base, linux_sigs::CLIENT_RAY_INIT_SIG);
+    }
+}
+
+/// The offset every match of `sig` (an inline `Ray_t` setup) names; they must agree.
+#[cfg(target_os = "linux")]
+unsafe fn ray_swept_offset_at_all(base: *const u8, sig: &str) -> Result<usize, &'static str> {
+    unsafe {
+        let mut offset = None;
+        for at in scan_sig_all(base, sig)? {
+            let this = ray_swept_offset_inline(&decode_match(at, sig))?;
+            if offset.is_some_and(|o| o != this) {
+                return Err("the ray setups disagree on the Ray_t layout");
+            }
+            offset = Some(this);
+        }
+        offset.ok_or("ray setup not found")
+    }
+}
+
 /// How far inside a volume, along the axis of the face it entered through, a rewritten
 /// trace ends. More than the engine's 1/32 trace epsilon and its 0.1 downward probe
 /// can cancel out.

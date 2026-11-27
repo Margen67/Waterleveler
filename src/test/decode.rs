@@ -98,6 +98,31 @@ pub(crate) fn linux_fluid_layout_reads_the_flag_and_the_loaded_event_slot() {
 }
 
 #[test]
+pub(crate) fn linux_inline_ray_setup_gives_the_swept_offset() {
+    let mut code = bytes_of(linux_sigs::RAY_INIT_SIG);
+    // m_IsRay at rbp-0xb0, m_IsSwept at rbp-0xaf, the Ray_t at rbp-0xf0: +0x41
+    put(&mut code, 2, &0xFFFF_FF50u32.to_le_bytes());
+    let swept = code.windows(2).position(|w| w == [0x88, 0x85]).unwrap();
+    put(&mut code, swept + 2, &0xFFFF_FF51u32.to_le_bytes());
+    let lea = code.len() - 10;
+    put(&mut code, lea + 3, &0xFFFF_FF10u32.to_le_bytes());
+    assert_eq!(
+        ray_swept_offset_inline(&decode_bytes(&code, 0x1000)),
+        Ok(0x41)
+    );
+    // the x86-64 branch's Ray_t has the flags 8 bytes later
+    put(&mut code, lea + 3, &0xFFFF_FF08u32.to_le_bytes());
+    assert_eq!(
+        ray_swept_offset_inline(&decode_bytes(&code, 0x1000)),
+        Ok(0x49)
+    );
+    // m_IsSwept must be the byte after m_IsRay
+    put(&mut code, swept + 2, &0xFFFF_FF60u32.to_le_bytes());
+    assert!(ray_swept_offset_inline(&decode_bytes(&code, 0x1000)).is_err());
+    assert!(ray_swept_offset_inline(&[]).is_err());
+}
+
+#[test]
 pub(crate) fn ray_swept_offset_follows_the_frame_of_the_helper() {
     let mut code = bytes_of(RAY_HELPER_SIG);
     put(&mut code, 53, &[0xE9]); // mov byte [rax-0x17],1
@@ -230,7 +255,9 @@ pub(crate) fn decoded_linux_lookups_match_the_counted_offsets() {
             fluid_layout_via_load(&decode_match(end_touch, linux_sigs::FLUID_END_TOUCH_SIG)),
             Ok((0x1c0, 0x2f0 / 8))
         );
+        assert_eq!(server_ray_swept_offset(base), Ok(0x41));
         let base = map_elf(&client);
+        assert_eq!(client_ray_swept_offset(base), Ok(0x41));
         let at = scan_sig(base, linux_sigs::CLIENT_TRACE_SIG).unwrap();
         assert_eq!(
             last_global(&decode_match(at, linux_sigs::CLIENT_TRACE_SIG)),

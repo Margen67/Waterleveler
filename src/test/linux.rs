@@ -53,6 +53,7 @@ pub(crate) fn linux_signatures_are_unique_in_server_so() {
         ("DispatchEffect", l::DISPATCH_EFFECT_SIG),
         ("CBaseTempEntity::Create", l::TE_CREATE_SIG),
         ("physenv user", l::PHYSENV_SIG),
+        ("ray setup", l::RAY_INIT_SIG),
     ];
     for t in l::EXPLOSION_TARGETS {
         sigs.push(("explosion target", t[0]));

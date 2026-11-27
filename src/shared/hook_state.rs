@@ -64,14 +64,7 @@ pub(crate) unsafe fn install_contents() -> Result<String, &'static str> {
         )];
 
         // Ray_t layout: where this build keeps m_IsSwept.
-        // Linux: the server's Ray_t is the old layout (m_IsRay +0x40, m_IsSwept +0x41).
-        #[cfg(not(windows))]
-        let ray_note = {
-            RAY_SWEPT_OFFSET.store(RAY_SWEPT_OFFSET_OLD, std::sync::atomic::Ordering::SeqCst);
-            format!(" (Ray_t m_IsSwept at +{RAY_SWEPT_OFFSET_OLD:#x})")
-        };
-        #[cfg(windows)]
-        let ray_note = match scan_sig(base, RAY_HELPER_SIG).and_then(|f| ray_swept_offset_from(f)) {
+        let ray_note = match server_ray_swept_offset(base) {
             Ok(off) => {
                 RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
                 format!(" (Ray_t m_IsSwept at +{off:#x})")
@@ -381,12 +374,8 @@ pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
         // TraceRay needs the Ray_t layout and a world entity to name in the result;
         // without either only the point contents are hooked.
         let entities = os::client_interface(c"VClientEntityList003");
-        // Windows: where this build keeps m_IsSwept comes from the Ray_t helper. The
-        // Linux client has the old layout (m_IsRay +0x40, m_IsSwept +0x41).
-        #[cfg(windows)]
-        let ray = scan_sig(base, RAY_HELPER_SIG).and_then(|f| ray_swept_offset_from(f));
-        #[cfg(not(windows))]
-        let ray: Result<usize, &'static str> = Ok(RAY_SWEPT_OFFSET_OLD);
+        // Where this build keeps m_IsSwept.
+        let ray = client_ray_swept_offset(base);
         let note = match (ray, entities) {
             (Ok(off), e) if e != 0 => {
                 RAY_SWEPT_OFFSET.store(off, std::sync::atomic::Ordering::SeqCst);
@@ -406,7 +395,7 @@ pub(crate) unsafe fn install_client_contents() -> Result<String, &'static str> {
                     Err(why) => format!("GetPointContents only (TraceRay hook failed: {why})"),
                 }
             }
-            (Err(why), _) => format!("GetPointContents only (Ray_t helper: {why})"),
+            (Err(why), _) => format!("GetPointContents only (Ray_t layout: {why})"),
             _ => "GetPointContents only (no VClientEntityList003)".to_string(),
         };
         *CONTENTS

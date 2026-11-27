@@ -42,6 +42,18 @@ pub(crate) mod linux_sigs {
     pub(crate) const ENTITY_ARRAY_SIG: &str =
         "48 8D 15 ?? ?? ?? ?? 8B 00 48 8B 12 83 F8 FF 74 ?? 89 C1 C1 E8 0E 81 E1 FF 3F 00 00 \
     48 C1 E1 05";
+    /// The server's inline `Ray_t` setup (`UTIL_TraceLine`-style): `m_IsRay`, `m_IsSwept`, and
+    /// the `lea rax,[ray]; mov rsi,rax` that passes the ray to `TraceRay`.
+    pub(crate) const RAY_INIT_SIG: &str =
+        "C6 85 ?? ?? ?? ?? 01 F3 0F 59 D2 F3 0F 11 8D ?? ?? ?? ?? F3 0F 59 C9 F3 0F 58 C2 \
+    F3 0F 58 C1 66 0F EF C9 0F 2E C1 0F 9A C0 0F 45 C2 31 C9 31 D2 88 85 ?? ?? ?? ?? E8 \
+    ?? ?? ?? ?? 4D 89 E8 48 89 D9 BA 0B 40 01 02 48 8D 05 ?? ?? ?? ?? 48 8B 38 \
+    48 8D 85 ?? ?? ?? ?? 48 89 C6";
+    /// The same in `client.so` (two sites, which must agree).
+    pub(crate) const CLIENT_RAY_INIT_SIG: &str =
+        "C6 85 ?? ?? ?? ?? 01 F3 0F 58 C4 F3 0F 58 C1 66 0F EF C9 0F 2E C1 0F 9A C0 0F 45 C2 \
+    31 C9 31 D2 88 85 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? 48 89 D9 BA 0B 40 ?? ?? \
+    4C 8D 85 ?? ?? ?? ?? 4C 89 85 ?? ?? ?? ?? 48 8B 38 48 8D 85 ?? ?? ?? ?? 48 89 C6";
     pub(crate) const EXPLOSION_TARGETS: [&[&str]; 3] = [
         &[
             "55 48 89 E5 41 56 41 55 41 54 53 48 89 FB 48 81 EC 90 00 00 00 80 BF ?? 02 00 00 00 \

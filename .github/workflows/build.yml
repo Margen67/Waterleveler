@@ -156,21 +156,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@main
 
+      - name: Install Rust nightly
+        run: rustup toolchain install nightly --profile minimal
+
       - name: Use Rust nightly
-        run: |-
-          rustup toolchain install nightly --profile minimal
-          rustup default nightly
+        run: rustup default nightly
 
       - name: Install cargo-udeps
         uses: taiki-e/install-action@main
         with:
           tool: cargo-udeps
 
-      - name: Check for unused dependencies
-        run: |-
-          cargo udeps --locked --all-targets
-          cargo udeps --locked --all-targets --no-default-features --features server
-          cargo udeps --locked --all-targets --no-default-features --features client
+      # One command per step: PowerShell only checks the exit code of a step's last command.
+      - name: Check for unused dependencies (both modules)
+        run: cargo udeps --locked --all-targets
+
+      - name: Check for unused dependencies (server)
+        run: cargo udeps --locked --all-targets --no-default-features --features server
+
+      - name: Check for unused dependencies (client)
+        run: cargo udeps --locked --all-targets --no-default-features --features client
 
   luals:
     name: LuaLS
@@ -194,6 +199,7 @@ jobs:
 
       - name: Use Rust nightly
         run: |-
+          $PSNativeCommandUseErrorActionPreference = $true
           rustup toolchain install nightly --profile minimal --component clippy --component rustfmt
           rustup default nightly
           rustc --version
@@ -202,7 +208,10 @@ jobs:
         run: cargo fmt --check
 
       - name: Lint
+        # PowerShell only checks the exit code of a step's last native command, so make every
+        # failing one stop the step.
         run: |-
+          $PSNativeCommandUseErrorActionPreference = $true
           cargo clippy --release --locked --all-targets
           cargo clippy --release --locked --no-default-features --features server
           cargo clippy --release --locked --no-default-features --features client
@@ -291,13 +300,13 @@ jobs:
           cp LICENSE package/garrysmod/addons/waterleveler/LICENSE
           find package -type f | sort
 
-      - name: Create the 7z archive
+      - name: Create the tar.xz archive
         working-directory: package
-        run: 7z a -mx9 -bb3 ../waterleveler-linux.7z garrysmod
+        run: XZ_OPT=-e9 tar cJvpf ../waterleveler-linux.tar.xz garrysmod
 
       - name: Upload artifact
         uses: actions/upload-artifact@main
         with:
-          path: waterleveler-linux.7z
+          path: waterleveler-linux.tar.xz
           archive: false
           if-no-files-found: error

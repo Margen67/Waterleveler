@@ -9,7 +9,7 @@
 //! The functions that interpret instructions take a slice of decoded instructions, so they
 //! can be tested on hand-written bytes as well as on the real binaries.
 
-#[cfg(any(windows, test, all(target_os = "linux", feature = "server")))]
+#[cfg(any(windows, test, target_os = "linux"))]
 use iced_x86::Register;
 use iced_x86::{Code, Decoder, DecoderOptions, Instruction};
 
@@ -162,7 +162,7 @@ pub(crate) fn fluid_layout(code: &[Instruction]) -> Result<(usize, usize), &'sta
 /// `OnEntityEvent` vtable slot. GCC loads the function pointer into a register
 /// (`mov r12,[rax+x]`, then `call r12` after the arguments are set up), so the slot is the
 /// first such load after the flag is cleared.
-#[cfg(all(feature = "server", any(test, target_os = "linux")))]
+#[cfg(all(feature = "server", target_os = "linux"))]
 pub(crate) fn fluid_layout_via_load(code: &[Instruction]) -> Result<(usize, usize), &'static str> {
     let (at, flags) = fluid_flags(code).ok_or(LAYOUT_ERROR)?;
     let event = code[at..]
@@ -208,6 +208,44 @@ pub(crate) fn ray_swept_offset(code: &[Instruction]) -> Result<usize, &'static s
         .map(|i| i.memory_displacement64() as i64)
         .ok_or(WRONG)?;
     usize::try_from(disp + 8 * pushes + frame - RAY_OFFSET_IN_FRAME)
+        .ok()
+        .filter(|o| (0x30..0x80).contains(o))
+        .ok_or(WRONG)
+}
+
+/// `Ray_t::m_IsSwept`'s offset from the Linux code that sets a ray up inline (GCC inlines the
+/// helper): `mov byte [rbp-a],1` is `m_IsRay`, `mov [rbp-a+1],al` is `m_IsSwept`, and the
+/// `lea rax,[rbp-b]; mov rsi,rax` that hands the ray to `TraceRay` gives where the `Ray_t`
+/// starts, so the offset is the distance between the two displacements.
+#[cfg(target_os = "linux")]
+pub(crate) fn ray_swept_offset_inline(code: &[Instruction]) -> Result<usize, &'static str> {
+    const WRONG: &str = "the ray setup is not the expected code (different game build?)";
+    let on_frame = |i: &Instruction| i.memory_base() == Register::RBP;
+    let is_ray = code
+        .iter()
+        .find(|i| i.code() == Code::Mov_rm8_imm8 && on_frame(i) && i.immediate8() == 1)
+        .map(|i| i.memory_displacement64() as i64)
+        .ok_or(WRONG)?;
+    let swept = code
+        .iter()
+        .find(|i| i.code() == Code::Mov_rm8_r8 && on_frame(i))
+        .map(|i| i.memory_displacement64() as i64)
+        .ok_or(WRONG)?;
+    let ray = code
+        .windows(2)
+        .find(|w| {
+            w[0].code() == Code::Lea_r64_m
+                && on_frame(&w[0])
+                && w[1].code() == Code::Mov_rm64_r64
+                && w[1].op0_register() == Register::RSI
+                && w[1].op1_register() == w[0].op0_register()
+        })
+        .map(|w| w[0].memory_displacement64() as i64)
+        .ok_or(WRONG)?;
+    if swept != is_ray + 1 {
+        return Err(WRONG);
+    }
+    usize::try_from(swept - ray)
         .ok()
         .filter(|o| (0x30..0x80).contains(o))
         .ok_or(WRONG)
