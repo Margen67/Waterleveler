@@ -120,6 +120,7 @@ static LUA_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 /// Loads the Lua API (`gmod`'s own lookup is fine on Windows).
 #[cfg(not(target_os = "linux"))]
+#[allow(clippy::unnecessary_wraps)] // same signature as the Linux one, which can fail
 unsafe fn load_lua_shared() -> Result<(), String> {
     unsafe { gmod::lua::load() };
     Ok(())
