@@ -54,7 +54,7 @@ pub(crate) const ENTITY_WATER_LEVEL_OFFSET: usize = 0x2db;
 pub(crate) const ENTITY_ORIGIN_OFFSET: usize = 0x36c;
 
 /// Reads the entity layout of this game build from the matched code (see the same function
-/// in `windows.rs`); the constants above are what the first Linux dev build had.
+/// in `windows.rs`); until then, the constants above (the current dev build's) are used.
 pub(crate) unsafe fn learn_water_level_layout(at: *const u8) -> Result<usize, &'static str> {
     unsafe {
         let off = water_level_offset_in(&decode_match(at, SIG), 3)?;

@@ -109,7 +109,7 @@ Needs the 64-bit Windows or Linux server or client: elsewhere the module loads b
    covers code that writes the byte directly (one player-state restore path
    does).
 
-Facts taken from the 64-bit Windows `server.dll` of the default branch (the Linux server's layout is noted in `src/shared/linux.rs` and `src/server/linux.rs`; the dev branch's `CBaseEntity` is 8 bytes bigger before these fields, so the Windows build reads the offsets of `m_nWaterLevel`, `m_iEFlags` and the `OnEntityEvent` slot out of its signature matches instead of assuming them): `m_nWaterLevel` is a
+Facts taken from the 64-bit Windows `server.dll` of the default branch (the Linux server's layout is noted in `src/shared/linux.rs` and `src/server/linux.rs`; the dev branch's `CBaseEntity` is 8 bytes bigger before these fields, so both builds read the offsets of `m_nWaterLevel`, `m_iEFlags` and the `OnEntityEvent` slot, and `Ray_t`'s layout, out of their signature matches instead of assuming them): `m_nWaterLevel` is a
 `FIELD_CHARACTER` datamap field at `this+0x2ab` (SAVE|KEY, map key
 `waterlevel`); the entity index is `*(i16*)(*(void**)(this+0x30)+6)`
 (`m_pPev->m_EdictIndex`, the same thing `Entity:EntIndex` reads).
@@ -241,7 +241,7 @@ from the engine's own ray-building helper at load time (shown in
 
 ## Verified vs not
 
-Verified by `cargo test` (53 tests; the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones `server_srv.so` in `SERVER_SO_X64` and `client.so` in `CLIENT_SO_X64`):
+Verified by `cargo test` (the ones that need `server.dll` take its path in `SERVER_DLL_X64`, the Linux ones `server_srv.so` in `SERVER_SO_X64` and `client.so` in `CLIENT_SO_X64`):
 the signatures match exactly once; the detour and trampoline run the **real
 `SetWaterLevel` machine code** from that DLL, substitute the override, pass other calls
 through, and uninstall restores the bytes exactly; the volume store and its lookup (lanes and
@@ -252,7 +252,7 @@ Verified in a live game (Windows x64, singleplayer and a dedicated server with a
 server and client modules load, the hooks install, volumes answer point queries and rewrite
 traces, bullets (single and shotgun) splash on entering a volume through the top, the sides and
 at the floor, props float up in a volume, removing a volume (with props inside it too) does not crash, the visible box has the collision box's size, and the water level, explosion and
-bubble-trail patches act. The 64-bit Linux server is verified live too, in singleplayer and on a dedicated server (there the client was the unmodified Linux client, before the Linux client module existed): `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI builds each Windows module with `cargo clippy` without warnings.
+bubble-trail patches act. The 64-bit Linux server was verified live on an earlier dev build too, in singleplayer and on a dedicated server (there the client was the unmodified Linux client, before the Linux client module existed): `CBaseEntity::SetWaterLevel`, point contents, trace rewriting, bubble trails, `FluidEndTouch`, all 3 explosion fixes and explosion events are active. CI lints (`cargo clippy`, no warnings allowed) and builds both modules on Windows and on Linux.
 
 On a dedicated server, a client that does **not** have the client module installed sees prediction
 errors, and the effects the client makes from its own water queries are missing: the wake
@@ -273,7 +273,7 @@ Not verified:
 - Whether `SetSaveValue` accepts a number for a `FIELD_CHARACTER` field. If not, use
   `waterleveler.SetSaveKey("")`; the engine hook does not depend on it.
 - Linux: only the 64-bit dedicated server (`server_srv.so`, or `server.so`) has hooks, found by
-  signature, found and tested against the 64-bit dev branch build; other builds of it are untested. The Linux client module (`client.so`, dev branch) finds its `enginetrace` by signature and hooks `GetPointContents` and `TraceRay` like the Windows client; it has not been run in a live game yet.
+  signature and tested against the 64-bit dev branch builds. The latest dev build (entity fields moved 8 bytes) is checked by the tests against the real binaries, but has not been run in a live game, and neither has the Linux client module (`client.so`, dev branch), which finds its `enginetrace` by signature and hooks `GetPointContents` and `TraceRay` like the Windows client.
   The Linux server has no RTTI for `CTEExplosion`, so explosion events are recognised by the
   temp entity's name; entities are keyed by their handle's index instead of the edict's.
 - Game updates: the hooks are found by signature, so an update that changes those functions

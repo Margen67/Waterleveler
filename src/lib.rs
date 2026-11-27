@@ -53,7 +53,8 @@
 //!   3. Every server tick the override is also written into the entity's
 //!      datamap via `Entity:SetSaveValue(key, level)`. This covers code paths
 //!      that write the byte directly instead of calling `SetWaterLevel`, and
-//!      is the only engine-side layer on platforms without the hook.
+//!      is the only engine-side layer when the hook is not installed (its signature did
+//!      not match this game build).
 //!
 //! Overrides are dropped automatically when the entity is removed.
 //!
@@ -169,11 +170,11 @@ unsafe fn close_realm(l: gmod::lua::State) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (x86-64): exercise the real hook machinery against the real
-// bytes of SetWaterLevel taken from a 64-bit Windows server.dll (these run on a Linux host).
-//   SERVER_DLL_X64=/path/to/server.dll cargo test --release
-// The Linux server's signatures and patches are checked against a real server_srv.so:
-//   SERVER_SO_X64=/path/to/server_srv.so cargo test --release
+// Tests (Linux x86-64 host, both features): exercise the real hook machinery against the
+// real code of the game's modules. Each test that needs a module skips itself when its path
+// is not set: the 64-bit Windows modules in SERVER_DLL_X64 and CLIENT_DLL_X64, the Linux
+// ones in SERVER_SO_X64 and CLIENT_SO_X64:
+//   SERVER_DLL_X64=/path/to/server.dll SERVER_SO_X64=/path/to/server.so cargo test --release
 // ---------------------------------------------------------------------------
 
 #[cfg(all(

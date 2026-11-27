@@ -60,9 +60,9 @@ pub(crate) unsafe fn entity_array_global(base: *const u8) -> Result<usize, &'sta
 }
 
 // The entity layout of the running game build. It differs between builds (the dev branch's
-// Windows server has everything 8 bytes further on than the default branch's), so the
-// Windows builds read it from the signature matches (`learn_*`); until then, and always on
-// Linux, the constants above are used.
+// server has everything 8 bytes further on than the default branch's), so both platforms
+// read it from the signature matches (`learn_*`); until then, the platform's constants
+// are used.
 pub(crate) static WATER_LEVEL_OFFSET: AtomicUsize = AtomicUsize::new(ENTITY_WATER_LEVEL_OFFSET);
 
 pub(crate) static ORIGIN_OFFSET: AtomicUsize = AtomicUsize::new(ENTITY_ORIGIN_OFFSET);

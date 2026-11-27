@@ -3,8 +3,8 @@
 
 use std::ffi::{c_int, c_void, CStr, CString};
 
-/// The 64-bit Linux server's signatures. Always compiled (the tests check them against a
-/// real `server_srv.so`), used only by the Linux build.
+/// The 64-bit Linux server's and client's signatures. Always compiled (the tests check them
+/// against the real `server.so` and `client.so`), used only by the Linux build.
 #[cfg(any(feature = "server", feature = "client"))]
 #[allow(dead_code)]
 pub(crate) mod linux_sigs {
