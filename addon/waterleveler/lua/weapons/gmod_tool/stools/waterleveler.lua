@@ -347,14 +347,28 @@ if CLIENT then
         ---@diagnostic disable-next-line: inject-field
         arrow.DoClick = function()
             local menu = DermaMenu();
-            menu:AddOption(solidMaterial, function() RunConsoleCommand("waterleveler_material", solidMaterial); end);
-            for _, m in ipairs(presets) do
-                menu:AddOption(m, function() RunConsoleCommand("waterleveler_material", m); end);
+            local width = holder:GetWide() + arrow:GetWide() + 2;
+            local function addPreset(name)
+                local option = menu:AddOption(name, function() RunConsoleCommand("waterleveler_material", name); end);
+                local layout = option.PerformLayout;
+                -- The stock option is 30 units wider than its text and indents it for an icon:
+                -- use the text field's 6 units of padding on both sides instead.
+                ---@diagnostic disable-next-line: inject-field
+                option.PerformLayout = function(self, w, h)
+                    layout(self, w, h);
+                    self:SetWide(math.max(width, (self:GetTextSize()) + 12));
+                    self:SetTextInset(6, 0);
+                end;
             end
 
-            -- Below the field, as wide as the field and its button.
+            addPreset(solidMaterial);
+            for _, m in ipairs(presets) do
+                addPreset(m);
+            end
+
+            -- Below the field.
             local x, y = holder:LocalToScreen(0, holder:GetTall());
-            menu:SetMinimumWidth(holder:GetWide() + arrow:GetWide() + 2);
+            menu:SetMinimumWidth(width);
             menu:Open(x, y, false, arrow);
         end;
 
