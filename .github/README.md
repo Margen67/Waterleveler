@@ -53,8 +53,7 @@ Tools tab > Construction > **Water Volume**.
 | Size, Offset   | Size per axis (or all at once) and a vertical offset                  |
 | Liquid         | Water or slime                                                        |
 | Buoyancy       | Props float; damping, torque, viscosity, aerodynamics and currents    |
-| Material       | Any material, or a preset; optionally `_beneath` on the inside        |
-| Solid color    | Draw one translucent color instead of a material                      |
+| Material       | Any material, a preset, or `Solid color` for one translucent color    |
 | Outline        | Draw the volume's edges in a color                                    |
 
 Only superadmins can create volumes (anyone in singleplayer and for the listen server host).

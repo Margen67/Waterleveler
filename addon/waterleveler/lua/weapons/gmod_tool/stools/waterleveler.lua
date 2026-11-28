@@ -24,7 +24,6 @@ TOOL.ClientConVar = {
     fluid_currentz = "0",
     material = "nature/water_movingplane",
     beneath = "0", -- the inside shows the material's _beneath texture; off: the material, double-sided
-    solid = "0", -- draw as one translucent colour (color_*) instead of the material
     color_r = "90", -- the liquid's colour: blue for water, green for slime (reset when the liquid changes)
     color_g = "190",
     color_b = "255",
@@ -38,6 +37,12 @@ TOOL.ClientConVar = {
 
 local defaults = TOOL.ClientConVar; -- the menu's reset button needs them after TOOL is gone
 local minSize, maxSize = 1, 32768;
+-- The material that means "no material: one translucent colour" (color_*).
+local solidMaterial = "Solid color";
+local function isSolid(material)
+    return string.lower(string.Trim(material)) == string.lower(solidMaterial);
+end
+
 local maxFluid, maxCurrent = 10, 1000;
 -- The numeric convars have limits: the console can't set a value outside them.
 -- (Created here, before the tool registers TOOL.ClientConVar, which would
@@ -56,7 +61,6 @@ if CLIENT then
         fluid_currentx = {0, -maxCurrent, maxCurrent},
         fluid_currenty = {0, -maxCurrent, maxCurrent},
         fluid_currentz = {0, -maxCurrent, maxCurrent},
-        solid = {0, 0, 1},
         color_r = {90, 0, 255},
         color_g = {190, 0, 255},
         color_b = {255, 0, 255},
@@ -93,7 +97,7 @@ end
 
 if CLIENT then
     language.Add("tool.waterleveler.name", "Water Volume");
-    language.Add("tool.waterleveler.desc", "Create a water volume that behaves like engine water");
+    language.Add("tool.waterleveler.desc", "Create a water volume that behaves like real water");
     language.Add("tool.waterleveler.left", "Create a water volume");
     language.Add("tool.waterleveler.reload", "Remove the water volumes that touch the preview");
     language.Add("Undone_Water Volume", "Undone Water Volume");
@@ -165,9 +169,9 @@ function TOOL:LeftClick(trace)
             currenty = math.Clamp(self:GetClientNumber("fluid_currenty", 0), -maxCurrent, maxCurrent),
             currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -maxCurrent, maxCurrent),
         },
-        material = self:GetClientInfo("material"),
+        material = isSolid(self:GetClientInfo("material")) and "" or self:GetClientInfo("material"),
         beneath = self:GetClientNumber("beneath", 0) ~= 0,
-        solid = self:GetClientNumber("solid", 0) ~= 0,
+        solid = isSolid(self:GetClientInfo("material")),
         color = readColor(get, "color"),
         outline = self:GetClientNumber("outline", 0) ~= 0,
         outlineColor = readColor(get, "outline"),
@@ -297,18 +301,21 @@ if CLIENT then
         -- Material: one text entry with a button that drops down the presets.
         local box = vgui.Create("DPanel");
         box:SetPaintBackground(false);
-        box:SetTall(rowHeight);
+        box:SetTall(rowHeight + 4);
+        box:Dock(FILL);
         local entry = vgui.Create("DTextEntry", box);
         entry:Dock(FILL);
         entry:SetConVar("waterleveler_material");
         local arrow = vgui.Create("DButton", box);
         arrow:Dock(RIGHT);
-        arrow:SetWide(rowHeight);
+        arrow:DockMargin(2, 0, 0, 0);
+        arrow:SetWide(rowHeight + 4);
         arrow:SetText("");
         arrow:SetIcon("icon16/bullet_arrow_down.png");
         ---@diagnostic disable-next-line: inject-field
         arrow.DoClick = function()
             local menu = DermaMenu();
+            menu:AddOption(solidMaterial, function() RunConsoleCommand("waterleveler_material", solidMaterial); end);
             for _, m in ipairs(presets) do
                 menu:AddOption(m, function() RunConsoleCommand("waterleveler_material", m); end);
             end
@@ -320,10 +327,13 @@ if CLIENT then
         label:SetText("Material");
         label:SetDark(true);
         panel:AddItem(label, box);
-        panel:CheckBox("Solid color", "waterleveler_solid");
-        showWhen(colorMixer("color"), function() return flag("solid"); end);
-        showWhen(panel:CheckBox("Inside shows the material's _beneath texture", "waterleveler_beneath"), function() return not flag("solid"); end);
-        panel:CheckBox("Outline", "waterleveler_outline");
+        local function solid()
+            return isSolid(GetConVar("waterleveler_material"):GetString());
+        end
+
+        showWhen(colorMixer("color"), solid);
+        showWhen(panel:CheckBox("Inside shows the material's _beneath texture", "waterleveler_beneath"), function() return not solid(); end);
+        local outline = panel:CheckBox("Outline", "waterleveler_outline");
         showWhen(colorMixer("outline"), function() return flag("outline"); end);
         -- Debug (minimized): these only change what this client draws, for every volume, in fixed
         -- colors (blue water, green slime) that ignore the colors above.
@@ -346,7 +356,7 @@ if CLIENT then
             liquid:ChooseOptionID(1);
         end;
 
-        for _, convar in ipairs({"solid", "outline"}) do
+        for _, convar in ipairs({"material", "outline"}) do
             cvars.AddChangeCallback("waterleveler_" .. convar, function() timer.Simple(0, refresh); end, "waterleveler_panel_" .. convar);
         end
 
@@ -354,6 +364,9 @@ if CLIENT then
         for _, item in ipairs(panel.Items or {}) do
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end
+
+        local outlineRow = outline:GetParent();
+        if IsValid(outlineRow) then outlineRow:DockPadding(10, 8, 10, 0); end
 
         refresh();
     end
@@ -404,9 +417,9 @@ if CLIENT then
             WLWater.DrawVolume({
                 mins = mins,
                 maxs = maxs,
-                material = str("waterleveler_material", ""),
+                material = isSolid(str("waterleveler_material", "")) and "" or str("waterleveler_material", ""),
                 beneath = convar("waterleveler_beneath", 0) ~= 0,
-                solid = convar("waterleveler_solid", 0) ~= 0,
+                solid = isSolid(str("waterleveler_material", "")),
                 color = Color(convar("waterleveler_color_r", 90), convar("waterleveler_color_g", 190), convar("waterleveler_color_b", 255), convar("waterleveler_color_a", 110)),
             });
         end
