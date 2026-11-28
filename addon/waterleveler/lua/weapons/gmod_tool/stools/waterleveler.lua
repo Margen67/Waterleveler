@@ -187,6 +187,7 @@ end
 if CLIENT then
     local presets = {"nature/water_movingplane", "nature/water_movingplane_dx70", "gm_construct/water_13", "models/shadertest/predator", "models/shadertest/shader3",};
     local rowHeight = 20;
+    local liquidHeight, materialHeight = 22, 26;
     ---@param panel ControlPanel
     function TOOL.BuildCPanel(panel)
         local function numSlider(label, convar, min, max, decimals)
@@ -280,7 +281,7 @@ if CLIENT then
         showWhen(numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0), buoyant);
         local liquid = panel:ComboBox("Liquid");
         liquid:SetSortItems(false);
-        liquid:SetTall(rowHeight);
+        liquid:SetTall(liquidHeight);
         local current = GetConVar("waterleveler_liquid");
         local isSlime = current and current:GetString() == "slime";
         liquid:AddChoice("Water", "water", not isSlime);
@@ -304,7 +305,7 @@ if CLIENT then
         -- Material: one text entry with a button that drops down the presets.
         local box = vgui.Create("DPanel");
         box:SetPaintBackground(false);
-        box:SetTall(rowHeight + 4);
+        box:SetTall(materialHeight);
         box:Dock(FILL);
         local entry = vgui.Create("DTextEntry", box);
         entry:Dock(FILL);
@@ -312,7 +313,7 @@ if CLIENT then
         local arrow = vgui.Create("DButton", box);
         arrow:Dock(RIGHT);
         arrow:DockMargin(2, 0, 0, 0);
-        arrow:SetWide(rowHeight + 4);
+        arrow:SetWide(materialHeight);
         arrow:SetText("");
         arrow:SetIcon("icon16/bullet_arrow_down.png");
         ---@diagnostic disable-next-line: inject-field
@@ -374,12 +375,18 @@ if CLIENT then
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end
 
-        -- A little more room above the Material row, the Outline checkbox, the screen warp, the
+        -- A little more room above the Liquid and Material rows, the Outline checkbox, the screen warp, the
         -- Debug section and the reset button.
-        for _, ctrl in ipairs({materialLabel, outline, warp, debugForm, reset}) do
+        for _, ctrl in ipairs({liquid, materialLabel, outline, warp, debugForm, reset}) do
             local row = ctrl:GetParent();
             if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
         end
+
+        timer.Simple(0, function()
+            if IsValid(liquid) then liquid:SetTall(liquidHeight); end
+            if IsValid(box) then box:SetTall(materialHeight); end
+            refresh();
+        end);
 
         refresh();
     end
