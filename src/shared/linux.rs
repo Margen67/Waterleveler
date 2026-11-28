@@ -63,11 +63,12 @@ pub(crate) mod linux_sigs {
         " | ",
         "55 48 89 E5 41 57 41 56 41 55 49 89 F5 41 54 53 48 89 FB 48 83 EC 18 F3 0F 11 45 CC 4C 8B 25 ?? ?? ?? ?? 49 8B 04 24 48 8B 00 4C 8B B8 E8 01 00 00",
     );
-    pub(crate) const PHYSENV_SIG: &str =
-        concat!(
+    pub(crate) const PHYSENV_SIG: &str = concat!(
         "48 8B 3D ?? ?? ?? ?? 48 8D 95 ?? ?? ?? ?? 4C 89 E6 48 8B 07 FF 50 60",
         " | ",
-        "4C 8B 3D ?? ?? ?? ?? 48 8D 85 ?? ?? ?? ?? 45 31 F6 48 89 85 ?? ?? ?? ?? 49 8D 45 0C 4C 8D A5 ?? ?? ?? ?? 48 89 85 ?? ?? ?? ?? 0F 1F 40 00 BA 00 02 00 00 4C 89 E6 48 89 DF E8 ?? ?? ?? ?? 49 8B 3F 4C 89 E6 48 8B 07 FF 50 60",
+        // x86-64 branch: `CreateFluidController(object, &fluidparams)` for the world water, right after
+        // the callback flags get `| 0x200`; the variable is read directly (not through the GOT)
+        "48 8B 3D ?? ?? ?? ?? 48 89 DE 48 8B 8D ?? ?? ?? ?? 48 8B 07 48 8D 91 08 02 00 00 FF 50 60",
     );
     pub(crate) const ENTITY_ARRAY_SIG: &str =
         concat!(
