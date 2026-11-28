@@ -303,15 +303,20 @@ if CLIENT then
         end;
 
         -- Material: one text entry with a button that drops down the presets.
-        local box = vgui.Create("DPanel");
-        box:SetPaintBackground(false);
-        box:SetTall(materialHeight);
-        box:Dock(FILL);
-        local entry = vgui.Create("DTextEntry", box);
+        -- One full row (not the form's label and control pair, which sizes the control itself).
+        local row = vgui.Create("DPanel");
+        row:SetPaintBackground(false);
+        row:SetTall(materialHeight);
+        local label = vgui.Create("DLabel", row);
+        label:SetText("Material");
+        label:SetDark(true);
+        label:Dock(LEFT);
+        label:SetWide(100);
+        local entry = vgui.Create("DTextEntry", row);
         entry:Dock(FILL);
         entry:SetConVar("waterleveler_material");
         entry:SetTextInset(6, 0);
-        local arrow = vgui.Create("DButton", box);
+        local arrow = vgui.Create("DButton", row);
         arrow:Dock(RIGHT);
         arrow:DockMargin(2, 0, 0, 0);
         arrow:SetWide(materialHeight);
@@ -328,11 +333,8 @@ if CLIENT then
             menu:Open();
         end;
 
-        local label = vgui.Create("DLabel");
-        label:SetText("Material");
-        label:SetDark(true);
-        panel:AddItem(label, box);
-        local materialLabel = label;
+        panel:AddItem(row);
+        local materialLabel = row;
         local function solid()
             return isSolid(GetConVar("waterleveler_material"):GetString());
         end
