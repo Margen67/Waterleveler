@@ -130,12 +130,13 @@ impl Bvh {
                 (centre_hi[x] - centre_lo[x]).total_cmp(&(centre_hi[y] - centre_lo[y]))
             })
             .unwrap_or(0);
-        self.order[from..to].sort_unstable_by(|&x, &y| {
+        let mid = from + (to - from) / 2;
+        // Only the halves matter, not the order inside them.
+        self.order[from..to].select_nth_unstable_by(mid - from, |&x, &y| {
             let cx = vols[x as usize].min[axis] + vols[x as usize].max[axis];
             let cy = vols[y as usize].min[axis] + vols[y as usize].max[axis];
             cx.total_cmp(&cy)
         });
-        let mid = from + (to - from) / 2;
         let a = self.split(vols, from, mid);
         let b = self.split(vols, mid, to);
         let node = &mut self.nodes[index as usize];
@@ -144,8 +145,8 @@ impl Bvh {
         index
     }
 
-    /// Calls `f` for every volume that contains `p`.
-    pub(crate) fn visit(&self, vols: &[Volume], p: [f32; 3], mut f: impl FnMut(&Volume)) {
+    /// Calls `f` for every volume that contains `p`, until it returns false.
+    pub(crate) fn visit(&self, vols: &[Volume], p: [f32; 3], mut f: impl FnMut(&Volume) -> bool) {
         // Median splits keep the tree shallow: the stack never holds more than depth + 1.
         let mut stack = [0u32; 64];
         let mut top = 1;
@@ -161,8 +162,8 @@ impl Bvh {
             if node.count > 0 {
                 for &i in &self.order[node.a as usize..(node.a + node.count) as usize] {
                     let v = &vols[i as usize];
-                    if (0..3).all(|k| p[k] >= v.min[k] && p[k] <= v.max[k]) {
-                        f(v);
+                    if (0..3).all(|k| p[k] >= v.min[k] && p[k] <= v.max[k]) && !f(v) {
+                        return;
                     }
                 }
             } else {
@@ -197,11 +198,17 @@ impl VolumeList {
     }
 
     pub(crate) fn refresh_bounds(&mut self) {
-        for axis in 0..3 {
-            self.lanes.min[axis] = self.list.iter().map(|v| v.min[axis]).collect();
-            self.lanes.max[axis] = self.list.iter().map(|v| v.max[axis]).collect();
+        // Point queries use the lanes up to `TREE_MIN_VOLUMES` volumes and the tree above, so
+        // only the one in use is built.
+        if self.list.len() > TREE_MIN_VOLUMES {
+            self.lanes = Lanes::default();
+        } else {
+            for axis in 0..3 {
+                self.lanes.min[axis] = self.list.iter().map(|v| v.min[axis]).collect();
+                self.lanes.max[axis] = self.list.iter().map(|v| v.max[axis]).collect();
+            }
+            self.lanes.contents = self.list.iter().map(|v| v.contents.bits()).collect();
         }
-        self.lanes.contents = self.list.iter().map(|v| v.contents.bits()).collect();
         self.tree = Bvh::build(&self.list);
         self.bounds = self.list.iter().fold(None, |acc, v| {
             Some(acc.map_or((v.min, v.max), |(lo, hi)| {
@@ -249,7 +256,10 @@ impl VolumeList {
     pub(crate) fn contents_at(&self, p: [f32; 3]) -> Contents {
         if self.list.len() > TREE_MIN_VOLUMES {
             let mut contents = Contents::empty();
-            self.tree.visit(&self.list, p, |v| contents |= v.contents);
+            self.tree.visit(&self.list, p, |v| {
+                contents |= v.contents;
+                true
+            });
             return contents;
         }
         let l = &self.lanes;
@@ -275,7 +285,10 @@ impl VolumeList {
     pub(crate) fn contains(&self, p: [f32; 3]) -> bool {
         if self.list.len() > TREE_MIN_VOLUMES {
             let mut inside = false;
-            self.tree.visit(&self.list, p, |_| inside = true);
+            self.tree.visit(&self.list, p, |_| {
+                inside = true;
+                false // one is enough
+            });
             return inside;
         }
         let l = &self.lanes;
@@ -302,6 +315,7 @@ impl VolumeList {
             if v.contents.contains(Contents::WATER) {
                 top = Some(top.map_or(v.max[2], |t| t.max(v.max[2])));
             }
+            true
         };
         if self.list.len() > TREE_MIN_VOLUMES {
             self.tree.visit(&self.list, p, take);
@@ -410,6 +424,16 @@ pub(crate) fn snapshot_if(maybe: impl FnOnce(&VolumeList) -> bool) -> Option<Arc
         .as_ref()
         .filter(|v| maybe(v))
         .map(Arc::clone)
+}
+
+/// Runs `f` on the current volumes when `maybe` says the query could touch one, without taking
+/// a copy of the pointer (no reference count changes): for a quick answer that is not kept.
+/// Not for long work: the borrow holds up the next edit's cleanup of the old list.
+pub(crate) fn snapshot_with<R>(
+    maybe: impl FnOnce(&VolumeList) -> bool,
+    f: impl FnOnce(&VolumeList) -> R,
+) -> Option<R> {
+    SNAPSHOT.load().as_ref().filter(|v| maybe(v)).map(|v| f(v))
 }
 
 /// Counts one event. A plain load and store, not an atomic add: these diagnostic counters

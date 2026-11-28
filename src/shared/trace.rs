@@ -33,19 +33,22 @@ pub(crate) unsafe fn hook_get_point_contents(
         if !pos.is_null() {
             // Never block inside an engine callback.
             let p = read_vec3(pos);
-            let mut inside = snapshot_if(|v| v.may_contain(p))
-                .map_or(Contents::empty(), |vols| vols.contents_at(p));
+            let mut inside = snapshot_with(|v| v.may_contain(p), |v| v.contents_at(p))
+                .unwrap_or(Contents::empty());
             if inside.is_empty() {
                 // The end point of a small-hull trace (a shotgun pellet): the engine asks
                 // whether it is in water to decide on a splash. Answer for where the
                 // bullet's own line reaches the surface instead of the hull's centre.
-                if let Some((end, probe)) = LAST_HULL.with(Cell::get) {
+                let pending = HULL_PENDING.load(Ordering::Relaxed);
+                if let Some((end, probe)) = pending.then(|| LAST_HULL.with(Cell::get)).flatten() {
                     // The very floats the trace returned, so an exact comparison.
                     #[allow(clippy::float_cmp)]
                     let same = end == p;
                     if same {
-                        if let Some(vols) = snapshot_if(|v| v.may_contain(probe)) {
-                            inside = vols.contents_at(probe);
+                        if let Some(found) =
+                            snapshot_with(|v| v.may_contain(probe), |v| v.contents_at(probe))
+                        {
+                            inside = found;
                         }
                         if DEBUG.load(Ordering::Relaxed) {
                             debug_log(format!(
@@ -408,7 +411,6 @@ pub(crate) fn plan_trace(
         let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
         if inside(s) {
             started_inside = true;
-            left_at = left_at.min(segment_exit_fraction(s, d, lo, hi));
             let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
             if inside(e) {
                 return Some(TraceOutcome::Inside {
@@ -416,6 +418,7 @@ pub(crate) fn plan_trace(
                     contents: v.contents,
                 });
             }
+            left_at = left_at.min(segment_exit_fraction(s, d, lo, hi));
         } else if !started_inside {
             if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
                 if t < current && best.as_ref().is_none_or(|b| t < b.t) {
@@ -599,6 +602,7 @@ pub(crate) unsafe fn apply_water_to_trace_planned(
 /// True if the ray certainly touches no volume: the box around its segment (grown by
 /// the ray's extents) is separated from the box around every volume. Anything else,
 /// NaN included, is "maybe". Reads the same ray fields as `apply_water_to_trace_at`.
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) unsafe fn ray_misses_bounds(
     bounds: Option<([f32; 3], [f32; 3])>,
     ray: *const u8,
@@ -700,6 +704,10 @@ pub(crate) unsafe fn hook_trace_ray(
 }
 }
 
+/// Whether any small-hull trace has been remembered: until one is, the point-contents hook
+/// does not look at `LAST_HULL`.
+static HULL_PENDING: AtomicBool = AtomicBool::new(false);
+
 thread_local! {
     /// The last small-hull trace that hit something near a volume: (its end point, the
     /// point where the bullet's own line reaches the surface the hull stopped at).
@@ -753,13 +761,15 @@ pub(crate) unsafe fn note_small_hull(ray: *const u8, mask: u32, trace: *const u8
         if fraction >= 1.0 {
             return;
         }
-        if snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)).is_none() {
+        let near = |v: &VolumeList| !segment_misses_bounds(v.bounds, r.start, r.delta, r.extents);
+        if snapshot_with(near, |_| ()).is_none() {
             return;
         }
         let t: TraceHead = read_struct(trace);
         let (end, normal, delta) = (t.end_pos, t.plane_normal, r.delta);
         if let Some(probe) = hull_surface_point(end, normal, delta, ext) {
             LAST_HULL.with(|c| c.set(Some((end, probe))));
+            HULL_PENDING.store(true, Ordering::Relaxed);
         }
         if DEBUG.load(Ordering::Relaxed) {
             debug_log(format!(

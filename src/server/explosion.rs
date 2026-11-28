@@ -129,8 +129,8 @@ pub(crate) unsafe fn redirect_explosion(this: *const u8) -> bool {
             return false;
         }
         let origin = read_vec3(this.add(TE_ORIGIN_OFFSET).cast::<f32>());
-        let inside =
-            snapshot_if(|v| v.may_contain(origin)).is_some_and(|v| v.surface_z(origin).is_some());
+        let inside = snapshot_with(|v| v.may_contain(origin), |v| v.surface_z(origin).is_some())
+            .unwrap_or(false);
         if !inside {
             return false;
         }

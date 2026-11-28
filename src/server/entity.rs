@@ -87,7 +87,7 @@ pub(crate) unsafe fn raise_water_level_in_volume(this: *mut u8) {
                 .cast::<f32>(),
         );
         // try_lock: never wait (the original calls back into the contents hook).
-        let inside = snapshot_if(|v| v.may_contain(p)).is_some_and(|v| v.contains(p));
+        let inside = snapshot_with(|v| v.may_contain(p), |v| v.contains(p)).unwrap_or(false);
         if inside {
             let level = this.add(WATER_LEVEL_OFFSET.load(Ordering::Relaxed));
             if level.read() < 2 {

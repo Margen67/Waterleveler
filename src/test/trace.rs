@@ -889,3 +889,40 @@ pub(crate) fn contents_hook_adds_water_inside_volumes() {
         assert_eq!(vtable[0], original, "uninstall must restore slot 0");
     }
 }
+
+#[test]
+pub(crate) fn queries_agree_across_the_tree_threshold_and_with_equal_centres() {
+    // 40 overlapping boxes around one centre: the median split sees equal keys everywhere.
+    let mut list = VolumeList::new();
+    for id in 0..40u32 {
+        let r = 10.0 + id as f32;
+        list.push(vol(id, [-r; 3], [r; 3], slime_every(id as usize, 3)));
+    }
+    let points = [
+        [0.0; 3],
+        [5.0, -9.0, 12.0],
+        [30.0, 0.0, 0.0],
+        [49.0, 49.0, 49.0],
+        [60.0, 0.0, 0.0],
+    ];
+    // Down through the threshold (tree to lanes), then up again (lanes to tree).
+    for keep in [40usize, 17, 16, 15, 3, 16, 17, 40] {
+        let all: Vec<Volume> = (0..40u32)
+            .take(keep)
+            .map(|id| {
+                let r = 10.0 + id as f32;
+                vol(id, [-r; 3], [r; 3], slime_every(id as usize, 3))
+            })
+            .collect();
+        list.set(all.clone());
+        for p in points {
+            assert_eq!(list.contents_at(p), contents_at(&all, p), "{keep} {p:?}");
+            assert_eq!(
+                list.contains(p),
+                !contents_at(&all, p).is_empty(),
+                "{keep} {p:?}"
+            );
+            assert_eq!(list.surface_z(p), surface_z_at(&all, p), "{keep} {p:?}");
+        }
+    }
+}
