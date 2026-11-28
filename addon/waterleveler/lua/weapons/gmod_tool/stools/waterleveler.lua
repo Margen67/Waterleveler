@@ -364,9 +364,9 @@ if CLIENT then
         for _, item in ipairs(panel.Items or {}) do
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end
+
         local outlineRow = outline:GetParent();
         if IsValid(outlineRow) then outlineRow:DockPadding(10, 8, 10, 0); end
-
         refresh();
     end
 
