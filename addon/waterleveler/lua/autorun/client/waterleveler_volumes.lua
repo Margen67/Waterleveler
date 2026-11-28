@@ -641,6 +641,7 @@ end
 -- sort, so it is ordered against splashes, sprites and shards by distance
 -- like any other translucent thing (origin = the box centre).
 local preview = {}; -- the tool's preview volume: the mesh of its current size, around the origin
+local previewMatrix = Matrix(); -- reused: only its translation changes
 -- The Debug section of the tool menu (client-only settings). The debug colours are fixed:
 -- they ignore the colours a volume was made with.
 local debugFill = CreateClientConVar("waterleveler_debug_fill", "0", true, false, "Draw every water volume as a solid colour (blue water, green slime)", 0, 1);
@@ -737,7 +738,11 @@ drawFill = function(bx, fill)
 
     local body = top;
     local now = CurTime();
-    if top.animate then top.animate(now); end
+    -- Animated once per distinct time, however many volumes share the material.
+    if top.animate and top.lastAnimated ~= now then
+        top.lastAnimated = now;
+        top.animate(now);
+    end
     if top.directional then
         -- A bump map only shows under uneven light (a brush gets the map's lightmap): light
         -- from above, dimmer from the sides.
@@ -771,10 +776,8 @@ drawFill = function(bx, fill)
         owner.maxs = bx.maxs - centre;
         owner.material = bx.material;
         owner.beneath = bx.beneath;
-        owner.pack = pack;
-        local translation = Matrix();
-        translation:SetTranslation(centre);
-        cam.PushModelMatrix(translation);
+        previewMatrix:SetTranslation(centre);
+        cam.PushModelMatrix(previewMatrix);
         moved = true;
     end
 
@@ -785,7 +788,6 @@ drawFill = function(bx, fill)
     local sizeX, sizeY, sizeZ = math.floor((owner.maxs.x - owner.mins.x) * 100 + 0.5), math.floor((owner.maxs.y - owner.mins.y) * 100 + 0.5), math.floor((owner.maxs.z - owner.mins.z) * 100 + 0.5);
     local material, beneath = owner.material or "", owner.beneath ~= false;
     if fill then material = ""; end
-    owner.pack = pack;
     local built = owner.built;
     if not built or built.material ~= material or built.pack ~= pack or built.beneath ~= beneath or built.sizeX ~= sizeX or built.sizeY ~= sizeY or built.sizeZ ~= sizeZ then
         destroyBuilt(owner);

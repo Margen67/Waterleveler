@@ -471,12 +471,14 @@ if CLIENT then
                 return cv and cv:GetString() or default;
             end
 
+            local material = str("waterleveler_material", "");
+            local solid = isSolid(material);
             WLWater.DrawVolume({
                 mins = mins,
                 maxs = maxs,
-                material = isSolid(str("waterleveler_material", "")) and "" or str("waterleveler_material", ""),
+                material = solid and "" or material,
                 beneath = convar("waterleveler_beneath", 0) ~= 0,
-                solid = isSolid(str("waterleveler_material", "")),
+                solid = solid,
                 color = Color(convar("waterleveler_color_r", 90), convar("waterleveler_color_g", 190), convar("waterleveler_color_b", 255), convar("waterleveler_color_a", 110)),
             });
         end
@@ -484,7 +486,7 @@ if CLIENT then
         -- The guide outline uses the outline color picker's color and is drawn over everything else.
         local r, g, b, a = convar("waterleveler_outline_r", 90), convar("waterleveler_outline_g", 190), convar("waterleveler_outline_b", 255), convar("waterleveler_outline_a", 255);
         cam.IgnoreZ(true);
-        render.DrawWireframeBox(Vector(0, 0, 0), Angle(0, 0, 0), mins, maxs, Color(r, g, b, a), false);
+        render.DrawWireframeBox(vector_origin, angle_zero, mins, maxs, Color(r, g, b, a), false);
         cam.IgnoreZ(false);
     end);
 end

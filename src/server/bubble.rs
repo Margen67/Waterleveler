@@ -61,6 +61,9 @@ pub(crate) fn clip_bubble_trail(vols: &[Volume], from: [f32; 3], to: [f32; 3]) -
             continue;
         };
         if t0 <= 0.0 {
+            if t1 >= 1.0 {
+                return BubbleClip::Keep; // one box holds the whole trail
+            }
             if !starts_inside || t1 > best.map_or(0.0, |b| b.1) {
                 best = Some((t0, t1));
                 starts_inside = true;
