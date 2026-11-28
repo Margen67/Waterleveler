@@ -356,7 +356,7 @@ if CLIENT then
                 ---@diagnostic disable-next-line: inject-field
                 option.PerformLayout = function(self, w, h)
                     layout(self, w, h);
-                    self:SetWide(math.max(width, (self:GetTextSize()) + 12));
+                    self:SetWide(math.max(width, self:GetTextSize() + 12));
                     self:SetTextInset(6, 0);
                 end;
             end
