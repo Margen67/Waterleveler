@@ -194,7 +194,10 @@ if CLIENT then
         -- A control whose visibility follows a convar; its form row goes with it.
         local toggled = {};
         local function showWhen(ctrl, visible)
-            toggled[#toggled + 1] = {ctrl = ctrl, visible = visible};
+            toggled[#toggled + 1] = {
+                ctrl = ctrl,
+                visible = visible
+            };
         end
 
         local function refresh()
@@ -291,7 +294,6 @@ if CLIENT then
         numSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0);
         numSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0);
         numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0);
-
         -- Material: one text entry with a button that drops down the presets.
         local box = vgui.Create("DPanel");
         box:SetPaintBackground(false);
