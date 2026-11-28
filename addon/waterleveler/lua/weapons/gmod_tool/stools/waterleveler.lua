@@ -352,7 +352,10 @@ if CLIENT then
                 menu:AddOption(m, function() RunConsoleCommand("waterleveler_material", m); end);
             end
 
-            menu:Open();
+            -- Below the field, as wide as the field and its button.
+            local x, y = holder:LocalToScreen(0, holder:GetTall());
+            menu:SetMinimumWidth(holder:GetWide() + arrow:GetWide() + 2);
+            menu:Open(x, y, false, arrow);
         end;
 
         panel:AddItem(materialRow);
