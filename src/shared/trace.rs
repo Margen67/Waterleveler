@@ -304,7 +304,7 @@ pub(crate) unsafe fn apply_water_to_trace(
 }
 
 /// Same, only for the volumes whose contents `mask` asks for.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) unsafe fn apply_water_to_trace_masked(
     vols: &[Volume],
     ray: *const u8,
@@ -482,7 +482,7 @@ pub(crate) fn plan_trace(
 
 /// Same, with the offset of `Ray_t::m_IsSwept` given explicitly. Only the reads of the
 /// ray and the writes of the trace are here; `plan_trace` decides what to write.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) unsafe fn apply_water_to_trace_at(
     vols: &[Volume],
     ray: *const u8,
