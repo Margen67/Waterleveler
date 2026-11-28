@@ -21,7 +21,7 @@ do
     fluidEnt.Base = "base_anim";
     fluidEnt.Spawnable = false;
     function fluidEnt:Initialize()
-        -- The entity needs a model (never drawn) to get its physics box.
+        -- A model (never drawn) is required: PhysicsInitBox raises a Lua error without one.
         self:SetModel("models/hunter/blocks/cube025x025x025.mdl");
         self:SetNoDraw(true);
         self:DrawShadow(false);
