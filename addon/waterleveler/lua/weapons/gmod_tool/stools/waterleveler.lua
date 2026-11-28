@@ -304,19 +304,19 @@ if CLIENT then
 
         -- Material: one text entry with a button that drops down the presets.
         -- One full row (not the form's label and control pair, which sizes the control itself).
-        local row = vgui.Create("DPanel");
-        row:SetPaintBackground(false);
-        row:SetTall(materialHeight);
-        local label = vgui.Create("DLabel", row);
+        local materialRow = vgui.Create("DPanel");
+        materialRow:SetPaintBackground(false);
+        materialRow:SetTall(materialHeight);
+        local label = vgui.Create("DLabel", materialRow);
         label:SetText("Material");
         label:SetDark(true);
         label:Dock(LEFT);
         label:SetWide(100);
-        local entry = vgui.Create("DTextEntry", row);
+        local entry = vgui.Create("DTextEntry", materialRow);
         entry:Dock(FILL);
         entry:SetConVar("waterleveler_material");
         entry:SetTextInset(6, 0);
-        local arrow = vgui.Create("DButton", row);
+        local arrow = vgui.Create("DButton", materialRow);
         arrow:Dock(RIGHT);
         arrow:DockMargin(2, 0, 0, 0);
         arrow:SetWide(materialHeight);
@@ -333,8 +333,7 @@ if CLIENT then
             menu:Open();
         end;
 
-        panel:AddItem(row);
-        local materialLabel = row;
+        panel:AddItem(materialRow);
         local function solid()
             return isSolid(GetConVar("waterleveler_material"):GetString());
         end
@@ -380,7 +379,7 @@ if CLIENT then
 
         -- A little more room above the Liquid and Material rows, the Outline checkbox, the screen warp, the
         -- Debug section and the reset button.
-        for _, ctrl in ipairs({liquid, materialLabel, outline, warp, debugForm, reset}) do
+        for _, ctrl in ipairs({liquid, materialRow, outline, warp, debugForm, reset}) do
             local row = ctrl:GetParent();
             if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
         end
