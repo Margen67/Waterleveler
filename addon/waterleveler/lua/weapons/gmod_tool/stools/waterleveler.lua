@@ -264,8 +264,20 @@ if CLIENT then
 
         offset = numSlider("Offset", "waterleveler_offset", -maxSize, maxSize, 0);
         panel:ControlHelp("Moves the volume up (or down) from where it would rest. The limit is the biggest size above.");
-        panel:ControlHelp("The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).");
+        panel:ControlHelp("The muffled underwater explosion sound needs the blast to be more than 128 units below the surface. The client looks up to 512 units.");
         updateOffsetRange();
+        panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid");
+        local function buoyant()
+            return flag("fluid");
+        end
+
+        showWhen(numSlider("Damping (drag)", "waterleveler_fluid_damping", 0, maxFluid, 3), buoyant);
+        showWhen(numSlider("Torque factor", "waterleveler_fluid_torque", 0, maxFluid, 3), buoyant);
+        showWhen(numSlider("Viscosity factor", "waterleveler_fluid_viscosity", 0, maxFluid, 3), buoyant);
+        showWhen(panel:CheckBox("Aerodynamic drag", "waterleveler_fluid_aero"), buoyant);
+        showWhen(numSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0), buoyant);
+        showWhen(numSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0), buoyant);
+        showWhen(numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0), buoyant);
         local liquid = panel:ComboBox("Liquid");
         liquid:SetSortItems(false);
         liquid:SetTall(rowHeight);
@@ -288,16 +300,6 @@ if CLIENT then
                 RunConsoleCommand("waterleveler_" .. prefix .. "_a", tostring(alpha));
             end
         end;
-
-        panel:CheckBox("Underwater screen warp", "waterleveler_underwater_warp");
-        panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid");
-        numSlider("Damping (drag)", "waterleveler_fluid_damping", 0, maxFluid, 3);
-        numSlider("Torque factor", "waterleveler_fluid_torque", 0, maxFluid, 3);
-        numSlider("Viscosity factor", "waterleveler_fluid_viscosity", 0, maxFluid, 3);
-        panel:CheckBox("Aerodynamic drag", "waterleveler_fluid_aero");
-        numSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0);
-        numSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0);
-        numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0);
         -- Material: one text entry with a button that drops down the presets.
         local box = vgui.Create("DPanel");
         box:SetPaintBackground(false);
@@ -327,6 +329,7 @@ if CLIENT then
         label:SetText("Material");
         label:SetDark(true);
         panel:AddItem(label, box);
+        local materialLabel = label;
         local function solid()
             return isSolid(GetConVar("waterleveler_material"):GetString());
         end
@@ -335,15 +338,15 @@ if CLIENT then
         showWhen(panel:CheckBox("Inside shows the material's _beneath texture", "waterleveler_beneath"), function() return not solid(); end);
         local outline = panel:CheckBox("Outline", "waterleveler_outline");
         showWhen(colorMixer("outline"), function() return flag("outline"); end);
+        local warp = panel:CheckBox("Underwater screen warp", "waterleveler_underwater_warp");
         -- Debug (minimized): these only change what this client draws, for every volume, in fixed
         -- colors (blue water, green slime) that ignore the colors above.
         local debugForm = vgui.Create("DForm", panel);
         debugForm:SetLabel("Debug");
         debugForm:SetExpanded(false);
-        debugForm:CheckBox("Draw every volume as a solid color (even invisible water)", "waterleveler_debug_fill");
+        debugForm:CheckBox("Draw every volume as a solid color", "waterleveler_debug_fill");
         debugForm:CheckBox("Draw an outline around every volume", "waterleveler_debug_outline");
         debugForm:CheckBox("The outline draws over everything else", "waterleveler_debug_outline_top");
-        debugForm:ControlHelp("Blue for water, green for slime. The colors above do not apply.");
         panel:AddItem(debugForm);
         local reset = panel:Button("Reset to defaults");
         ---@diagnostic disable-next-line: inject-field
@@ -356,17 +359,23 @@ if CLIENT then
             liquid:ChooseOptionID(1);
         end;
 
-        for _, convar in ipairs({"material", "outline"}) do
+        for _, convar in ipairs({"material", "outline", "fluid"}) do
             cvars.AddChangeCallback("waterleveler_" .. convar, function() timer.Simple(0, refresh); end, "waterleveler_panel_" .. convar);
         end
 
+        for _, item in ipairs(debugForm.Items or {}) do
+            if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
+        end
+
+        debugForm:DockPadding(0, 0, 0, 2);
         -- Tighter rows: the form's items start with 10 units of padding above them.
         for _, item in ipairs(panel.Items or {}) do
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end
 
-        -- A little more room above the Outline checkbox and the Debug section.
-        for _, ctrl in ipairs({outline, debugForm}) do
+        -- A little more room above the Material row, the Outline checkbox, the screen warp, the
+        -- Debug section and the reset button.
+        for _, ctrl in ipairs({materialLabel, outline, warp, debugForm, reset}) do
             local row = ctrl:GetParent();
             if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
         end
