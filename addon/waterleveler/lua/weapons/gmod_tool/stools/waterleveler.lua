@@ -365,8 +365,11 @@ if CLIENT then
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end
 
-        local outlineRow = outline:GetParent();
-        if IsValid(outlineRow) then outlineRow:DockPadding(10, 8, 10, 0); end
+        -- A little more room above the Outline checkbox and the Debug section.
+        for _, ctrl in ipairs({outline, debugForm}) do
+            local row = ctrl:GetParent();
+            if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
+        end
         refresh();
     end
 
