@@ -83,25 +83,12 @@ hook.Add("CanTool", "wl_fluid_lock", function(_, tr) if isFluid(tr.Entity) then 
 hook.Add("CanProperty", "wl_fluid_lock", function(_, _, ent) if isFluid(ent) then return false; end end);
 hook.Add("EntityTakeDamage", "wl_fluid_lock", function(ent) if isFluid(ent) then return true; end end);
 local boxes = {}; -- id -> { mins = Vector, maxs = Vector }
-local function sync(ply)
-    net.Start("wl_volumes");
-    net.WriteUInt(table.Count(boxes), 16);
-    for _, b in pairs(boxes) do
-        net.WriteVector(b.mins);
-        net.WriteVector(b.maxs);
-        net.WriteString(b.material or ""); -- "" = none: the client draws nothing
-        net.WriteString(b.liquid or "water");
-        net.WriteBool(b.beneath ~= false);
-        net.WriteBool(b.solid);
-        net.WriteBool(b.outline);
-        for _, c in ipairs({b.color, b.outlineColor}) do
-            net.WriteUInt(c.r, 8);
-            net.WriteUInt(c.g, 8);
-            net.WriteUInt(c.b, 8);
-            net.WriteUInt(c.a, 8);
-        end
-    end
-
+-- The clients get the volumes as a few small messages: a reset, then batches of volumes to add
+-- (a new volume is a batch of one), and the id of a removed volume. Nothing is resent when one
+-- volume changes, and a message never gets near the net size limit.
+local MODE_RESET, MODE_ADD, MODE_REMOVE = 0, 1, 2;
+local BATCH = 128;
+local function send(ply)
     if IsValid(ply) then
         net.Send(ply);
     else
@@ -109,12 +96,59 @@ local function sync(ply)
     end
 end
 
+local function writeBox(id, b)
+    net.WriteUInt(id, 32);
+    net.WriteVector(b.mins);
+    net.WriteVector(b.maxs);
+    net.WriteString(b.material or ""); -- "" = none: the client draws nothing
+    net.WriteString(b.liquid or "water");
+    net.WriteBool(b.beneath ~= false);
+    net.WriteBool(b.solid);
+    net.WriteBool(b.outline);
+    for _, c in ipairs({b.color, b.outlineColor}) do
+        net.WriteUInt(c.r, 8);
+        net.WriteUInt(c.g, 8);
+        net.WriteUInt(c.b, 8);
+        net.WriteUInt(c.a, 8);
+    end
+end
+
+local function sendAdded(ids, ply)
+    for from = 1, #ids, BATCH do
+        local to = math.min(from + BATCH - 1, #ids);
+        net.Start("wl_volumes");
+        net.WriteUInt(MODE_ADD, 2);
+        net.WriteUInt(to - from + 1, 8);
+        for i = from, to do
+            writeBox(ids[i], boxes[ids[i]]);
+        end
+
+        send(ply);
+    end
+end
+
+--- Every volume, to one player (or everyone when `ply` is nil).
+local function sync(ply)
+    net.Start("wl_volumes");
+    net.WriteUInt(MODE_RESET, 2);
+    send(ply);
+    local ids = {};
+    for id in pairs(boxes) do
+        ids[#ids + 1] = id;
+    end
+
+    sendAdded(ids, ply);
+end
+
 --- Removes a volume (by id) from the module and the clients. Used when its entity goes.
 function WLWater.RemoveBox(id)
     if not boxes[id] then return; end
     waterleveler.RemoveVolume(id);
     boxes[id] = nil;
-    sync();
+    net.Start("wl_volumes");
+    net.WriteUInt(MODE_REMOVE, 2);
+    net.WriteUInt(id, 32);
+    net.Broadcast();
 end
 
 --- Removes every volume whose box touches the box mins..maxs. Returns how many went.
@@ -195,7 +229,7 @@ function WLWater.Spawn(ply, mins, maxs, opts)
 
     e:SetPos((mins + maxs) / 2);
     e:Spawn();
-    sync();
+    sendAdded({id});
     if IsValid(ply) then
         local size = maxs - mins;
         undo.Create("Water Volume");

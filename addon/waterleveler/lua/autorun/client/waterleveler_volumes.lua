@@ -19,36 +19,55 @@ scripted_ents.Register({
     Draw = function() end
 }, "wl_fluid");
 
-local boxes = {};
-local syncVolumeEntities; -- defined with the drawing code below
+local boxes = {}; -- in the order the server sent them; also by id in `byId`
+local byId = {};
+local syncVolumeEntities, addVolumeEntity, removeVolumeEntity; -- defined with the drawing code below
+local MODE_RESET, MODE_ADD, MODE_REMOVE = 0, 1, 2;
+local function readBox()
+    local b = {
+        id = net.ReadUInt(32),
+        mins = net.ReadVector(),
+        maxs = net.ReadVector(),
+        material = net.ReadString(),
+        liquid = net.ReadString(),
+        beneath = net.ReadBool(),
+        solid = net.ReadBool(),
+        outline = net.ReadBool()
+    };
+
+    b.color = Color(net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8));
+    b.outlineColor = Color(net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8));
+    return b;
+end
+
+-- The client module (gmcl_waterlevelercore) makes the client's own water queries see the
+-- volumes: ripples and splashes, the underwater sound filter, particles, prediction.
 net.Receive("wl_volumes", function()
-    boxes = {};
-    for i = 1, net.ReadUInt(16) do
-        boxes[i] = {
-            mins = net.ReadVector(),
-            maxs = net.ReadVector(),
-            material = net.ReadString(),
-            liquid = net.ReadString(),
-            beneath = net.ReadBool(),
-            solid = net.ReadBool(),
-            outline = net.ReadBool()
-        };
-
-        local b = boxes[i];
-        b.color = Color(net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8));
-        b.outlineColor = Color(net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8), net.ReadUInt(8));
-    end
-
-    -- The client module (gmcl_waterlevelercore) makes the client's own water queries see the
-    -- volumes: ripples and splashes, the underwater sound filter, particles, prediction.
-    if waterlevelercore then
-        waterlevelercore.ClearVolumes();
+    local mode = net.ReadUInt(2);
+    if mode == MODE_RESET then
         for _, b in ipairs(boxes) do
-            waterlevelercore.AddVolume(b.mins.x, b.mins.y, b.mins.z, b.maxs.x, b.maxs.y, b.maxs.z, b.liquid);
+            removeVolumeEntity(b);
         end
-    end
 
-    syncVolumeEntities();
+        boxes, byId = {}, {};
+        if waterlevelercore then waterlevelercore.ClearVolumes(); end
+    elseif mode == MODE_ADD then
+        for _ = 1, net.ReadUInt(8) do
+            local b = readBox();
+            if byId[b.id] then removeVolumeEntity(byId[b.id]); end
+            boxes[#boxes + 1] = b;
+            byId[b.id] = b;
+            if waterlevelercore then b.moduleId = waterlevelercore.AddVolume(b.mins.x, b.mins.y, b.mins.z, b.maxs.x, b.maxs.y, b.maxs.z, b.liquid); end
+            addVolumeEntity(b);
+        end
+    elseif mode == MODE_REMOVE then
+        local b = byId[net.ReadUInt(32)];
+        if not b then return; end
+        removeVolumeEntity(b);
+        if waterlevelercore and b.moduleId then waterlevelercore.RemoveVolume(b.moduleId); end
+        byId[b.id] = nil;
+        table.RemoveByValue(boxes, b);
+    end
 end);
 
 -- The Water Volume tool picks the materials of the top face and of the
@@ -627,6 +646,21 @@ local preview = {}; -- the tool's preview volume: the mesh of its current size, 
 local debugFill = CreateClientConVar("waterleveler_debug_fill", "0", true, false, "Draw every water volume as a solid colour (blue water, green slime)", 0, 1);
 local debugOutline = CreateClientConVar("waterleveler_debug_outline", "0", true, false, "Draw an outline around every water volume", 0, 1);
 local debugOutlineTop = CreateClientConVar("waterleveler_debug_outline_top", "0", true, false, "The debug outline is drawn over everything else", 0, 1);
+-- The debug settings are read for every volume of every frame: kept here, updated when they change.
+local debugOn = {
+    fill = debugFill:GetBool(),
+    outline = debugOutline:GetBool(),
+    top = debugOutlineTop:GetBool()
+};
+
+for key, convar in pairs({
+    fill = "waterleveler_debug_fill",
+    outline = "waterleveler_debug_outline",
+    top = "waterleveler_debug_outline_top"
+}) do
+    cvars.AddChangeCallback(convar, function(_, _, value) debugOn[key] = tobool(value); end, "waterleveler_debug_cache");
+end
+
 local debugColors = {};
 local function debugColor(liquid, alpha)
     local key = (liquid == "slime" and "slime" or "water") .. alpha;
@@ -681,12 +715,12 @@ end
 local drawFill;
 local function drawVolume(bx)
     -- The tool's preview (not persistent) has its own outline.
-    local dbgFill = bx.persist and debugFill:GetBool();
+    local dbgFill = bx.persist and debugOn.fill;
     local fill = dbgFill and debugColor(bx.liquid, WLWater.FillAlpha) or bx.solid and bx.color or nil;
     if fill or bx.material and bx.material ~= "" then drawFill(bx, fill); end
     if bx.persist then
-        if debugOutline:GetBool() then
-            drawOutline(bx, debugColor(bx.liquid, 255), debugOutlineTop:GetBool());
+        if debugOn.outline then
+            drawOutline(bx, debugColor(bx.liquid, 255), debugOn.top);
         elseif bx.outline then
             drawOutline(bx, bx.outlineColor, false);
         end
@@ -819,29 +853,31 @@ scripted_ents.Register({
     Draw = function(self) if self.WLBox then drawVolume(self.WLBox); end end,
 }, "wl_volume_draw");
 
-local volumeEnts = {};
-syncVolumeEntities = function()
-    for _, e in ipairs(volumeEnts) do
-        if IsValid(e) then
-            if e.WLBox then destroyBuilt(e.WLBox); end
-            e:Remove();
-        end
-    end
+addVolumeEntity = function(bx)
+    -- Every volume has an entity: the debug view can draw any of them.
+    local e = ents.CreateClientside("wl_volume_draw");
+    if not IsValid(e) then return; end
+    local centre = (bx.mins + bx.maxs) * 0.5;
+    e:SetModel("models/error.mdl");
+    e:SetPos(centre);
+    e:Spawn();
+    bx.persist = true;
+    e.WLBox = bx;
+    e:SetRenderBounds(bx.mins - centre, bx.maxs - centre);
+    bx.ent = e;
+end;
 
-    volumeEnts = {};
+removeVolumeEntity = function(bx)
+    destroyBuilt(bx);
+    if IsValid(bx.ent) then bx.ent:Remove(); end
+    bx.ent = nil;
+end;
+
+-- A map cleanup removes the client-side entities: make them all again.
+syncVolumeEntities = function()
     for _, bx in ipairs(boxes) do
-        -- Every volume has an entity: the debug view can draw any of them.
-        local e = ents.CreateClientside("wl_volume_draw");
-        if IsValid(e) then
-            local centre = (bx.mins + bx.maxs) * 0.5;
-            e:SetModel("models/error.mdl");
-            e:SetPos(centre);
-            e:Spawn();
-            bx.persist = true;
-            e.WLBox = bx;
-            e:SetRenderBounds(bx.mins - centre, bx.maxs - centre);
-            volumeEnts[#volumeEnts + 1] = e;
-        end
+        removeVolumeEntity(bx);
+        addVolumeEntity(bx);
     end
 end;
 
