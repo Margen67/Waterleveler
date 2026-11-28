@@ -406,12 +406,14 @@ if CLIENT then
             cvars.AddChangeCallback("waterleveler_" .. convar, function() timer.Simple(0, refresh); end, "waterleveler_panel_" .. convar);
         end
 
+        ---@diagnostic disable-next-line: undefined-field
         for _, item in ipairs(debugForm.Items or {}) do
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end
 
         debugForm:DockPadding(0, 0, 0, 2);
         -- Tighter rows: the form's items start with 10 units of padding above them.
+        ---@diagnostic disable-next-line: undefined-field
         for _, item in ipairs(panel.Items or {}) do
             if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
         end

@@ -177,11 +177,78 @@ jobs:
       - name: Check for unused dependencies (client)
         run: cargo udeps --locked --all-targets --no-default-features --features client
 
+  # CFC-Servers/gmod_luals_workflow's own job only fails on LuaLS errors. This is the same
+  # check (its config and annotations) with any warning failing the job too.
   luals:
     name: LuaLS
-    uses: CFC-Servers/gmod_luals_workflow/.github/workflows/luals.yml@main
-    with:
-      style_check: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      LUALS_VERSION: 3.19.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+        with:
+          path: project
+
+      - name: Checkout the shared LuaLS workflow
+        uses: actions/checkout@main
+        with:
+          repository: CFC-Servers/gmod_luals_workflow
+          path: gmod_luals_workflow
+
+      - name: Checkout the Garry's Mod API definitions
+        uses: actions/checkout@main
+        with:
+          repository: luttje/glua-api-snippets
+          ref: lua-language-server-addon
+          path: glua-api-snippets
+
+      - name: Checkout the LuaLS include addon
+        uses: actions/checkout@main
+        with:
+          repository: CFC-Servers/luals_gmod_include
+          path: luals_gmod_include
+
+      - name: Download LuaLS
+        run: |-
+          mkdir luals
+          cd luals
+          curl -fLO "https://github.com/LuaLS/lua-language-server/releases/download/${LUALS_VERSION}/lua-language-server-${LUALS_VERSION}-linux-x64.tar.gz"
+          tar -xzf "lua-language-server-${LUALS_VERSION}-linux-x64.tar.gz"
+
+      - name: Prepare the config
+        run: |-
+          sed \
+            -e "s#{{WORKSPACE}}#${GITHUB_WORKSPACE}#g" \
+            -e "s#{{STYLE_CHECK_STATUS}}#Any#g" \
+            gmod_luals_workflow/luals_config.json > luals_config.json
+
+      - name: Run LuaLS
+        working-directory: project
+        run: |-
+          "${GITHUB_WORKSPACE}/luals/bin/lua-language-server" \
+            --configpath="${GITHUB_WORKSPACE}/luals_config.json" \
+            --loglevel=warn \
+            --logpath="${GITHUB_WORKSPACE}/luals_output" \
+            --check_format=json \
+            --check="${GITHUB_WORKSPACE}/project" \
+            || true
+          if [ ! -f "${GITHUB_WORKSPACE}/luals_output/check.json" ]; then
+            echo "::error::LuaLS did not produce a check.json"
+            exit 1
+          fi
+
+          # The parser prints one annotation per problem, and only fails on errors.
+          status=0
+          "${GITHUB_WORKSPACE}/gmod_luals_workflow/check_parser.py" < "${GITHUB_WORKSPACE}/luals_output/check.json" | tee "${GITHUB_WORKSPACE}/annotations.txt" || status=1
+          if grep -q '^::' "${GITHUB_WORKSPACE}/annotations.txt"; then
+            status=1
+          fi
+
+          exit "${status}"
 
   build:
     name: Windows x64
