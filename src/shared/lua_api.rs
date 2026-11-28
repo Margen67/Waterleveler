@@ -122,9 +122,12 @@ pub(crate) unsafe fn l_remove_volume(l: State) -> i32 {
         let id = l.to_number(1) as u32;
         let removed = {
             let mut vols = volumes();
-            let before = vols.len();
-            vols.retain(|v| v.id != id);
-            vols.len() != before
+            // Look through the shared reference first: a mutable one republishes the snapshot.
+            let known = vols.iter().any(|v| v.id == id);
+            if known {
+                vols.retain(|v| v.id != id);
+            }
+            known
         };
         l.push_boolean(removed);
         1

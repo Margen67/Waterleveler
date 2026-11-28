@@ -304,6 +304,7 @@ pub(crate) unsafe fn apply_water_to_trace(
 }
 
 /// Same, only for the volumes whose contents `mask` asks for.
+#[cfg(test)]
 pub(crate) unsafe fn apply_water_to_trace_masked(
     vols: &[Volume],
     ray: *const u8,
@@ -382,23 +383,50 @@ pub(crate) fn plan_trace(
     // depends on that: without it a probe starting inside a volume looks
     // like "no water here" and the computed surface height collapses to
     // the entity's own height.
+    // One pass: a volume the ray starts in decides the result (and beats any entry found
+    // before it), otherwise the nearest entry wins, the first volume on equal distances.
     let mut started_inside = false;
     let mut left_at = 1.0f32;
-    for v in vols.iter().filter(|v| v.contents.intersects(mask)) {
+    struct Entry {
+        t: f32,
+        axis: usize,
+        min_face: bool,
+        index: usize,
+        lo: [f32; 3],
+        hi: [f32; 3],
+    }
+    let mut best: Option<Entry> = None;
+    for (i, v) in vols
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.contents.intersects(mask))
+    {
         let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
         let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
         let inside = |p: [f32; 3]| (0..3).all(|i| p[i] >= lo[i] && p[i] <= hi[i]);
-        if !inside(s) {
-            continue;
-        }
-        started_inside = true;
-        left_at = left_at.min(segment_exit_fraction(s, d, lo, hi));
-        let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
-        if inside(e) {
-            return Some(TraceOutcome::Inside {
-                origin,
-                contents: v.contents,
-            });
+        if inside(s) {
+            started_inside = true;
+            left_at = left_at.min(segment_exit_fraction(s, d, lo, hi));
+            let e = [s[0] + d[0], s[1] + d[1], s[2] + d[2]];
+            if inside(e) {
+                return Some(TraceOutcome::Inside {
+                    origin,
+                    contents: v.contents,
+                });
+            }
+        } else if !started_inside {
+            if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
+                if t < current && best.as_ref().is_none_or(|b| t < b.t) {
+                    best = Some(Entry {
+                        t,
+                        axis,
+                        min_face,
+                        index: i,
+                        lo,
+                        hi,
+                    });
+                }
+            }
         }
     }
     if started_inside {
@@ -408,29 +436,20 @@ pub(crate) fn plan_trace(
         });
     }
 
-    let mut best: Option<(f32, usize, bool, usize)> = None;
-    for (i, v) in vols
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| v.contents.intersects(mask))
-    {
-        let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
-        let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
-        if let Some((t, axis, min_face)) = segment_enters_box(s, d, lo, hi) {
-            if t < current && best.is_none_or(|b| t < b.0) {
-                best = Some((t, axis, min_face, i));
-            }
-        }
-    }
-    let (t_entry, axis, min_face, vi) = best?;
+    let Entry {
+        t: t_entry,
+        axis,
+        min_face,
+        index: vi,
+        lo,
+        hi,
+    } = best?;
     let v = &vols[vi];
     // The engine decides whether a bullet hit water by testing the point 0.1 straight
     // below the end of this trace (`HandleShotImpactingWater`). A real water brush only
     // has a top face, so that point is always under the surface. A volume has side faces
     // too: a trace ending exactly on one has that point on the face's edge, or outside
     // it, and the shot gets no splash. End the trace slightly inside the volume instead.
-    let lo = [v.min[0] - ext[0], v.min[1] - ext[1], v.min[2] - ext[2]];
-    let hi = [v.max[0] + ext[0], v.max[1] + ext[1], v.max[2] + ext[2]];
     let t_exit = segment_exit_fraction(s, d, lo, hi);
     // Only for point rays (bullets). A hull (player movement, water-level probes) rests
     // against the face as before.
@@ -461,6 +480,7 @@ pub(crate) fn plan_trace(
 
 /// Same, with the offset of `Ray_t::m_IsSwept` given explicitly. Only the reads of the
 /// ray and the writes of the trace are here; `plan_trace` decides what to write.
+#[cfg(test)]
 pub(crate) unsafe fn apply_water_to_trace_at(
     vols: &[Volume],
     ray: *const u8,
@@ -470,28 +490,50 @@ pub(crate) unsafe fn apply_water_to_trace_at(
     mask: Contents,
 ) -> bool {
     unsafe {
-        let mut head: TraceHead = read_struct(trace);
-        // A trace that reports a hit must name the entity it hit: callers
-        // (the SLAM's beam, impact effects) call a virtual on `m_pEnt`. A real
-        // water brush belongs to the world, so the world entity is used. If it
-        // is unknown and the engine found no entity, leave the trace alone.
-        let ent = if world != 0 { world as u64 } else { head.ent };
-        if ent == 0 {
-            return false;
-        }
         if ray.add(swept_offset).read() == 0 {
             return false; // not swept: nothing travels
         }
+        let fields = read_ray_fields(ray);
+        apply_water_to_trace_planned(vols, &fields, trace, || world, mask)
+    }
+}
+
+/// The fields of the `Ray_t` at `ray`.
+pub(crate) unsafe fn read_ray_fields(ray: *const u8) -> RayFields {
+    unsafe {
         let r: RayHead = read_struct(ray);
-        let fields = RayFields {
+        RayFields {
             start: r.start,
             delta: r.delta,
             offset: r.offset,
             extents: r.extents,
-        };
-        let Some(outcome) = plan_trace(vols, &fields, head.fraction, mask) else {
+        }
+    }
+}
+
+/// `apply_water_to_trace_at` for a swept ray that is already parsed. `world` is only called
+/// once there is something to write (on the client it is a virtual call).
+pub(crate) unsafe fn apply_water_to_trace_planned(
+    vols: &[Volume],
+    fields: &RayFields,
+    trace: *mut u8,
+    world: impl FnOnce() -> usize,
+    mask: Contents,
+) -> bool {
+    unsafe {
+        let mut head: TraceHead = read_struct(trace);
+        let Some(outcome) = plan_trace(vols, fields, head.fraction, mask) else {
             return false;
         };
+        // A trace that reports a hit must name the entity it hit: callers
+        // (the SLAM's beam, impact effects) call a virtual on `m_pEnt`. A real
+        // water brush belongs to the world, so the world entity is used. If it
+        // is unknown and the engine found no entity, leave the trace alone.
+        let world = world();
+        let ent = if world != 0 { world as u64 } else { head.ent };
+        if ent == 0 {
+            return false;
+        }
 
         match outcome {
             TraceOutcome::Inside { origin, contents } => {
@@ -560,7 +602,7 @@ pub(crate) unsafe fn ray_misses_bounds(
     ray: *const u8,
 ) -> bool {
     unsafe {
-        let r: RayHead = read_struct(ray);
+        let r = read_ray_fields(ray);
         segment_misses_bounds(bounds, r.start, r.delta, r.extents)
     }
 }
@@ -618,39 +660,38 @@ pub(crate) unsafe fn hook_trace_ray(
         }
         // Never block inside an engine callback.
         // A ray far from every volume changes nothing (and needs no world entity).
-        if let Some(vols) = snapshot_if(|v| !ray_misses_bounds(v.bounds, ray)) {
-            let debug = DEBUG.load(Ordering::Relaxed);
-            let before = if debug {
-                Some(trace_summary(trace))
-            } else {
-                None
-            };
+        let fields = read_ray_fields(ray);
+        let far = |v: &VolumeList| {
+            segment_misses_bounds(v.bounds, fields.start, fields.delta, fields.extents)
+        };
+        if let Some(vols) = snapshot_if(|v| !far(v)) {
+            let before = DEBUG
+                .load(Ordering::Relaxed)
+                .then(|| trace_summary(trace));
             // Only the volumes whose contents the trace's mask asks for are considered.
-            let world = world_entity();
-            let hit = apply_water_to_trace_masked(&vols, ray, trace, world, wanted);
+            let swept = ray.add(RAY_SWEPT_OFFSET.load(Ordering::Relaxed)).read() != 0;
+            let hit = swept
+                && apply_water_to_trace_planned(&vols, &fields, trace, || world_entity(), wanted);
             if hit {
                 bump(&TRACE_HITS);
             }
-            // A trace that changed nothing and started far from every volume (the sun's
-            // line to the player, say) is not worth a log line.
-            let start = [
-                ray.cast::<f32>().read_unaligned(),
-                ray.add(4).cast::<f32>().read_unaligned(),
-                ray.add(8).cast::<f32>().read_unaligned(),
-            ];
-            let worth_logging = hit || vols.near(start, 2048.0);
-            if let (Some((fraction, ent)), true) = (before, worth_logging) {
-                let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
-                let (after, _) = trace_summary(trace);
-                debug_log(format!(
-                    "trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.3}, {:.3}, {:.3}): swept {}, engine fraction {fraction:.5} entity {ent:#x}, world {world:#x} -> {} (fraction {after:.5}, startsolid {}, allsolid {})",
-                    rf(0x00), rf(0x04), rf(0x08), rf(0x10), rf(0x14), rf(0x18),
-                    rf(0x30), rf(0x34), rf(0x38),
-                    ray.add(RAY_SWEPT_OFFSET.load(Ordering::Relaxed)).read(),
-                    if hit { "rewritten" } else { "left alone" },
-                    trace.add(0x37).read(),
-                    trace.add(0x36).read(),
-                ));
+            if let Some((fraction, ent)) = before {
+                // A trace that changed nothing and started far from every volume (the sun's
+                // line to the player, say) is not worth a log line.
+                if hit || vols.near(fields.start, 2048.0) {
+                    let world = world_entity();
+                    let rf = |o: usize| ray.add(o).cast::<f32>().read_unaligned();
+                    let (after, _) = trace_summary(trace);
+                    debug_log(format!(
+                        "trace mask {mask:#x} from ({:.3}, {:.3}, {:.3}) by ({:.3}, {:.3}, {:.3}) extents ({:.3}, {:.3}, {:.3}): swept {}, engine fraction {fraction:.5} entity {ent:#x}, world {world:#x} -> {} (fraction {after:.5}, startsolid {}, allsolid {})",
+                        rf(0x00), rf(0x04), rf(0x08), rf(0x10), rf(0x14), rf(0x18),
+                        rf(0x30), rf(0x34), rf(0x38),
+                        ray.add(RAY_SWEPT_OFFSET.load(Ordering::Relaxed)).read(),
+                        if hit { "rewritten" } else { "left alone" },
+                        trace.add(0x37).read(),
+                        trace.add(0x36).read(),
+                    ));
+                }
             }
         }
     }
