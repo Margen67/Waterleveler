@@ -743,6 +743,7 @@ drawFill = function(bx, fill)
         top.lastAnimated = now;
         top.animate(now);
     end
+
     if top.directional then
         -- A bump map only shows under uneven light (a brush gets the map's lightmap): light
         -- from above, dimmer from the sides.
