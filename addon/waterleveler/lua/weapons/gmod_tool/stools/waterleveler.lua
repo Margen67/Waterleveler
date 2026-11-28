@@ -187,7 +187,7 @@ end
 if CLIENT then
     local presets = {"nature/water_movingplane", "nature/water_movingplane_dx70", "gm_construct/water_13", "models/shadertest/predator", "models/shadertest/shader3",};
     local rowHeight = 20;
-    local liquidHeight, materialHeight = 22, 30;
+    local controlHeight = 22; -- the Liquid and Material rows
     ---@param panel ControlPanel
     function TOOL.BuildCPanel(panel)
         local function numSlider(label, convar, min, max, decimals)
@@ -279,9 +279,19 @@ if CLIENT then
         showWhen(numSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0), buoyant);
         showWhen(numSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0), buoyant);
         showWhen(numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0), buoyant);
-        local liquid = panel:ComboBox("Liquid");
+
+        -- A full row (not the form's label and control pair, which sizes the control itself).
+        local liquidRow = vgui.Create("DPanel");
+        liquidRow:SetPaintBackground(false);
+        liquidRow:SetTall(controlHeight);
+        local liquidLabel = vgui.Create("DLabel", liquidRow);
+        liquidLabel:SetText("Liquid");
+        liquidLabel:SetDark(true);
+        liquidLabel:Dock(LEFT);
+        liquidLabel:SetWide(100);
+        local liquid = vgui.Create("DComboBox", liquidRow);
+        liquid:Dock(FILL);
         liquid:SetSortItems(false);
-        liquid:SetTall(liquidHeight);
         local current = GetConVar("waterleveler_liquid");
         local isSlime = current and current:GetString() == "slime";
         liquid:AddChoice("Water", "water", not isSlime);
@@ -301,25 +311,38 @@ if CLIENT then
                 RunConsoleCommand("waterleveler_" .. prefix .. "_a", tostring(alpha));
             end
         end;
+        panel:AddItem(liquidRow);
 
         -- Material: one text entry with a button that drops down the presets.
         -- One full row (not the form's label and control pair, which sizes the control itself).
         local materialRow = vgui.Create("DPanel");
         materialRow:SetPaintBackground(false);
-        materialRow:SetTall(materialHeight);
+        materialRow:SetTall(controlHeight);
         local label = vgui.Create("DLabel", materialRow);
         label:SetText("Material");
         label:SetDark(true);
         label:Dock(LEFT);
         label:SetWide(100);
-        local entry = vgui.Create("DTextEntry", materialRow);
+        -- The text sits inside a padded holder that draws the field's background.
+        local holder = vgui.Create("DPanel", materialRow);
+        holder:Dock(FILL);
+        holder:DockPadding(6, 0, 6, 0);
+        ---@diagnostic disable-next-line: inject-field
+        holder.Paint = function(_, w, h)
+            surface.SetDrawColor(255, 255, 255);
+            surface.DrawRect(0, 0, w, h);
+            surface.SetDrawColor(120, 120, 120);
+            surface.DrawOutlinedRect(0, 0, w, h);
+        end;
+
+        local entry = vgui.Create("DTextEntry", holder);
         entry:Dock(FILL);
+        entry:SetPaintBackground(false);
         entry:SetConVar("waterleveler_material");
-        entry:SetTextInset(6, 0);
         local arrow = vgui.Create("DButton", materialRow);
         arrow:Dock(RIGHT);
         arrow:DockMargin(2, 0, 0, 0);
-        arrow:SetWide(materialHeight);
+        arrow:SetWide(controlHeight);
         arrow:SetText("");
         arrow:SetIcon("icon16/bullet_arrow_down.png");
         ---@diagnostic disable-next-line: inject-field
@@ -379,7 +402,7 @@ if CLIENT then
 
         -- A little more room above the Liquid and Material rows, the Outline checkbox, the screen warp, the
         -- Debug section and the reset button.
-        for _, ctrl in ipairs({liquid, materialRow, outline, warp, debugForm, reset}) do
+        for _, ctrl in ipairs({liquidRow, materialRow, outline, warp, debugForm, reset}) do
             local row = ctrl:GetParent();
             if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
         end
