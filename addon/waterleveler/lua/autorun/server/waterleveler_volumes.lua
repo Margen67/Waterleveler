@@ -86,8 +86,8 @@ local boxes = {}; -- id -> { mins = Vector, maxs = Vector }
 -- The clients get the volumes as a few small messages: a reset, then batches of volumes to add
 -- (a new volume is a batch of one), and the id of a removed volume. Nothing is resent when one
 -- volume changes, and a message never gets near the net size limit.
-local MODE_RESET, MODE_ADD, MODE_REMOVE = 0, 1, 2;
-local BATCH = 128;
+local modeReset, modeAdd, modeRemove = 0, 1, 2;
+local batchSize = 128;
 local function send(ply)
     if IsValid(ply) then
         net.Send(ply);
@@ -114,10 +114,10 @@ local function writeBox(id, b)
 end
 
 local function sendAdded(ids, ply)
-    for from = 1, #ids, BATCH do
-        local to = math.min(from + BATCH - 1, #ids);
+    for from = 1, #ids, batchSize do
+        local to = math.min(from + batchSize - 1, #ids);
         net.Start("wl_volumes");
-        net.WriteUInt(MODE_ADD, 2);
+        net.WriteUInt(modeAdd, 2);
         net.WriteUInt(to - from + 1, 8);
         for i = from, to do
             writeBox(ids[i], boxes[ids[i]]);
@@ -130,7 +130,7 @@ end
 --- Every volume, to one player (or everyone when `ply` is nil).
 local function sync(ply)
     net.Start("wl_volumes");
-    net.WriteUInt(MODE_RESET, 2);
+    net.WriteUInt(modeReset, 2);
     send(ply);
     local ids = {};
     for id in pairs(boxes) do
@@ -146,7 +146,7 @@ function WLWater.RemoveBox(id)
     waterleveler.RemoveVolume(id);
     boxes[id] = nil;
     net.Start("wl_volumes");
-    net.WriteUInt(MODE_REMOVE, 2);
+    net.WriteUInt(modeRemove, 2);
     net.WriteUInt(id, 32);
     net.Broadcast();
 end

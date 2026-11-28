@@ -22,7 +22,7 @@ scripted_ents.Register({
 local boxes = {}; -- in the order the server sent them; also by id in `byId`
 local byId = {};
 local syncVolumeEntities, addVolumeEntity, removeVolumeEntity; -- defined with the drawing code below
-local MODE_RESET, MODE_ADD, MODE_REMOVE = 0, 1, 2;
+local modeReset, modeAdd, modeRemove = 0, 1, 2;
 local function readBox()
     local b = {
         id = net.ReadUInt(32),
@@ -44,14 +44,14 @@ end
 -- volumes: ripples and splashes, the underwater sound filter, particles, prediction.
 net.Receive("wl_volumes", function()
     local mode = net.ReadUInt(2);
-    if mode == MODE_RESET then
+    if mode == modeReset then
         for _, b in ipairs(boxes) do
             removeVolumeEntity(b);
         end
 
         boxes, byId = {}, {};
         if waterlevelercore then waterlevelercore.ClearVolumes(); end
-    elseif mode == MODE_ADD then
+    elseif mode == modeAdd then
         for _ = 1, net.ReadUInt(8) do
             local b = readBox();
             if byId[b.id] then removeVolumeEntity(byId[b.id]); end
@@ -60,7 +60,7 @@ net.Receive("wl_volumes", function()
             if waterlevelercore then b.moduleId = waterlevelercore.AddVolume(b.mins.x, b.mins.y, b.mins.z, b.maxs.x, b.maxs.y, b.maxs.z, b.liquid); end
             addVolumeEntity(b);
         end
-    elseif mode == MODE_REMOVE then
+    elseif mode == modeRemove then
         local b = byId[net.ReadUInt(32)];
         if not b then return; end
         removeVolumeEntity(b);
