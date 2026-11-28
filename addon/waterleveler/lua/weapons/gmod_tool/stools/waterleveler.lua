@@ -187,7 +187,7 @@ end
 if CLIENT then
     local presets = {"nature/water_movingplane", "nature/water_movingplane_dx70", "gm_construct/water_13", "models/shadertest/predator", "models/shadertest/shader3",};
     local rowHeight = 20;
-    local liquidHeight, materialHeight = 22, 26;
+    local liquidHeight, materialHeight = 22, 30;
     ---@param panel ControlPanel
     function TOOL.BuildCPanel(panel)
         local function numSlider(label, convar, min, max, decimals)
@@ -310,6 +310,7 @@ if CLIENT then
         local entry = vgui.Create("DTextEntry", box);
         entry:Dock(FILL);
         entry:SetConVar("waterleveler_material");
+        entry:SetTextInset(6, 0);
         local arrow = vgui.Create("DButton", box);
         arrow:Dock(RIGHT);
         arrow:DockMargin(2, 0, 0, 0);
@@ -381,12 +382,6 @@ if CLIENT then
             local row = ctrl:GetParent();
             if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
         end
-
-        timer.Simple(0, function()
-            if IsValid(liquid) then liquid:SetTall(liquidHeight); end
-            if IsValid(box) then box:SetTall(materialHeight); end
-            refresh();
-        end);
 
         refresh();
     end
