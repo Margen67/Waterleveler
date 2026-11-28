@@ -3,6 +3,7 @@
 -- Water Volume tool (Tools tab > Construction).
 --   Left click: create a water volume where you are looking. It rests against the
 --               surface you aim at and can be moved up or down with Offset.
+--   Reload:     remove the water volumes that touch the preview.
 -- Needs the waterleveler addon's autorun script (WLWater) and the binary module.
 cleanup.Register("waterleveler");
 TOOL.Category = "Construction";
@@ -22,7 +23,7 @@ TOOL.ClientConVar = {
     fluid_currenty = "0",
     fluid_currentz = "0",
     material = "nature/water_movingplane",
-    beneath = "1", -- the inside shows the material's _beneath texture; off: the material, double-sided
+    beneath = "0", -- the inside shows the material's _beneath texture; off: the material, double-sided
     solid = "0", -- draw as one translucent colour (color_*) instead of the material
     color_r = "90", -- the liquid's colour: blue for water, green for slime (reset when the liquid changes)
     color_g = "190",
@@ -35,6 +36,7 @@ TOOL.ClientConVar = {
     outline_a = "255",
 };
 
+local defaults = TOOL.ClientConVar; -- the menu's reset button needs them after TOOL is gone
 local minSize, maxSize = 1, 32768;
 local maxFluid, maxCurrent = 10, 1000;
 -- The numeric convars have limits: the console can't set a value outside them.
@@ -93,7 +95,8 @@ if CLIENT then
     language.Add("tool.waterleveler.name", "Water Volume");
     language.Add("tool.waterleveler.desc", "Create a water volume that behaves like engine water");
     language.Add("tool.waterleveler.left", "Create a water volume");
-    language.Add("Undone_Water volume", "Undone water volume");
+    language.Add("tool.waterleveler.reload", "Remove the water volumes that touch the preview");
+    language.Add("Undone_Water Volume", "Undone Water Volume");
     language.Add("Cleanup_waterleveler", "Water volumes");
     language.Add("Cleaned_waterleveler", "Cleaned up all water volumes");
 end
@@ -101,8 +104,34 @@ end
 TOOL.Information = {
     {
         name = "left"
+    },
+    {
+        name = "reload"
     }
 };
+
+function TOOL:Reload(trace)
+    if not trace.Hit then return false; end
+    if CLIENT then return true; end
+    local ply = self:GetOwner();
+    if not WLWater or not WLWater.RemoveInBox then
+        ply:ChatPrint("[waterleveler] the water module is not loaded");
+        return false;
+    end
+
+    if not WLWater.Allowed(ply) then
+        ply:ChatPrint("[waterleveler] only superadmins can remove water volumes");
+        return false;
+    end
+
+    local function get(name)
+        return self:GetClientNumber(name, 0);
+    end
+
+    local size = readSize(get);
+    local mins, maxs = WLWater.Placement(trace, size, readOffset(get, size));
+    return WLWater.RemoveInBox(mins, maxs) > 0;
+end
 
 function TOOL:LeftClick(trace)
     if not trace.Hit then return false; end
@@ -137,7 +166,7 @@ function TOOL:LeftClick(trace)
             currentz = math.Clamp(self:GetClientNumber("fluid_currentz", 0), -maxCurrent, maxCurrent),
         },
         material = self:GetClientInfo("material"),
-        beneath = self:GetClientNumber("beneath", 1) ~= 0,
+        beneath = self:GetClientNumber("beneath", 0) ~= 0,
         solid = self:GetClientNumber("solid", 0) ~= 0,
         color = readColor(get, "color"),
         outline = self:GetClientNumber("outline", 0) ~= 0,
@@ -153,9 +182,48 @@ end
 
 if CLIENT then
     local presets = {"nature/water_movingplane", "nature/water_movingplane_dx70", "gm_construct/water_13", "models/shadertest/predator", "models/shadertest/shader3",};
+    local rowHeight = 20;
     ---@param panel ControlPanel
     function TOOL.BuildCPanel(panel)
-        panel:Help("Creates a water volume where you aim. Swimming, water level and impact splashes work like normal water.");
+        local function numSlider(label, convar, min, max, decimals)
+            local sl = panel:NumSlider(label, convar, min, max, decimals);
+            sl:SetTall(rowHeight);
+            return sl;
+        end
+
+        -- A control whose visibility follows a convar; its form row goes with it.
+        local toggled = {};
+        local function showWhen(ctrl, visible)
+            toggled[#toggled + 1] = {ctrl = ctrl, visible = visible};
+        end
+
+        local function refresh()
+            if not IsValid(panel) then return; end
+            for _, t in ipairs(toggled) do
+                local row = t.ctrl:GetParent();
+                if IsValid(row) and row ~= panel then row:SetVisible(t.visible()); end
+            end
+
+            panel:InvalidateLayout(true);
+        end
+
+        local function flag(convar)
+            return GetConVar("waterleveler_" .. convar):GetBool();
+        end
+
+        local function colorMixer(prefix)
+            local mixer = vgui.Create("DColorMixer");
+            mixer:SetPalette(false);
+            mixer:SetAlphaBar(true);
+            mixer:SetTall(92);
+            for _, channel in ipairs({"R", "G", "B", "A"}) do
+                mixer["SetConVar" .. channel](mixer, "waterleveler_" .. prefix .. "_" .. channel:lower());
+            end
+
+            panel:AddItem(mixer);
+            return mixer;
+        end
+
         local sliders = {};
         local offset;
         local function updateOffsetRange()
@@ -168,7 +236,7 @@ if CLIENT then
         end
 
         -- Sets all three axes at once.
-        local all = panel:NumSlider("All axes", "", minSize, maxSize, 0);
+        local all = numSlider("All axes", "", minSize, maxSize, 0);
         all:SetValue(math.max(GetConVar("waterleveler_sizex"):GetFloat(), GetConVar("waterleveler_sizey"):GetFloat(), GetConVar("waterleveler_sizez"):GetFloat()));
         ---@diagnostic disable-next-line: inject-field
         all.OnValueChanged = function(_, value)
@@ -181,20 +249,19 @@ if CLIENT then
         end;
 
         for _, axis in ipairs({{"x", "Width (X)"}, {"y", "Length (Y)"}, {"z", "Height (Z)"}}) do
-            local sl = panel:NumSlider(axis[2], "waterleveler_size" .. axis[1], minSize, maxSize, 0);
+            local sl = numSlider(axis[2], "waterleveler_size" .. axis[1], minSize, maxSize, 0);
             ---@diagnostic disable-next-line: inject-field
             sl.OnValueChanged = function() timer.Simple(0, updateOffsetRange); end;
             sliders[#sliders + 1] = sl;
         end
 
-        offset = panel:NumSlider("Offset", "waterleveler_offset", -maxSize, maxSize, 0);
+        offset = numSlider("Offset", "waterleveler_offset", -maxSize, maxSize, 0);
         panel:ControlHelp("Moves the volume up (or down) from where it would rest. The limit is the biggest size above.");
         panel:ControlHelp("The muffled underwater explosion sound needs the blast to be more than 128 units below the surface (the client looks up to 512).");
         updateOffsetRange();
-        panel:Help("Liquid (also the fluid's physics material)");
-        ---@diagnostic disable-next-line: missing-parameter
-        local liquid = panel:ComboBox("");
+        local liquid = panel:ComboBox("Liquid");
         liquid:SetSortItems(false);
+        liquid:SetTall(rowHeight);
         local current = GetConVar("waterleveler_liquid");
         local isSlime = current and current:GetString() == "slime";
         liquid:AddChoice("Water", "water", not isSlime);
@@ -215,40 +282,47 @@ if CLIENT then
             end
         end;
 
-        panel:ControlHelp("Slime: slime-coloured splashes and ripples, slower wading, no water explosion effect.");
-        panel:CheckBox("Underwater screen warp (off: no distortion inside water volumes)", "waterleveler_underwater_warp");
+        panel:CheckBox("Underwater screen warp", "waterleveler_underwater_warp");
         panel:CheckBox("Buoyancy (props float)", "waterleveler_fluid");
-        panel:ControlHelp("The values below are the engine's fluid settings. The defaults are those of a map's water.");
-        panel:NumSlider("Damping (drag)", "waterleveler_fluid_damping", 0, maxFluid, 3);
-        panel:NumSlider("Torque factor", "waterleveler_fluid_torque", 0, maxFluid, 3);
-        panel:NumSlider("Viscosity factor", "waterleveler_fluid_viscosity", 0, maxFluid, 3);
+        numSlider("Damping (drag)", "waterleveler_fluid_damping", 0, maxFluid, 3);
+        numSlider("Torque factor", "waterleveler_fluid_torque", 0, maxFluid, 3);
+        numSlider("Viscosity factor", "waterleveler_fluid_viscosity", 0, maxFluid, 3);
         panel:CheckBox("Aerodynamic drag", "waterleveler_fluid_aero");
-        panel:NumSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0);
-        panel:NumSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0);
-        panel:NumSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0);
-        local function materialRow(label, convar)
-            panel:Help(label);
-            local entry = panel:TextEntry("", convar);
-            ---@diagnostic disable-next-line: missing-parameter
-            local combo = panel:ComboBox("");
-            combo:SetSortItems(false);
-            combo:AddChoice("Presets...", nil, true);
+        numSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0);
+        numSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0);
+        numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0);
+
+        -- Material: one text entry with a button that drops down the presets.
+        local box = vgui.Create("DPanel");
+        box:SetPaintBackground(false);
+        box:SetTall(rowHeight);
+        local entry = vgui.Create("DTextEntry", box);
+        entry:Dock(FILL);
+        entry:SetConVar("waterleveler_material");
+        local arrow = vgui.Create("DButton", box);
+        arrow:Dock(RIGHT);
+        arrow:SetWide(rowHeight);
+        arrow:SetText("");
+        arrow:SetIcon("icon16/bullet_arrow_down.png");
+        ---@diagnostic disable-next-line: inject-field
+        arrow.DoClick = function()
+            local menu = DermaMenu();
             for _, m in ipairs(presets) do
-                combo:AddChoice(m);
+                menu:AddOption(m, function() RunConsoleCommand("waterleveler_material", m); end);
             end
 
-            ---@diagnostic disable-next-line: inject-field
-            combo.OnSelect = function(_, _, value) if value ~= "Presets..." then RunConsoleCommand(convar, value); end end;
-            return entry;
-        end
+            menu:Open();
+        end;
 
-        materialRow("Material", "waterleveler_material");
-        panel:CheckBox("Inside shows the material's _beneath texture (off: double-sided)", "waterleveler_beneath");
-        panel:CheckBox("Draw as a solid color instead of the texture", "waterleveler_solid");
-        panel:ColorPicker("Solid color", "waterleveler_color_r", "waterleveler_color_g", "waterleveler_color_b", "waterleveler_color_a");
-        panel:ControlHelp("Setting the liquid to water or slime picks the colors for you (blue and green).");
-        panel:CheckBox("Draw an outline", "waterleveler_outline");
-        panel:ColorPicker("Outline color", "waterleveler_outline_r", "waterleveler_outline_g", "waterleveler_outline_b", "waterleveler_outline_a");
+        local label = vgui.Create("DLabel");
+        label:SetText("Material");
+        label:SetDark(true);
+        panel:AddItem(label, box);
+        panel:CheckBox("Solid color", "waterleveler_solid");
+        showWhen(colorMixer("color"), function() return flag("solid"); end);
+        showWhen(panel:CheckBox("Inside shows the material's _beneath texture", "waterleveler_beneath"), function() return not flag("solid"); end);
+        panel:CheckBox("Outline", "waterleveler_outline");
+        showWhen(colorMixer("outline"), function() return flag("outline"); end);
         -- Debug (minimized): these only change what this client draws, for every volume, in fixed
         -- colors (blue water, green slime) that ignore the colors above.
         local debugForm = vgui.Create("DForm", panel);
@@ -259,6 +333,27 @@ if CLIENT then
         debugForm:CheckBox("The outline draws over everything else", "waterleveler_debug_outline_top");
         debugForm:ControlHelp("Blue for water, green for slime. The colors above do not apply.");
         panel:AddItem(debugForm);
+        local reset = panel:Button("Reset to defaults");
+        ---@diagnostic disable-next-line: inject-field
+        reset.DoClick = function()
+            for name, default in pairs(defaults) do
+                RunConsoleCommand("waterleveler_" .. name, default);
+            end
+
+            RunConsoleCommand("waterleveler_underwater_warp", "1");
+            liquid:ChooseOptionID(1);
+        end;
+
+        for _, convar in ipairs({"solid", "outline"}) do
+            cvars.AddChangeCallback("waterleveler_" .. convar, function() timer.Simple(0, refresh); end, "waterleveler_panel_" .. convar);
+        end
+
+        -- Tighter rows: the form's items start with 10 units of padding above them.
+        for _, item in ipairs(panel.Items or {}) do
+            if IsValid(item) then item:DockPadding(10, 2, 10, 0); end
+        end
+
+        refresh();
     end
 
     -- Preview: the volume drawn with the selected materials, plus an outline, where the player is looking.
@@ -308,7 +403,7 @@ if CLIENT then
                 mins = mins,
                 maxs = maxs,
                 material = str("waterleveler_material", ""),
-                beneath = convar("waterleveler_beneath", 1) ~= 0,
+                beneath = convar("waterleveler_beneath", 0) ~= 0,
                 solid = convar("waterleveler_solid", 0) ~= 0,
                 color = Color(convar("waterleveler_color_r", 90), convar("waterleveler_color_g", 190), convar("waterleveler_color_b", 255), convar("waterleveler_color_a", 110)),
             });

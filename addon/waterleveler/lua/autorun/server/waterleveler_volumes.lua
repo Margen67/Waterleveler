@@ -116,6 +116,19 @@ function WLWater.RemoveBox(id)
     sync();
 end
 
+--- Removes every volume whose box touches the box mins..maxs. Returns how many went.
+function WLWater.RemoveInBox(mins, maxs)
+    local removed = 0;
+    for _, e in ipairs(ents.FindByClass("wl_fluid")) do
+        local b = boxes[e.WLVolumeId];
+        if b and b.mins.x <= maxs.x and b.maxs.x >= mins.x and b.mins.y <= maxs.y and b.maxs.y >= mins.y and b.mins.z <= maxs.z and b.maxs.z >= mins.z then
+            e:Remove(); -- OnRemove removes the volume
+            removed = removed + 1;
+        end
+    end
+    return removed;
+end
+
 --- Create a volume (engine water + optional buoyancy + undo entry).
 --- `ply` (the player whose undo list and cleanup get it) and `opts` are optional, and so is every
 --- field of `opts`; the defaults are what a map's water brush has:
@@ -184,11 +197,11 @@ function WLWater.Spawn(ply, mins, maxs, opts)
     sync();
     if IsValid(ply) then
         local size = maxs - mins;
-        undo.Create("Water volume");
+        undo.Create("Water Volume");
         undo.SetPlayer(ply);
         undo.AddEntity(e);
-        undo.SetCustomUndoText("Undone water volume");
-        undo.Finish(("Water volume (%dx%dx%d)"):format(size.x, size.y, size.z));
+        undo.SetCustomUndoText("Undone Water Volume");
+        undo.Finish(("Water Volume (%dx%dx%d)"):format(size.x, size.y, size.z));
         ply:AddCleanup("waterleveler", e);
     end
     return id;
