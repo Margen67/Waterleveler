@@ -370,6 +370,7 @@ if CLIENT then
             local row = ctrl:GetParent();
             if IsValid(row) then row:DockPadding(10, 8, 10, 0); end
         end
+
         refresh();
     end
 
