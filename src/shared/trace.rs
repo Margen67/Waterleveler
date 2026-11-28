@@ -359,6 +359,16 @@ pub(crate) enum TraceOutcome {
     },
 }
 
+/// The nearest volume a ray enters, with the box it was tested against.
+struct Entry {
+    t: f32,
+    axis: usize,
+    min_face: bool,
+    index: usize,
+    lo: [f32; 3],
+    hi: [f32; 3],
+}
+
 /// The water logic, on plain values: what `ray` does to a trace whose fraction is
 /// `current`, counting only the volumes whose contents `mask` asks for. `None` leaves
 /// the trace alone.
@@ -387,14 +397,6 @@ pub(crate) fn plan_trace(
     // before it), otherwise the nearest entry wins, the first volume on equal distances.
     let mut started_inside = false;
     let mut left_at = 1.0f32;
-    struct Entry {
-        t: f32,
-        axis: usize,
-        min_face: bool,
-        index: usize,
-        lo: [f32; 3],
-        hi: [f32; 3],
-    }
     let mut best: Option<Entry> = None;
     for (i, v) in vols
         .iter()
