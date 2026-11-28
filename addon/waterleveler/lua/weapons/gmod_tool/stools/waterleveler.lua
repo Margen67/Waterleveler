@@ -300,6 +300,7 @@ if CLIENT then
                 RunConsoleCommand("waterleveler_" .. prefix .. "_a", tostring(alpha));
             end
         end;
+
         -- Material: one text entry with a button that drops down the presets.
         local box = vgui.Create("DPanel");
         box:SetPaintBackground(false);
