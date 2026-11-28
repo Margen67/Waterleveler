@@ -279,7 +279,6 @@ if CLIENT then
         showWhen(numSlider("Current X", "waterleveler_fluid_currentx", -maxCurrent, maxCurrent, 0), buoyant);
         showWhen(numSlider("Current Y", "waterleveler_fluid_currenty", -maxCurrent, maxCurrent, 0), buoyant);
         showWhen(numSlider("Current Z", "waterleveler_fluid_currentz", -maxCurrent, maxCurrent, 0), buoyant);
-
         -- A full row (not the form's label and control pair, which sizes the control itself).
         local liquidRow = vgui.Create("DPanel");
         liquidRow:SetPaintBackground(false);
@@ -311,8 +310,8 @@ if CLIENT then
                 RunConsoleCommand("waterleveler_" .. prefix .. "_a", tostring(alpha));
             end
         end;
-        panel:AddItem(liquidRow);
 
+        panel:AddItem(liquidRow);
         -- Material: one text entry with a button that drops down the presets.
         -- One full row (not the form's label and control pair, which sizes the control itself).
         local materialRow = vgui.Create("DPanel");
